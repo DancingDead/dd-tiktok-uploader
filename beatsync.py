@@ -5,6 +5,7 @@ Pipeline : analyze_audio -> load_clips -> build_edl (logique pure) -> render.
 
 import argparse
 import json
+import math
 import random
 import subprocess
 import sys
@@ -31,6 +32,10 @@ DEFAULT_CONFIG = {
     "effects": {"zoom": True, "flash": True, "shake": True, "speed": True},
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
+    "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
+    "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
+    "title": None,                      # texte incrusté pendant le buildup (--title)
+    "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,
     "preset": "medium",
     "audio_bitrate": "192k",
@@ -151,31 +156,54 @@ CASCADE_PATH = Path(__file__).parent / "assets" / "lbpcascade_animeface.xml"
 EDGE_PRESENCE_THRESHOLD = 0.008  # fraction de pixels « trait d'encre » dans la bande centrale
 
 
-def _char_presence(frames: np.ndarray) -> np.ndarray:
-    """Score « personnages à l'écran » par frame : visage animé détecté (1.0)
-    ou contours d'encre nets (0.6). Calculé uniquement dans la bande centrale
-    (~40 % de largeur) qui survit au crop 9:16 — un personnage au bord du
-    cadre disparaît de toute façon au recadrage."""
+def _char_presence(frames: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Par frame : score « personnages » (visage 1.0 / contours 0.6 / rien 0.0),
+    centre d'intérêt horizontal (0..1) et détection de duel (visages aux deux bords).
+
+    Un visage détecté N'IMPORTE OÙ compte : le recadrage intelligent ramènera le
+    personnage dans le champ. Le coin du logo Crunchyroll est masqué avant
+    détection. Les contours, eux, restent évalués dans la bande centrale."""
     import cv2  # import paresseux, comme librosa
 
     cascade = cv2.CascadeClassifier(str(CASCADE_PATH))
     if cascade.empty():
         raise RuntimeError(f"cascade animé introuvable ou invalide : {CASCADE_PATH}")
-    x0, x1 = int(frames.shape[2] * 0.30), int(frames.shape[2] * 0.70)
-    presence = np.zeros(len(frames))
+    n, height, width = frames.shape[:3]
+    x0, x1 = int(width * 0.30), int(width * 0.70)
+    presence = np.zeros(n)
+    interest = np.full(n, 0.5)
+    dual = np.zeros(n, dtype=bool)
     for i, frame in enumerate(frames):
-        band = cv2.cvtColor(frame[:, x0:x1], cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        gray[: int(height * 0.14), : int(width * 0.25)] = 0  # masque logo coin haut-gauche
         faces = cascade.detectMultiScale(
-            cv2.equalizeHist(band), scaleFactor=1.05, minNeighbors=2, minSize=(24, 24)
+            cv2.equalizeHist(gray), scaleFactor=1.05, minNeighbors=2, minSize=(24, 24)
         )
         if len(faces):
+            centers = np.array([x + w / 2 for x, y, w, h in faces])
+            areas = np.array([w * h for x, y, w, h in faces], dtype=float)
+            interest[i] = float((centers * areas).sum() / areas.sum()) / width
+            if len(faces) >= 2:
+                # Duel : détection STRICTE uniquement — le réglage permissif
+                # voit des « visages » dans les textures de décor.
+                strict = cascade.detectMultiScale(
+                    cv2.equalizeHist(gray), scaleFactor=1.05, minNeighbors=5, minSize=(30, 30)
+                )
+                if len(strict) >= 2:
+                    strict_x = np.array([x + w / 2 for x, y, w, h in strict])
+                    dual[i] = strict_x.min() < 0.4 * width and strict_x.max() > 0.6 * width
             presence[i] = 1.0
             continue
-        gray = band.astype(np.float32)
-        magnitude = np.hypot(cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1))
+        band = gray[:, x0:x1].astype(np.float32)
+        magnitude = np.hypot(cv2.Sobel(band, cv2.CV_32F, 1, 0), cv2.Sobel(band, cv2.CV_32F, 0, 1))
         if float((magnitude > 160).mean()) > EDGE_PRESENCE_THRESHOLD:
             presence[i] = 0.6
-    return presence
+            full = gray.astype(np.float32)
+            mag_full = np.hypot(cv2.Sobel(full, cv2.CV_32F, 1, 0), cv2.Sobel(full, cv2.CV_32F, 0, 1))
+            columns = (mag_full > 160).sum(axis=0)
+            if columns.sum() > 0:
+                interest[i] = float((np.arange(width) * columns).sum() / columns.sum()) / width
+    return presence, interest, dual
 
 
 def scan_clips(clips: list[dict]) -> list[dict]:
@@ -197,8 +225,12 @@ def scan_clips(clips: list[dict]) -> list[dict]:
         small = frames.reshape(n, SMALL_H, SCAN_H // SMALL_H, SMALL_W, SCAN_W // SMALL_W, 3) \
                       .mean(axis=(2, 4)).astype(np.uint8)
         classification = classify_frames(small, 1.0 / SCAN_FPS)
-        classification["presence"] = _char_presence(frames)
+        presence, interest_x, dual = _char_presence(frames)
+        classification["presence"] = presence
         clip["intervals"] = usable_intervals(classification, clip["duration"], 1.0 / SCAN_FPS)
+        clip["interest_x"] = interest_x
+        clip["dual"] = dual
+        clip["scan_dt"] = 1.0 / SCAN_FPS
     return clips
 
 
@@ -232,6 +264,22 @@ def find_drop(analysis: dict, config: dict) -> float | None:
     drop_time = grid[idx[int(np.argmax(contrast))]]
     beats = np.asarray(analysis["beats"], dtype=float)
     return float(beats[int(np.argmin(np.abs(beats - drop_time)))])
+
+
+def snap_end_to_phrase(end: float, drop_time: float | None, beats: np.ndarray,
+                       track_duration: float, phrase_beats: int = 16) -> float:
+    """Étend la fin de fenêtre à la prochaine frontière de phrase (multiple de
+    `phrase_beats` beats après le drop) pour que la musique s'arrête à un
+    moment logique. Retombe sur la frontière précédente si ça dépasse le
+    morceau ; inchangé sans drop connu."""
+    beats = np.asarray(beats, dtype=float)
+    if drop_time is None or len(beats) < 2:
+        return end
+    phrase = phrase_beats * float(np.median(np.diff(beats)))
+    n = math.ceil((end - drop_time) / phrase - 1e-9)
+    if drop_time + n * phrase > track_duration:
+        n = math.floor((track_duration - drop_time) / phrase + 1e-9)
+    return drop_time + n * phrase if n >= 1 else end
 
 
 def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> list[dict]:
@@ -334,15 +382,21 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             speed = 0.5
 
         effects: list[str] = []
+        accents = config.get("accents", {})
         if effects_cfg.get("zoom") and (tier == "intense" or section == "drop"):
             effects.append("zoom")
         if section == "drop":
             if effects_cfg.get("flash") and drop_seg_count % 8 == 0:
                 effects.append("flash")
+                if accents.get("rgb"):
+                    effects.append("rgb")  # aberration chromatique sur les impacts
             if effects_cfg.get("shake") and (
                 drop_seg_count == 0 or (tier == "intense" and rng.random() < 0.3)
             ):
                 effects.append("shake")
+            if accents.get("glitch") and drop_seg_count > 0 and tier == "intense" \
+                    and rng.random() < 0.25:
+                effects.append("glitch")
             drop_seg_count += 1
         elif effects_cfg.get("shake") and tier == "intense" and rng.random() < 0.3:
             effects.append("shake")
@@ -389,6 +443,24 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             interval = rng.choice(candidates)
             clip_in = rng.uniform(interval["start"], interval["end"] - source_needed)
         prev_path = clip["path"]
+
+        # Cadrage : centre d'intérêt et layout, moyennés sur l'extrait choisi.
+        focus_x, layout = 0.5, "crop"
+        if "interest_x" in clip:
+            dt = clip.get("scan_dt", 1.0 / SCAN_FPS)
+            i0 = int(clip_in / dt)
+            # Au moins 3 échantillons (1,5 s) : un extrait d'un beat n'en couvre
+            # parfois qu'un seul, trop peu pour juger dispersion et duel.
+            i1 = max(i0 + 3, math.ceil((clip_in + source_needed) / dt))
+            window_x = np.asarray(clip["interest_x"], dtype=float)[i0:i1]
+            if len(window_x):
+                focus_x = float(np.clip(window_x.mean(), 0.0, 1.0))
+                dual = np.asarray(clip.get("dual", []), dtype=bool)[i0:i1]
+                if len(dual) and float(dual.mean()) >= 0.5:
+                    layout = "split"   # duel : deux moitiés empilées haut/bas
+                elif float(window_x.std()) >= 0.18:
+                    layout = "blur"    # action sur toute la largeur : plan entier sur fond flouté
+
         edl.append(
             {
                 "timeline_start": seg_start,
@@ -399,6 +471,10 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "section": section,
                 "speed": speed,
                 "effects": effects,
+                "focus_x": focus_x,
+                "layout": layout,
+                "clip_w": clip["width"],
+                "clip_h": clip["height"],
             }
         )
     return edl
@@ -411,47 +487,95 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n{result.stderr}")
 
 
-def _segment_vf(entry: dict, config: dict) -> str:
-    """Chaîne de filtres FFmpeg d'un segment, selon ses effets EDL.
+MAC_FONT = "/System/Library/Fonts/Helvetica.ttc"
 
-    Ordre : slow-mo → cadrage (avec jitter si shake) → fps → punch-zoom →
-    flash blanc → normalisation → tpad (complété par -frames:v pour un
-    compte de frames exact).
-    """
+
+def _drawtext_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\\\\\'")
+
+
+def _segment_filters(entry: dict, config: dict) -> list[str]:
+    """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
+    simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
+    flouté. Ordre : slow-mo → layout → fps → punch-zoom → flash → RGB/glitch →
+    titre → normalisation → tpad (complété par -frames:v)."""
     width, height, fps = config["width"], config["height"], config["fps"]
     effects = entry.get("effects", [])
-    parts = []
-
+    layout = entry.get("layout", "crop")
+    focus_x = entry.get("focus_x", 0.5)
     speed = entry.get("speed", 1.0)
+
+    pre = ""
+    if config.get("delogo") and "clip_w" in entry:
+        # Gomme le logo de chaîne (coin haut-gauche) AVANT recadrage : le
+        # recadrage intelligent ou le fond flouté peuvent le faire entrer au champ.
+        cw, ch = entry["clip_w"], entry["clip_h"]
+        pre += (f"delogo=x={max(1, int(cw * 0.01))}:y={max(1, int(ch * 0.02))}"
+                f":w={int(cw * 0.22)}:h={int(ch * 0.10)},")
     if speed != 1.0:
-        parts.append(f"setpts=(PTS-STARTPTS)/{speed:.6f}")
+        pre += f"setpts=(PTS-STARTPTS)/{speed:.6f},"
 
-    if "shake" in effects:
-        # Sur-cadrage ~2 % puis fenêtre qui tremble — sinusoïdes de n : déterministe.
-        over_w, over_h = width + 20, height + 38
-        parts.append(
-            f"scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
-            f"crop={over_w}:{over_h},"
-            f"crop={width}:{height}:x='(iw-ow)/2+7*sin(n*7.3)':y='(ih-oh)/2+7*cos(n*9.1)'"
-        )
-    else:
-        parts.append(
-            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
-        )
-
-    parts.append(f"fps={fps}")
+    # --- Chaîne commune post-layout (opère sur du 1080x1920) ---
+    post = [f"fps={fps}"]
     if "zoom" in effects:
-        # Punch-zoom : 110 % → 100 % sur les 6 premières frames du plan.
-        parts.append(
+        post.append(
             "zoompan=z='1+0.10*max(0,1-on/6)'"
             f":x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s={width}x{height}:fps={fps}"
         )
     if "flash" in effects:
-        parts.append("fade=t=in:st=0:d=0.1:color=white")
+        post.append("fade=t=in:st=0:d=0.1:color=white")
+    if "glitch" in effects:
+        post.append("rgbashift=rh=-14:gv=10:bh=14:edge=smear:enable='lt(n,2)'")
+    elif "rgb" in effects:
+        post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
+    title = config.get("title")
+    if title and entry.get("section") == "buildup" and Path(MAC_FONT).exists():
+        post.append(
+            f"drawtext=fontfile={MAC_FONT}:text='{_drawtext_escape(title)}'"
+            ":fontsize=58:fontcolor=white:borderw=2:bordercolor=black@0.6"
+            ":x=(w-text_w)/2:y=h*0.16"
+        )
+    post.append("setsar=1,format=yuv420p")
+    post.append("tpad=stop_mode=clone:stop_duration=1")
+    post_chain = ",".join(post)
 
-    parts.append("setsar=1,format=yuv420p")
-    parts.append("tpad=stop_mode=clone:stop_duration=1")
-    return ",".join(parts)
+    if layout == "split":
+        # Duel : moitiés gauche/droite empilées haut/bas (1080x960 chacune).
+        half_h = height // 2
+        graph = (
+            f"[0:v]{pre}split=2[l0][r0];"
+            f"[l0]crop=iw/2:ih:0:0,scale={width}:{half_h}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{half_h}[l1];"
+            f"[r0]crop=iw/2:ih:iw/2:0,scale={width}:{half_h}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{half_h}[r1];"
+            f"[l1][r1]vstack=inputs=2,{post_chain}[v]"
+        )
+        return ["-filter_complex", graph, "-map", "[v]"]
+
+    if layout == "blur":
+        # Plan entier visible, centré sur fond flouté-assombri.
+        graph = (
+            f"[0:v]{pre}split=2[bg0][fg0];"
+            f"[bg0]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=luma_radius=24:luma_power=2,"
+            "eq=brightness=-0.06[bg1];"
+            f"[fg0]scale={width}:-2[fg1];"
+            f"[bg1][fg1]overlay=(W-w)/2:(H-h)/2,{post_chain}[v]"
+        )
+        return ["-filter_complex", graph, "-map", "[v]"]
+
+    # Layout crop : la fenêtre 9:16 se cale sur le centre d'intérêt détecté.
+    pad_w, pad_h = (20, 38) if "shake" in effects else (0, 0)
+    x_expr = f"min(max(iw*{focus_x:.4f}-{width / 2:.0f},0),iw-{width})"
+    y_expr = f"(ih-{height})/2"
+    if "shake" in effects:
+        x_expr = f"min(max(iw*{focus_x:.4f}-{width / 2:.0f}+7*sin(n*7.3),0),iw-{width})"
+        y_expr = f"min(max((ih-{height})/2+7*cos(n*9.1),0),ih-{height})"
+    vf = (
+        f"{pre}scale={width + pad_w}:{height + pad_h}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height}:x='{x_expr}':y='{y_expr}',{post_chain}"
+    )
+    return ["-vf", vf]
 
 
 def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -> None:
@@ -477,7 +601,7 @@ def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -
                     "-ss", f"{entry['clip_in']:.6f}",  # avant -i : seek rapide
                     "-t", f"{source_needed + 0.5:.6f}",
                     "-i", str(entry["clip_path"]),
-                    "-vf", _segment_vf(entry, config),
+                    *_segment_filters(entry, config),
                     "-frames:v", str(n_frames),
                     "-an",
                     "-c:v", "libx264", "-preset", config["preset"], "-crf", str(config["crf"]),
@@ -517,6 +641,8 @@ def main() -> None:
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
+    parser.add_argument("--title", default=None,
+                        help='texte incrusté pendant le buildup (ex. "NLCK & HANNAH — Virus V4")')
     args = parser.parse_args()
 
     if not Path(args.track).is_file():
@@ -545,8 +671,15 @@ def main() -> None:
     if args.duration == "full":
         config["end"] = analysis["duration"]
     else:
-        config["end"] = min(start + float(args.duration), analysis["duration"])
-    print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s")
+        end = min(start + float(args.duration), analysis["duration"])
+        # La musique doit s'arrêter à un moment logique : fin étendue à la
+        # prochaine frontière de phrase (16 beats) après le drop.
+        config["end"] = snap_end_to_phrase(
+            end, drop, analysis["beats"], analysis["duration"], config["phrase_beats"]
+        )
+    config["title"] = args.title
+    print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s "
+          f"({config['end'] - config['start']:.1f} s, fin sur phrase)")
     if args.cut_every is not None:
         config["cut_mode"] = "fixed"
         config["cut_every"] = args.cut_every

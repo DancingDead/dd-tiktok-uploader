@@ -13,8 +13,15 @@ façon edit animé TikTok :
 - **Personnages à l'écran** : détection de visages animé (OpenCV +
   lbpcascade_animeface, fourni dans `assets/`) + score de contours dans la
   bande centrale — les plans vides sont exclus ;
+- **Cadrage intelligent** : la fenêtre 9:16 se cale sur les personnages
+  détectés ; duel frontal → split-screen haut/bas ; action sur toute la
+  largeur → plan entier sur fond flouté ; logo de chaîne gommé (delogo) ;
 - **Chronologie** : les extraits avancent dans l'histoire du clip au rythme
-  de la vidéo — le drop tombe sur le climax du clip.
+  de la vidéo — le drop tombe sur le climax du clip ;
+- **Fin musicale** : la vidéo s'étend jusqu'à la fin de phrase (16 beats)
+  suivante — la musique ne coupe jamais en plein milieu ;
+- **Accents** : RGB split à l'impact, micro-glitch sur les temps forts,
+  titre incrusté pendant le buildup via `--title`.
 
 ## Prérequis
 
@@ -73,6 +80,7 @@ uv run python beatsync.py tracks/morceau.mp3 ./clips -o output/sortie.mp4 --seed
 | `--start` | *(drop auto)* | début manuel de la fenêtre (s) ; sans lui, cadrage auto sur le drop |
 | `--duration` | `30` | durée de la fenêtre (s), ou `full` pour tout le morceau |
 | `--cut-every N` | *(mode énergie)* | force une coupe tous les N beats (1 = strobo, 4 ≈ temps forts) |
+| `--title "…"` | *(aucun)* | titre incrusté pendant le buildup (ex. `"ARTISTE — TITRE"`) |
 
 ## Fonctionnement
 
