@@ -1,0 +1,577 @@
+"""beatsync — montage vidéo vertical synchronisé sur les beats d'un morceau.
+
+Pipeline : analyze_audio -> load_clips -> build_edl (logique pure) -> render.
+"""
+
+import argparse
+import json
+import random
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import numpy as np
+
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+
+DEFAULT_CONFIG = {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "cut_mode": "energy",               # "energy" | "fixed"
+    "cut_every": 2,                     # utilisé si cut_mode == "fixed"
+    "energy_thresholds": (0.40, 0.75),  # percentiles bas / haut
+    "energy_intervals": (4, 2, 1),      # beats par coupe : calme / moyen / intense
+    "start": 0.0,
+    "end": 30.0,
+    "drop_time": None,                  # timestamp du drop dans le morceau (None = pas de drop connu)
+    "buildup": 10.0,                    # s de buildup avant le drop dans la fenêtre auto
+    "strobe_beats": 16,                 # coupes forcées à 1 beat après le drop
+    "effects": {"zoom": True, "flash": True, "shake": True, "speed": True},
+    "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
+    "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
+    "crf": 20,
+    "preset": "medium",
+    "audio_bitrate": "192k",
+}
+
+
+def analyze_audio(track_path: Path) -> dict:
+    """Grille de beats (s), BPM et enveloppe d'énergie RMS du morceau."""
+    import librosa  # import paresseux : coûteux (~2 s), inutile pour la logique pure
+
+    y, sr = librosa.load(str(track_path), sr=None, mono=True)
+    tempo, beats = librosa.beat.beat_track(y=y, sr=sr, units="time")
+    rms = librosa.feature.rms(y=y)[0]
+    return {
+        "duration": float(librosa.get_duration(y=y, sr=sr)),
+        "bpm": float(np.atleast_1d(tempo)[0]),
+        "beats": np.asarray(beats, dtype=float),
+        "energy": rms,
+        "energy_times": librosa.times_like(rms, sr=sr),
+    }
+
+
+def load_clips(folder: Path) -> list[dict]:
+    """Métadonnées des clips vidéo du dossier, triés par nom (déterminisme)."""
+    clips = []
+    for path in sorted(Path(folder).iterdir()):
+        if path.suffix.lower() not in VIDEO_EXTENSIONS:
+            continue
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height:format=duration",
+                "-of", "json", str(path),
+            ],
+            capture_output=True, text=True, check=True,
+        )
+        info = json.loads(probe.stdout)
+        stream = info["streams"][0]
+        width, height = int(stream["width"]), int(stream["height"])
+        clips.append(
+            {
+                "path": path,
+                "duration": float(info["format"]["duration"]),
+                "width": width,
+                "height": height,
+                "ratio": width / height,
+            }
+        )
+    if not clips:
+        raise ValueError(f"aucun clip vidéo ({', '.join(sorted(VIDEO_EXTENSIONS))}) dans {folder}")
+    return clips
+
+
+def classify_frames(frames: np.ndarray, sample_dt: float) -> dict:
+    """Classe des frames échantillonnées (N, h, w, 3) uint8. Logique pure.
+
+    - orange : dominante « carte Crunchyroll » (fond orange saturé)
+    - black : frame quasi noire (générique, fondu)
+    - motion : diff moyenne inter-frames, normalisée 0..1
+    """
+    f = frames.astype(np.int16)
+    r, g, b = f[..., 0], f[..., 1], f[..., 2]
+    orange_pixels = (r > 150) & (g > 60) & (g < 180) & (b < 100) & (r > g) & (g > b)
+    orange = orange_pixels.mean(axis=(1, 2)) > 0.35
+
+    black = f.mean(axis=(1, 2, 3)) < 18.0
+
+    motion = np.zeros(len(frames))
+    if len(frames) > 1:
+        motion[1:] = np.abs(np.diff(f, axis=0)).mean(axis=(1, 2, 3)) / 255.0
+        motion[0] = motion[1]
+    return {"orange": orange, "black": black, "motion": motion}
+
+
+def usable_intervals(classification: dict, duration: float, sample_dt: float,
+                     min_len: float = 1.0, margin: float = 0.5, motion_min: float = 0.008,
+                     interval_motion_min: float = 0.05) -> list[dict]:
+    """Plages temporelles exploitables d'un clip, avec leur mouvement moyen.
+
+    Une plage = échantillons consécutifs ni orange, ni noirs, ni statiques
+    (`motion_min` par échantillon), rognée de `margin` de chaque côté,
+    longue d'au moins `min_len`. Les plages dont le mouvement MOYEN reste
+    sous `interval_motion_min` (pans d'établissement, dialogues figés) sont
+    écartées en bloc — le seuil par échantillon, lui, reste bas pour ne pas
+    fragmenter les scènes d'action sur leurs micro-pauses.
+    """
+    ok = ~classification["orange"] & ~classification["black"] & (classification["motion"] >= motion_min)
+    motion = classification["motion"]
+    presence = classification.get("presence")  # score personnages par échantillon (optionnel)
+    if presence is not None:
+        ok = ok & (presence > 0.0)  # plan vide (ni visage ni contours) = inutilisable
+
+    intervals: list[dict] = []
+    run_start = None
+    for i, good in enumerate([*ok, False]):  # sentinelle pour fermer la dernière run
+        if good and run_start is None:
+            run_start = i
+        elif not good and run_start is not None:
+            start = run_start * sample_dt + margin
+            end = min(i * sample_dt, duration) - margin
+            if end - start >= min_len and float(motion[run_start:i].mean()) >= interval_motion_min:
+                intervals.append(
+                    {
+                        "start": start,
+                        "end": end,
+                        "motion": float(motion[run_start:i].mean()),
+                        "presence": float(presence[run_start:i].mean()) if presence is not None else 1.0,
+                    }
+                )
+            run_start = None
+    return intervals
+
+
+SCAN_FPS = 2.0
+SCAN_W, SCAN_H = 640, 360        # résolution de détection (visages + contours)
+SMALL_W, SMALL_H = 32, 18        # résolution des heuristiques couleur/mouvement
+CASCADE_PATH = Path(__file__).parent / "assets" / "lbpcascade_animeface.xml"
+EDGE_PRESENCE_THRESHOLD = 0.008  # fraction de pixels « trait d'encre » dans la bande centrale
+
+
+def _char_presence(frames: np.ndarray) -> np.ndarray:
+    """Score « personnages à l'écran » par frame : visage animé détecté (1.0)
+    ou contours d'encre nets (0.6). Calculé uniquement dans la bande centrale
+    (~40 % de largeur) qui survit au crop 9:16 — un personnage au bord du
+    cadre disparaît de toute façon au recadrage."""
+    import cv2  # import paresseux, comme librosa
+
+    cascade = cv2.CascadeClassifier(str(CASCADE_PATH))
+    if cascade.empty():
+        raise RuntimeError(f"cascade animé introuvable ou invalide : {CASCADE_PATH}")
+    x0, x1 = int(frames.shape[2] * 0.30), int(frames.shape[2] * 0.70)
+    presence = np.zeros(len(frames))
+    for i, frame in enumerate(frames):
+        band = cv2.cvtColor(frame[:, x0:x1], cv2.COLOR_RGB2GRAY)
+        faces = cascade.detectMultiScale(
+            cv2.equalizeHist(band), scaleFactor=1.05, minNeighbors=2, minSize=(24, 24)
+        )
+        if len(faces):
+            presence[i] = 1.0
+            continue
+        gray = band.astype(np.float32)
+        magnitude = np.hypot(cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1))
+        if float((magnitude > 160).mean()) > EDGE_PRESENCE_THRESHOLD:
+            presence[i] = 0.6
+    return presence
+
+
+def scan_clips(clips: list[dict]) -> list[dict]:
+    """Enrichit chaque clip de ses plages exploitables : cartes orange, noir et
+    passages statiques exclus, score de présence des personnages par plage."""
+    for clip in clips:
+        raw = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-i", str(clip["path"]),
+                "-vf", f"fps={SCAN_FPS},scale={SCAN_W}:{SCAN_H}",
+                "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+            ],
+            capture_output=True, check=True,
+        ).stdout
+        frame_size = SCAN_W * SCAN_H * 3
+        n = len(raw) // frame_size
+        frames = np.frombuffer(raw[: n * frame_size], dtype=np.uint8).reshape(n, SCAN_H, SCAN_W, 3)
+        # Couleur/mouvement sur miniatures 32x18 (moyenne par blocs de 20x20).
+        small = frames.reshape(n, SMALL_H, SCAN_H // SMALL_H, SMALL_W, SCAN_W // SMALL_W, 3) \
+                      .mean(axis=(2, 4)).astype(np.uint8)
+        classification = classify_frames(small, 1.0 / SCAN_FPS)
+        classification["presence"] = _char_presence(frames)
+        clip["intervals"] = usable_intervals(classification, clip["duration"], 1.0 / SCAN_FPS)
+    return clips
+
+
+def find_drop(analysis: dict, config: dict) -> float | None:
+    """Timestamp du drop (calé sur un beat), ou None si l'énergie est trop plate.
+
+    Le drop est l'instant qui maximise le contraste d'énergie entre les 8 s
+    qui suivent et les 8 s qui précèdent (énergie lissée sur ~2 s).
+    """
+    dt = 0.25
+    grid = np.arange(0.0, float(analysis["duration"]), dt)
+    energy = np.interp(
+        grid,
+        np.asarray(analysis["energy_times"], dtype=float),
+        np.asarray(analysis["energy"], dtype=float),
+    )
+    kernel = np.ones(max(1, int(2.0 / dt)))
+    energy = np.convolve(energy, kernel / len(kernel), mode="same")
+
+    window = int(8.0 / dt)
+    if len(grid) < 2 * window + 1:
+        return None
+    csum = np.concatenate([[0.0], np.cumsum(energy)])
+    idx = np.arange(window, len(energy) - window)
+    contrast = (csum[idx + window] - csum[idx]) / window - (csum[idx] - csum[idx - window]) / window
+
+    amplitude = float(energy.max() - energy.min())
+    if amplitude <= 0.0 or float(contrast.max()) < 0.2 * amplitude:
+        return None
+
+    drop_time = grid[idx[int(np.argmax(contrast))]]
+    beats = np.asarray(analysis["beats"], dtype=float)
+    return float(beats[int(np.argmin(np.abs(beats - drop_time)))])
+
+
+def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> list[dict]:
+    """Construit l'Edit Decision List. Logique pure : aucun I/O, déterministe à seed égal.
+
+    Les timestamps de sortie sont quantifiés sur la grille de frames pour que
+    l'erreur d'arrondi ne s'accumule pas d'un segment à l'autre (≤ ½ frame par cut).
+    """
+    fps = float(config["fps"])
+    frame = 1.0 / fps
+    start, end = float(config["start"]), float(config["end"])
+    if end <= start:
+        raise ValueError("fenêtre vide : end doit être > start")
+
+    beats = np.asarray(analysis["beats"], dtype=float)
+    rng = random.Random(seed)
+    effects_cfg = config.get("effects", {})
+
+    # Rang percentile d'énergie de chaque beat, calculé sur le morceau ENTIER
+    # (pas la fenêtre) : 30 s de pur drop => coupes rapides partout. Sert au
+    # rythme des coupes (mode energy) ET aux effets (tiers calme/moyen/intense).
+    beat_energy = np.interp(
+        beats,
+        np.asarray(analysis["energy_times"], dtype=float),
+        np.asarray(analysis["energy"], dtype=float),
+    )
+    ranks = beat_energy.argsort().argsort()
+    percentiles = (ranks + 0.5) / max(1, len(beats))
+    low_thr, high_thr = config["energy_thresholds"]
+    calm_step, mid_step, intense_step = config["energy_intervals"]
+
+    # Drop : uniquement s'il tombe dans la fenêtre, calé sur son beat.
+    drop_idx = None
+    drop_time = config.get("drop_time")
+    if drop_time is not None and start <= drop_time < end:
+        drop_idx = int(np.argmin(np.abs(beats - drop_time)))
+        if not (start <= beats[drop_idx] < end):
+            drop_idx = None
+    strobe_beats = int(config.get("strobe_beats", 16))
+
+    def step_at(i: int) -> int:
+        if drop_idx is not None and drop_idx <= i < drop_idx + strobe_beats:
+            return 1  # strobo au drop, quelle que soit l'énergie
+        if config["cut_mode"] == "fixed":
+            return max(1, int(config["cut_every"]))
+        p = percentiles[i]
+        return intense_step if p >= high_thr else mid_step if p >= low_thr else calm_step
+
+    def tier_at(i: int) -> str:
+        p = percentiles[i]
+        return "intense" if p >= high_thr else "mid" if p >= low_thr else "calm"
+
+    # --- Beats de coupe : marche beat par beat, sans jamais enjamber le drop ---
+    cut_beats: list[tuple[float, int]] = []  # (timestamp piste, index du beat)
+    in_window = np.flatnonzero((beats >= start) & (beats < end))
+    if len(in_window):
+        i, last = int(in_window[0]), int(in_window[-1])
+        while i <= last:
+            cut_beats.append((float(beats[i]), i))
+            nxt = i + step_at(i)
+            if drop_idx is not None and i < drop_idx < nxt:
+                nxt = drop_idx  # garantit une coupe pile sur le drop
+            i = nxt
+
+    # --- Frontières de segments : quantifiées frame, jamais < 1 frame d'écart ---
+    out_end = round((end - start) * fps) / fps
+    boundaries: list[tuple[float, int]] = [(0.0, -1)]  # -1 : début de fenêtre, pas un beat
+    for t, beat_index in cut_beats:
+        cut = round((t - start) * fps) / fps
+        if cut - boundaries[-1][0] >= frame - 1e-9 and cut <= out_end - frame + 1e-9:
+            boundaries.append((cut, beat_index))
+    boundaries.append((out_end, -1))
+
+    drop_out = None
+    if drop_idx is not None:
+        drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
+
+    def intervals_of(clip: dict) -> list[dict]:
+        if "intervals" not in clip:  # pas scanné : clip entier utilisable
+            return [{"start": 0.0, "end": clip["duration"], "motion": 1.0}]
+        return clip["intervals"]  # scanné ([] = rien d'exploitable, clip exclu)
+
+    # --- Attribution des clips : tirage seedé dans les plages exploitables ---
+    edl: list[dict] = []
+    prev_path = None
+    drop_seg_count = 0
+    last_clip_in: dict = {}  # par clip : dernier point d'entrée (mode chrono)
+    for (seg_start, beat_index), (seg_end, _) in zip(boundaries, boundaries[1:]):
+        duration = seg_end - seg_start
+        tier = tier_at(beat_index if beat_index >= 0 else (int(in_window[0]) if len(in_window) else 0))
+        if drop_out is None:
+            section = "main"
+        else:
+            section = "buildup" if seg_start < drop_out - 1e-9 else "drop"
+
+        # Gasp : slow-mo x0.5 sur le dernier segment avant l'impact du drop.
+        speed = 1.0
+        if effects_cfg.get("speed") and drop_out is not None and section == "buildup" \
+                and abs(seg_end - drop_out) < 1e-9:
+            speed = 0.5
+
+        effects: list[str] = []
+        if effects_cfg.get("zoom") and (tier == "intense" or section == "drop"):
+            effects.append("zoom")
+        if section == "drop":
+            if effects_cfg.get("flash") and drop_seg_count % 8 == 0:
+                effects.append("flash")
+            if effects_cfg.get("shake") and (
+                drop_seg_count == 0 or (tier == "intense" and rng.random() < 0.3)
+            ):
+                effects.append("shake")
+            drop_seg_count += 1
+        elif effects_cfg.get("shake") and tier == "intense" and rng.random() < 0.3:
+            effects.append("shake")
+
+        source_needed = duration * speed
+        usable = [
+            c for c in clips
+            if any(iv["end"] - iv["start"] >= source_needed for iv in intervals_of(c))
+        ]
+        if not usable:
+            raise ValueError(
+                f"aucun clip n'a de plage exploitable de {source_needed:.2f}s "
+                "(clips trop courts, ou trop de zones écartées par le scan)"
+            )
+        pool = [c for c in usable if c["path"] != prev_path] or usable
+        clip = rng.choice(pool)
+
+        candidates = [iv for iv in intervals_of(clip) if iv["end"] - iv["start"] >= source_needed]
+        # Personnages à l'écran : écarte les plages quasi vides (fallback si toutes le sont).
+        min_presence = config.get("min_presence", 0.0)
+        candidates = [iv for iv in candidates if iv.get("presence", 1.0) >= min_presence] or candidates
+
+        if config.get("chrono", False):
+            # Position dans la vidéo ≈ position dans l'histoire : le montage
+            # avance dans le clip au rythme de la timeline (climax au drop).
+            progress = seg_start / out_end if out_end > 0 else 0.0
+            slacks = [iv["end"] - iv["start"] - source_needed for iv in candidates]
+            target = progress * sum(slacks)
+            interval, offset = candidates[-1], slacks[-1]
+            for iv, slack in zip(candidates, slacks):
+                if target <= slack:
+                    interval, offset = iv, target
+                    break
+                target -= slack
+            clip_in = interval["start"] + offset + rng.uniform(0.0, 1.0)
+            clip_in = max(clip_in, last_clip_in.get(clip["path"], 0.0) + 0.1)
+            clip_in = min(max(clip_in, interval["start"]), interval["end"] - source_needed)
+            last_clip_in[clip["path"]] = clip_in
+        else:
+            if (section == "drop" or tier == "intense") and len(candidates) > 1:
+                # Les moments intenses piochent dans les plages les plus nerveuses.
+                median_motion = float(np.median([iv["motion"] for iv in candidates]))
+                candidates = [iv for iv in candidates if iv["motion"] >= median_motion] or candidates
+            interval = rng.choice(candidates)
+            clip_in = rng.uniform(interval["start"], interval["end"] - source_needed)
+        prev_path = clip["path"]
+        edl.append(
+            {
+                "timeline_start": seg_start,
+                "duration": duration,
+                "clip_path": clip["path"],
+                "clip_in": clip_in,
+                "beat_index": beat_index,
+                "section": section,
+                "speed": speed,
+                "effects": effects,
+            }
+        )
+    return edl
+
+
+def _run_ffmpeg(args: list[str]) -> None:
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n{result.stderr}")
+
+
+def _segment_vf(entry: dict, config: dict) -> str:
+    """Chaîne de filtres FFmpeg d'un segment, selon ses effets EDL.
+
+    Ordre : slow-mo → cadrage (avec jitter si shake) → fps → punch-zoom →
+    flash blanc → normalisation → tpad (complété par -frames:v pour un
+    compte de frames exact).
+    """
+    width, height, fps = config["width"], config["height"], config["fps"]
+    effects = entry.get("effects", [])
+    parts = []
+
+    speed = entry.get("speed", 1.0)
+    if speed != 1.0:
+        parts.append(f"setpts=(PTS-STARTPTS)/{speed:.6f}")
+
+    if "shake" in effects:
+        # Sur-cadrage ~2 % puis fenêtre qui tremble — sinusoïdes de n : déterministe.
+        over_w, over_h = width + 20, height + 38
+        parts.append(
+            f"scale={over_w}:{over_h}:force_original_aspect_ratio=increase,"
+            f"crop={over_w}:{over_h},"
+            f"crop={width}:{height}:x='(iw-ow)/2+7*sin(n*7.3)':y='(ih-oh)/2+7*cos(n*9.1)'"
+        )
+    else:
+        parts.append(
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+        )
+
+    parts.append(f"fps={fps}")
+    if "zoom" in effects:
+        # Punch-zoom : 110 % → 100 % sur les 6 premières frames du plan.
+        parts.append(
+            "zoompan=z='1+0.10*max(0,1-on/6)'"
+            f":x='(iw-iw/zoom)/2':y='(ih-ih/zoom)/2':d=1:s={width}x{height}:fps={fps}"
+        )
+    if "flash" in effects:
+        parts.append("fade=t=in:st=0:d=0.1:color=white")
+
+    parts.append("setsar=1,format=yuv420p")
+    parts.append("tpad=stop_mode=clone:stop_duration=1")
+    return ",".join(parts)
+
+
+def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -> None:
+    """Assemble la vidéo : un segment ré-encodé par entrée d'EDL, puis concat
+    en copie de flux + piste audio du morceau."""
+    fps = config["fps"]
+    total = edl[-1]["timeline_start"] + edl[-1]["duration"]
+
+    with tempfile.TemporaryDirectory(prefix="beatsync-") as tmp:
+        tmpdir = Path(tmp)
+        concat_list = tmpdir / "segments.txt"
+        lines = []
+        for i, entry in enumerate(edl):
+            segment = tmpdir / f"seg{i:04d}.mp4"
+            # Nombre de frames EXACT : les sources à fps non multiples (23,976…)
+            # peuvent rendre quelques ms de moins que demandé, et le concat
+            # accumulerait la dérive. tpad clone la dernière frame au besoin,
+            # -frames:v coupe pile au bon compte.
+            n_frames = round(entry["duration"] * fps)
+            source_needed = entry["duration"] * entry.get("speed", 1.0)
+            _run_ffmpeg(
+                [
+                    "-ss", f"{entry['clip_in']:.6f}",  # avant -i : seek rapide
+                    "-t", f"{source_needed + 0.5:.6f}",
+                    "-i", str(entry["clip_path"]),
+                    "-vf", _segment_vf(entry, config),
+                    "-frames:v", str(n_frames),
+                    "-an",
+                    "-c:v", "libx264", "-preset", config["preset"], "-crf", str(config["crf"]),
+                    # Timescale commun : requis pour le concat en copie de flux
+                    "-video_track_timescale", "15360",
+                    "-bitexact", "-map_metadata", "-1",
+                    str(segment),
+                ]
+            )
+            lines.append(f"file '{segment}'")
+        concat_list.write_text("\n".join(lines) + "\n")
+
+        _run_ffmpeg(
+            [
+                "-f", "concat", "-safe", "0", "-i", str(concat_list),
+                "-ss", f"{config['start']:.6f}", "-t", f"{total:.6f}", "-i", str(audio_path),
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "copy",
+                "-c:a", "aac", "-b:a", config["audio_bitrate"],
+                "-bitexact", "-map_metadata", "-1",
+                "-shortest",
+                str(output_path),
+            ]
+        )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Montage vidéo vertical 9:16 synchronisé sur les beats d'un morceau."
+    )
+    parser.add_argument("track", help="chemin du morceau audio")
+    parser.add_argument("clips_dir", help="dossier des clips vidéo")
+    parser.add_argument("-o", "--output", default="output.mp4", help="fichier de sortie (défaut : output.mp4)")
+    parser.add_argument("--seed", type=int, default=42, help="graine de reproductibilité (défaut : 42)")
+    parser.add_argument("--start", type=float, default=None,
+                        help="début manuel de la fenêtre, en s (défaut : cadrage auto buildup + drop)")
+    parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
+    parser.add_argument("--cut-every", type=int, default=None, metavar="N",
+                        help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
+    args = parser.parse_args()
+
+    if not Path(args.track).is_file():
+        sys.exit(f"morceau introuvable : {args.track}")
+    if not Path(args.clips_dir).is_dir():
+        sys.exit(f"dossier de clips introuvable : {args.clips_dir}")
+
+    print(f"Analyse de {args.track}…")
+    analysis = analyze_audio(Path(args.track))
+    print(f"  {analysis['bpm']:.1f} BPM, {len(analysis['beats'])} beats, {analysis['duration']:.1f} s")
+
+    config = dict(DEFAULT_CONFIG)
+    drop = find_drop(analysis, config)
+    config["drop_time"] = drop
+    print(f"  drop détecté à {drop:.1f} s" if drop is not None else "  pas de drop net détecté")
+
+    if args.start is not None:
+        if args.start >= analysis["duration"]:
+            sys.exit(f"--start {args.start} dépasse la durée du morceau ({analysis['duration']:.1f} s)")
+        start = args.start
+    elif drop is not None:
+        start = max(0.0, drop - config["buildup"])  # montée vers le drop incluse
+    else:
+        start = 0.0
+    config["start"] = start
+    if args.duration == "full":
+        config["end"] = analysis["duration"]
+    else:
+        config["end"] = min(start + float(args.duration), analysis["duration"])
+    print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s")
+    if args.cut_every is not None:
+        config["cut_mode"] = "fixed"
+        config["cut_every"] = args.cut_every
+
+    clips = load_clips(Path(args.clips_dir))
+    print(f"  {len(clips)} clips dans {args.clips_dir}, scan des plages exploitables…")
+    scan_clips(clips)
+    for clip in clips:
+        usable_s = sum(iv["end"] - iv["start"] for iv in clip["intervals"])
+        with_chars = sum(
+            iv["end"] - iv["start"] for iv in clip["intervals"]
+            if iv["presence"] >= config["min_presence"]
+        )
+        print(f"    {clip['path'].name} : {usable_s:.0f} s exploitables / {clip['duration']:.0f} s "
+              f"({len(clip['intervals'])} plage(s), {with_chars:.0f} s avec personnages)")
+
+    edl = build_edl(analysis, clips, config, seed=args.seed)
+    n_fx = sum(bool(e["effects"]) for e in edl)
+    print(f"  EDL : {len(edl)} segments sur {config['end'] - config['start']:.1f} s "
+          f"(seed {args.seed}, {n_fx} segments avec effets)")
+
+    print("Rendu FFmpeg…")
+    render(edl, Path(args.track), Path(args.output), config)
+    print(f"OK → {args.output}")
+
+
+if __name__ == "__main__":
+    main()

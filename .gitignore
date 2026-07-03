@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+output.mp4
+
+# Médias de test (gros binaires, jamais commités)
+tracks/
+clips/
+output/

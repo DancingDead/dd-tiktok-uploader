@@ -1,0 +1,47 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Projet
+
+Cœur d'une « usine à vidéos » pour un label de musique électronique (Dancing Dead Records) : transformer un morceau du label + un dossier de clips en un montage vidéo vertical 9:16 (1080x1920, H.264) dont les coupes sont synchronisées sur les beats de la musique.
+
+Périmètre volontairement minimal à ce stade : pas de publication, pas de multi-comptes, pas de scraping, pas de file de jobs. Éviter toute sur-ingénierie.
+
+## Environnement et commandes
+
+Le projet utilise **uv** (pas pip directement — le venv n'a pas de module pip).
+
+```bash
+uv sync                          # installer les dépendances
+uv run python beatsync.py ...    # lancer le script principal
+uv run pytest                    # lancer les tests
+uv run pytest tests/test_build_edl.py -k <nom>   # un seul test
+```
+
+**FFmpeg est une dépendance système** (`brew install ffmpeg` sur macOS). Le rendu passe par `subprocess` (jamais par ffmpeg-python, non maintenu) ; `ffprobe` sert à lire les métadonnées des clips.
+
+## Architecture
+
+Deux scripts indépendants :
+
+- `fetch_tracks.py` — télécharge l'audio (mp3) des liens YouTube de `links.txt` vers `tracks/` via yt-dlp (`python -m yt_dlp` en subprocess). `parse_links` est la partie pure testée.
+- `beatsync.py` — le montage, découpé en fonctions indépendantes et testables, pensées pour être éclatées en modules plus tard :
+
+- `analyze_audio(track_path)` — librosa : grille de beats (timestamps en s), BPM, enveloppe d'énergie RMS. Import librosa paresseux (coûteux, inutile pour la logique pure)
+- `find_drop(analysis, config)` — **pure** : drop = max de contraste d'énergie avant/après (fenêtres ±8 s), calé sur un beat ; None si énergie plate. Sans `--start`, main cadre la fenêtre sur `[drop - buildup, drop + reste]`
+- `load_clips(folder)` — métadonnées des clips via ffprobe ; liste **triée par nom** (déterminisme)
+- `scan_clips(clips)` / `classify_frames` / `usable_intervals` / `_char_presence` — frames 640x360 à 2 fps via FFmpeg (miniatures 32x18 par blocs pour couleur/mouvement) → exclusion cartes orange Crunchyroll, frames noires, statiques, plages à mouvement moyen < 0.05 (pans d'établissement) et plans sans personnages. Présence = visage animé (cascade `assets/lbpcascade_animeface.xml`, poids 1.0) OU contours d'encre (poids 0.6), détectés dans la **bande centrale 40 %** seulement (ce qui survit au crop 9:16 — élimine le logo Crunchyroll du coin par construction). Présence 0 = plan vide → coupe la plage. `classify_frames`/`usable_intervals` sont **pures et testées**. `intervals: []` = clip scanné inutilisable (≠ clé absente = pas scanné, clip entier utilisable). OpenCV pinné `<5` (CascadeClassifier retiré en 5.x)
+- `build_edl(analysis, clips, config, seed)` — **logique pure, sans I/O ni rendu** : construit l'Edit Decision List. Rythme « energy » : percentile d'énergie de chaque beat (sur le morceau ENTIER) → intervalle 4/2/1 beats ; `--cut-every N` force le mode fixe. Avec `drop_time` : coupe garantie pile sur le drop, strobo 1 beat pendant 16 beats, sections buildup/drop, gasp slow-mo x0.5 juste avant l'impact, effets par segment (`zoom`/`flash`/`shake` — déterministes à seed égal). `clip_in` pioché uniquement dans les plages exploitables, filtrées par `min_presence`. Mode `chrono` (défaut) : position dans la timeline ≈ position dans l'histoire du clip (mapping proportionnel sur les plages, monotone par clip, jitter seedé) — le drop tombe sur le climax ; `chrono: False` restaure le tirage libre avec préférence mouvement pour les segments intenses
+- `render(edl, audio_path, output_path, config)` — un segment encodé par entrée d'EDL (vf construit par segment selon les effets) puis concat en copie de flux. Chaque segment est forcé à un nombre de frames EXACT (`tpad` + `-frames:v`) : sans ça, les sources 23,976 fps rendent quelques ms de moins et le concat accumule une dérive audio/vidéo. La source consommée = `duration × speed`
+- `main()` — CLI argparse ; sans `--start`, cadrage auto sur le drop (buildup 10 s + drop) ; fenêtre de 30 s par défaut (sortie format TikTok)
+
+## Contrainte centrale : reproductibilité
+
+Relancer avec la même seed doit produire exactement la même vidéo. Trois garde-fous à ne pas casser :
+
+1. `load_clips` trie les fichiers par nom (l'ordre du filesystem n'est pas déterministe)
+2. `build_edl` utilise un `random.Random(seed)` local, jamais le RNG global
+3. Le rendu FFmpeg passe des flags `bitexact` pour neutraliser les métadonnées horodatées
+
+Autre invariant : les timestamps de cut sont quantifiés sur la grille de frames (fps de la config) dans `build_edl`, pas dans `render`, pour que l'erreur ne s'accumule pas et que ce soit testable.
