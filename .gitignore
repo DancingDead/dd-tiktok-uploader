@@ -8,3 +8,7 @@ output.mp4
 tracks/
 clips/
 output/
+
+# File de publication et plan réel (données locales)
+queue/
+plan.toml

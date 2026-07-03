@@ -1,0 +1,26 @@
+# Plan de publication — copie ce fichier vers plan.toml et adapte-le.
+# Chaque post est décliné en UNE VIDÉO DIFFÉRENTE par compte (seed dérivée
+# du trio morceau/compte/date) : pas de doublon entre comptes.
+# Puis :  uv run python batch_generate.py
+
+[defaults]
+duration = 30                       # secondes (la fin s'étend à la phrase suivante)
+caption = "{title} — OUT NOW 🔥"
+hashtags = ["hardstyle", "anime", "edit", "dancingdead"]
+
+[[posts]]
+track = "tracks/NLCK & HANNAH - Virus V4 (Radio Edit).wav"
+title = "NLCK & HANNAH — Virus V4"
+accounts = ["dd.main", "dd.edits"]
+date = "2026-07-06"
+time = "18:00"                      # heure de base, jitter de 0-14 min appliqué
+
+# [[posts]]
+# track = "tracks/autre-morceau.mp3"
+# title = "ARTISTE — Titre"
+# accounts = ["dd.main"]
+# date = "2026-07-07"
+# time = "21:00"
+# caption = "{title} 🌀"            # surcharges locales possibles
+# hashtags = ["frenchcore", "edit"]
+# duration = 45

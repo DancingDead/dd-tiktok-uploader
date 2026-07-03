@@ -64,7 +64,23 @@ uv run python fetch_tracks.py autre_liste.txt --dest autre_dossier
 Relancer le script ne retélécharge pas ce qui existe déjà, et un lien mort ne
 bloque pas les suivants.
 
-### 2. Monter la vidéo
+### 2. Générer en lot pour la publication (optionnel)
+
+Copie `plan.example.toml` vers `plan.toml` (morceaux × comptes × créneaux),
+puis :
+
+```bash
+uv run python batch_generate.py
+```
+
+Chaque post est décliné en **une vidéo différente par compte** (seed dérivée
+du trio morceau/compte/date — pas de doublon entre comptes) et déposé dans
+`queue/pending/` avec ses métadonnées de publication (compte, heure avec
+jitter, légende, hashtags). Relancer ne re-rend pas ce qui existe déjà.
+Cette file sera consommée par le worker de publication TikTok (voir
+`docs/superpowers/specs/2026-07-04-publication-tiktok-design.md`).
+
+### 3. Monter une vidéo à l'unité
 
 ```bash
 uv run python beatsync.py tracks/morceau.mp3 ./clips -o output/sortie.mp4 --seed 42

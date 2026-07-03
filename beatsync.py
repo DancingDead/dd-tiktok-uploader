@@ -281,6 +281,29 @@ def snap_end_to_phrase(end: float, drop_time: float | None, beats: np.ndarray,
     return drop_time + n * phrase if n >= 1 else end
 
 
+def resolve_window(analysis: dict, config: dict, start: float | None = None,
+                   duration: float | str = 30.0) -> dict:
+    """Résout drop_time / start / end dans config (et le retourne).
+
+    start=None => cadrage auto : buildup avant le drop détecté (ou début du
+    morceau sans drop net). duration="full" => tout le morceau ; sinon la fin
+    est étendue à la frontière de phrase suivante.
+    """
+    drop = find_drop(analysis, config)
+    config["drop_time"] = drop
+    if start is None:
+        start = max(0.0, drop - config["buildup"]) if drop is not None else 0.0
+    config["start"] = float(start)
+    if duration == "full":
+        config["end"] = float(analysis["duration"])
+    else:
+        end = min(config["start"] + float(duration), float(analysis["duration"]))
+        config["end"] = snap_end_to_phrase(
+            end, drop, analysis["beats"], analysis["duration"], config["phrase_beats"]
+        )
+    return config
+
+
 def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> list[dict]:
     """Construit l'Edit Decision List. Logique pure : aucun I/O, déterministe à seed égal.
 
@@ -637,29 +660,11 @@ def main() -> None:
     analysis = analyze_audio(Path(args.track))
     print(f"  {analysis['bpm']:.1f} BPM, {len(analysis['beats'])} beats, {analysis['duration']:.1f} s")
 
-    config = dict(DEFAULT_CONFIG)
-    drop = find_drop(analysis, config)
-    config["drop_time"] = drop
+    if args.start is not None and args.start >= analysis["duration"]:
+        sys.exit(f"--start {args.start} dépasse la durée du morceau ({analysis['duration']:.1f} s)")
+    config = resolve_window(analysis, dict(DEFAULT_CONFIG), start=args.start, duration=args.duration)
+    drop = config["drop_time"]
     print(f"  drop détecté à {drop:.1f} s" if drop is not None else "  pas de drop net détecté")
-
-    if args.start is not None:
-        if args.start >= analysis["duration"]:
-            sys.exit(f"--start {args.start} dépasse la durée du morceau ({analysis['duration']:.1f} s)")
-        start = args.start
-    elif drop is not None:
-        start = max(0.0, drop - config["buildup"])  # montée vers le drop incluse
-    else:
-        start = 0.0
-    config["start"] = start
-    if args.duration == "full":
-        config["end"] = analysis["duration"]
-    else:
-        end = min(start + float(args.duration), analysis["duration"])
-        # La musique doit s'arrêter à un moment logique : fin étendue à la
-        # prochaine frontière de phrase (16 beats) après le drop.
-        config["end"] = snap_end_to_phrase(
-            end, drop, analysis["beats"], analysis["duration"], config["phrase_beats"]
-        )
     print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s "
           f"({config['end'] - config['start']:.1f} s, fin sur phrase)")
     if args.cut_every is not None:

@@ -23,9 +23,10 @@ uv run pytest tests/test_build_edl.py -k <nom>   # un seul test
 
 ## Architecture
 
-Deux scripts indépendants :
+Trois scripts indépendants :
 
 - `fetch_tracks.py` — télécharge l'audio (mp3) des liens YouTube de `links.txt` vers `tracks/` via yt-dlp (`python -m yt_dlp` en subprocess). `parse_links` est la partie pure testée.
+- `batch_generate.py` — décline `plan.toml` (posts × comptes, tomllib stdlib) en vidéos + sidecars JSON dans `queue/pending/`, une seed dérivée par (morceau, compte, date) donc une variante par compte. Idempotent. Parties pures testées : `build_jobs`, `derive_seed`, `make_caption`, `schedule_time` (jitter déterministe 0-14 min), `output_stem`. La file sera consommée par le futur worker TikTok (spec `2026-07-04-publication-tiktok-design.md` : API officielle, brouillons d'abord).
 - `beatsync.py` — le montage, découpé en fonctions indépendantes et testables, pensées pour être éclatées en modules plus tard :
 
 - `analyze_audio(track_path)` — librosa : grille de beats (timestamps en s), BPM, enveloppe d'énergie RMS. Import librosa paresseux (coûteux, inutile pour la logique pure)
