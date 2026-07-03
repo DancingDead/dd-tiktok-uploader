@@ -20,8 +20,7 @@ façon edit animé TikTok :
   de la vidéo — le drop tombe sur le climax du clip ;
 - **Fin musicale** : la vidéo s'étend jusqu'à la fin de phrase (16 beats)
   suivante — la musique ne coupe jamais en plein milieu ;
-- **Accents** : RGB split à l'impact, micro-glitch sur les temps forts,
-  titre incrusté pendant le buildup via `--title`.
+- **Accents** : RGB split à l'impact, micro-glitch sur les temps forts.
 
 ## Prérequis
 
@@ -80,7 +79,6 @@ uv run python beatsync.py tracks/morceau.mp3 ./clips -o output/sortie.mp4 --seed
 | `--start` | *(drop auto)* | début manuel de la fenêtre (s) ; sans lui, cadrage auto sur le drop |
 | `--duration` | `30` | durée de la fenêtre (s), ou `full` pour tout le morceau |
 | `--cut-every N` | *(mode énergie)* | force une coupe tous les N beats (1 = strobo, 4 ≈ temps forts) |
-| `--title "…"` | *(aucun)* | titre incrusté pendant le buildup (ex. `"ARTISTE — TITRE"`) |
 
 ## Fonctionnement
 

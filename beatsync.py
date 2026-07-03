@@ -34,7 +34,6 @@ DEFAULT_CONFIG = {
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
-    "title": None,                      # texte incrusté pendant le buildup (--title)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,
     "preset": "medium",
@@ -487,18 +486,11 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n{result.stderr}")
 
 
-MAC_FONT = "/System/Library/Fonts/Helvetica.ttc"
-
-
-def _drawtext_escape(text: str) -> str:
-    return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\\\\\'")
-
-
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
     flouté. Ordre : slow-mo → layout → fps → punch-zoom → flash → RGB/glitch →
-    titre → normalisation → tpad (complété par -frames:v)."""
+    normalisation → tpad (complété par -frames:v)."""
     width, height, fps = config["width"], config["height"], config["fps"]
     effects = entry.get("effects", [])
     layout = entry.get("layout", "crop")
@@ -528,13 +520,6 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post.append("rgbashift=rh=-14:gv=10:bh=14:edge=smear:enable='lt(n,2)'")
     elif "rgb" in effects:
         post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
-    title = config.get("title")
-    if title and entry.get("section") == "buildup" and Path(MAC_FONT).exists():
-        post.append(
-            f"drawtext=fontfile={MAC_FONT}:text='{_drawtext_escape(title)}'"
-            ":fontsize=58:fontcolor=white:borderw=2:bordercolor=black@0.6"
-            ":x=(w-text_w)/2:y=h*0.16"
-        )
     post.append("setsar=1,format=yuv420p")
     post.append("tpad=stop_mode=clone:stop_duration=1")
     post_chain = ",".join(post)
@@ -641,8 +626,6 @@ def main() -> None:
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
-    parser.add_argument("--title", default=None,
-                        help='texte incrusté pendant le buildup (ex. "NLCK & HANNAH — Virus V4")')
     args = parser.parse_args()
 
     if not Path(args.track).is_file():
@@ -677,7 +660,6 @@ def main() -> None:
         config["end"] = snap_end_to_phrase(
             end, drop, analysis["beats"], analysis["duration"], config["phrase_beats"]
         )
-    config["title"] = args.title
     print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s "
           f"({config['end'] - config['start']:.1f} s, fin sur phrase)")
     if args.cut_every is not None:
