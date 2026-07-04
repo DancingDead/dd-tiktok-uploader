@@ -17,3 +17,4 @@ settings.json
 # Secrets TikTok et tokens OAuth — JAMAIS dans git
 .env
 tokens/
+tiktok*.txt
