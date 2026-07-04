@@ -76,7 +76,7 @@ def load_plan(path: Path) -> dict:
 def generate(jobs: list[dict], clips_dir: Path, queue_dir: Path) -> list[Path]:
     """Génère les vidéos manquantes de la file (relance idempotente : ce qui
     existe déjà n'est pas re-rendu). Analyse audio et scan des clips partagés."""
-    from beatsync import (DEFAULT_CONFIG, analyze_audio, build_edl, load_clips,
+    from beatsync import (analyze_audio, build_edl, load_clips, load_settings,
                           render, resolve_window, scan_clips)
 
     pending = queue_dir / "pending"
@@ -97,7 +97,7 @@ def generate(jobs: list[dict], clips_dir: Path, queue_dir: Path) -> list[Path]:
             print(f"Analyse de {job['track']}…")
             analyses[job["track"]] = analyze_audio(Path(job["track"]))
         analysis = analyses[job["track"]]
-        config = resolve_window(analysis, dict(DEFAULT_CONFIG), duration=job["duration"])
+        config = resolve_window(analysis, load_settings(), duration=job["duration"])
         edl = build_edl(analysis, clips, config, seed=seed)
         print(f"  rendu {stem} ({len(edl)} segments, "
               f"{config['end'] - config['start']:.1f} s)…")

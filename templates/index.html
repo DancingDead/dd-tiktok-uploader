@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dancing Dead — usine à vidéos</title>
+<style>
+  :root{--bg:#0d0d10;--panel:#16161c;--line:#2a2a33;--txt:#eaeaea;--dim:#9a9aa2;--red:#e05252;--green:#7ee787}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--txt);display:flex;min-height:100vh}
+  nav{width:200px;background:var(--panel);border-right:1px solid var(--line);padding:1rem 0;flex-shrink:0}
+  nav h1{font-size:.95rem;letter-spacing:.15em;text-transform:uppercase;text-align:center;color:var(--red)}
+  nav button{display:block;width:100%;padding:.7rem 1.2rem;background:none;border:0;color:var(--dim);text-align:left;font-size:.95rem;cursor:pointer}
+  nav button.active{color:var(--txt);background:#1f1f27;border-left:3px solid var(--red)}
+  main{flex:1;padding:1.5rem 2rem;max-width:960px}
+  section{display:none}section.active{display:block}
+  h2{font-size:1.1rem;margin-top:0}
+  textarea,input,select{background:#1a1a20;border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:.5rem;font-size:.9rem}
+  textarea{width:100%;min-height:180px;font-family:ui-monospace,monospace}
+  button.act{background:var(--red);border:0;border-radius:6px;color:#fff;padding:.55rem 1.1rem;font-size:.9rem;cursor:pointer;margin:.3rem .3rem .3rem 0}
+  button.sec{background:#26262e;border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:.5rem 1rem;cursor:pointer;margin:.3rem .3rem .3rem 0}
+  table{width:100%;border-collapse:collapse;font-size:.88rem}
+  th,td{padding:.45rem .6rem;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--dim);font-weight:500}
+  .log{background:#101014;border:1px solid var(--line);border-radius:6px;padding:.7rem;font-family:ui-monospace,monospace;font-size:.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;color:var(--dim)}
+  .ok{color:var(--green)}.err{color:#ff7b72}
+  .row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:1rem;margin-bottom:1rem}
+  label.chk{display:inline-flex;align-items:center;gap:.4rem;margin:.3rem 1rem .3rem 0;color:var(--dim)}
+  .muted{color:var(--dim);font-size:.85rem}
+  .pill{display:inline-block;background:#26262e;border-radius:99px;padding:.1rem .6rem;font-size:.75rem;color:var(--dim)}
+</style>
+</head>
+<body>
+<nav>
+  <h1>Dancing Dead</h1>
+  <button data-tab="liens" class="active">Liens YouTube</button>
+  <button data-tab="tracks">Tracks</button>
+  <button data-tab="comptes">Comptes TikTok</button>
+  <button data-tab="plan">Plan &amp; file</button>
+  <button data-tab="reglages">Réglages montage</button>
+</nav>
+<main>
+
+<section id="liens" class="active">
+  <h2>Liens YouTube → tracks/</h2>
+  <p class="muted">Un lien par ligne (vidéo ou playlist), « # » pour commenter. Les mp3 arrivent dans <code>tracks/</code>.</p>
+  <textarea id="links"></textarea>
+  <div class="row">
+    <button class="act" onclick="saveLinks()">Enregistrer</button>
+    <button class="act" onclick="download()">Télécharger les sons</button>
+    <span id="links-status" class="muted"></span>
+  </div>
+  <div id="dl-log" class="log" style="display:none"></div>
+</section>
+
+<section id="tracks">
+  <h2>Tracks</h2>
+  <div class="row">
+    <input type="file" id="track-file" accept=".wav,.mp3,.flac,.m4a,.ogg,.aiff">
+    <button class="act" onclick="uploadTrack()">Uploader</button>
+    <span id="track-status" class="muted"></span>
+  </div>
+  <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="tracks-body"></tbody></table>
+</section>
+
+<section id="comptes">
+  <h2>Comptes TikTok</h2>
+  <table><thead><tr><th>Compte</th><th>open_id</th><th>Token expire</th></tr></thead><tbody id="accounts-body"></tbody></table>
+  <div class="card">
+    <b>Connecter un compte</b>
+    <p class="muted">1. Génère l'URL, ouvre-la, connecte-toi avec le compte du label et autorise.<br>
+       2. La page de callback affiche un code : colle-le ci-dessous.</p>
+    <div class="row">
+      <button class="act" onclick="authUrl()">Générer l'URL d'autorisation</button>
+      <a id="auth-link" target="_blank" style="display:none;color:var(--red)">Ouvrir la page d'autorisation ↗</a>
+    </div>
+    <div class="row">
+      <input id="auth-code" placeholder="colle le code (ou l'URL de callback complète)" style="flex:1">
+      <button class="act" onclick="authCode()">Connecter</button>
+      <span id="auth-status" class="muted"></span>
+    </div>
+  </div>
+</section>
+
+<section id="plan">
+  <h2>Plan de publication</h2>
+  <div class="card">
+    <b>Défauts</b>
+    <div class="row">
+      Durée <input id="d-duration" type="number" style="width:70px"> s&nbsp;
+      Légende <input id="d-caption" style="flex:1" placeholder="{title} — OUT NOW 🔥">
+    </div>
+    <div class="row">Hashtags <input id="d-hashtags" style="flex:1" placeholder="hardstyle, anime, edit"></div>
+  </div>
+  <div class="card">
+    <b>Posts</b>
+    <table><thead><tr><th>Morceau</th><th>Titre</th><th>Comptes</th><th>Date</th><th>Heure</th><th></th></tr></thead>
+    <tbody id="posts-body"></tbody></table>
+    <button class="sec" onclick="addPost()">+ Ajouter un post</button>
+  </div>
+  <div class="row">
+    <button class="act" onclick="savePlan()">Enregistrer le plan</button>
+    <button class="act" onclick="generate()">Générer les vidéos</button>
+    <span id="plan-status" class="muted"></span>
+  </div>
+  <div id="gen-log" class="log" style="display:none"></div>
+  <h2 style="margin-top:1.4rem">File d'attente</h2>
+  <table><thead><tr><th>Vidéo</th><th>Compte</th><th>Prévu le</th><th>Légende</th><th></th></tr></thead>
+  <tbody id="queue-body"></tbody></table>
+</section>
+
+<section id="reglages">
+  <h2>Réglages du montage</h2>
+  <div class="card"><b>Effets</b><br>
+    <label class="chk"><input type="checkbox" id="s-zoom"> Punch-zoom</label>
+    <label class="chk"><input type="checkbox" id="s-flash"> Flash blanc</label>
+    <label class="chk"><input type="checkbox" id="s-shake"> Shake</label>
+    <label class="chk"><input type="checkbox" id="s-speed"> Slow-mo avant drop</label>
+  </div>
+  <div class="card"><b>Accents</b><br>
+    <label class="chk"><input type="checkbox" id="s-rgb"> RGB split à l'impact</label>
+    <label class="chk"><input type="checkbox" id="s-glitch"> Micro-glitch</label>
+  </div>
+  <div class="card"><b>Cadrage &amp; contenu</b><br>
+    <label class="chk"><input type="checkbox" id="s-delogo"> Gommer le logo (delogo)</label>
+    <label class="chk"><input type="checkbox" id="s-chrono"> Chronologie de l'histoire</label>
+    <div class="row">Présence personnages min <input id="s-presence" type="number" step="0.05" min="0" max="1" style="width:80px"></div>
+  </div>
+  <div class="card"><b>Rythme</b><br>
+    <div class="row">
+      Mode <select id="s-cutmode"><option value="energy">énergie (auto)</option><option value="fixed">fixe</option></select>
+      &nbsp;Coupe tous les <input id="s-cutevery" type="number" min="1" style="width:60px"> beats (mode fixe)
+    </div>
+    <div class="row">Buildup <input id="s-buildup" type="number" style="width:70px"> s
+      &nbsp;Strobo après drop <input id="s-strobe" type="number" style="width:70px"> beats</div>
+  </div>
+  <div class="row"><button class="act" onclick="saveSettings()">Enregistrer</button><span id="set-status" class="muted"></span></div>
+</section>
+
+</main>
+<script>
+let STATE = null;
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll("main section").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  document.getElementById(b.dataset.tab).classList.add("active");
+});
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+const j = body => ({method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function refresh() {
+  STATE = await api("/api/state");
+  document.getElementById("links").value = STATE.links;
+  document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
+    `<tr><td>${esc(t.name)}</td><td>${t.size_mb} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
+  document.getElementById("accounts-body").innerHTML = STATE.accounts.map(a =>
+    `<tr><td>${esc(a.display_name)}</td><td class=muted>${esc(a.open_id)}</td><td class=muted>${esc(a.expires_at).slice(0,16)}</td></tr>`
+  ).join("") || "<tr><td colspan=3 class=muted>aucun compte connecté</td></tr>";
+  renderPlan(); renderQueue(); renderSettings();
+}
+
+/* --- Plan --- */
+function renderPlan() {
+  const d = STATE.plan.defaults;
+  document.getElementById("d-duration").value = d.duration;
+  document.getElementById("d-caption").value = d.caption;
+  document.getElementById("d-hashtags").value = (d.hashtags || []).join(", ");
+  const body = document.getElementById("posts-body");
+  body.innerHTML = "";
+  STATE.plan.posts.forEach((p, i) => body.appendChild(postRow(p, i)));
+}
+function postRow(p, i) {
+  const tr = document.createElement("tr");
+  const tracks = STATE.tracks.map(t =>
+    `<option value="tracks/${esc(t.name)}" ${p.track === "tracks/" + t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("");
+  tr.innerHTML =
+    `<td><select data-f=track>${tracks}</select></td>` +
+    `<td><input data-f=title value="${esc(p.title || "")}" style="width:150px"></td>` +
+    `<td><input data-f=accounts value="${esc((p.accounts || []).join(", "))}" style="width:130px" placeholder="dd.main, dd.edits"></td>` +
+    `<td><input data-f=date type=date value="${esc(p.date || "")}"></td>` +
+    `<td><input data-f=time type=time value="${esc(p.time || "")}"></td>` +
+    `<td><button class=sec onclick="STATE.plan.posts.splice(${i},1);renderPlan()">✕</button></td>`;
+  return tr;
+}
+function addPost() {
+  const today = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  STATE.plan.posts.push({track: STATE.tracks[0] ? "tracks/" + STATE.tracks[0].name : "",
+                         title: "", accounts: [], date: today, time: "18:00"});
+  renderPlan();
+}
+function collectPlan() {
+  const posts = [...document.querySelectorAll("#posts-body tr")].map(tr => {
+    const get = f => tr.querySelector(`[data-f=${f}]`).value;
+    return {track: get("track"), title: get("title"),
+            accounts: get("accounts").split(",").map(s => s.trim()).filter(Boolean),
+            date: get("date"), time: get("time")};
+  });
+  return {defaults: {duration: +document.getElementById("d-duration").value,
+                     caption: document.getElementById("d-caption").value,
+                     hashtags: document.getElementById("d-hashtags").value.split(",").map(s => s.trim()).filter(Boolean)},
+          posts};
+}
+async function savePlan() {
+  await api("/api/plan", j(collectPlan()));
+  flash("plan-status", "plan enregistré ✓");
+}
+function renderQueue() {
+  const rows = STATE.queue.pending.map(s =>
+    `<tr><td>${esc(s.video)}</td><td>${esc(s.account)}</td><td>${esc(s.scheduled_at).slice(0,16)}</td>` +
+    `<td class=muted>${esc(s.caption).slice(0, 40)}…</td>` +
+    `<td><button class=sec onclick="delPending('${esc(s.video.replace('.mp4',''))}')">✕</button></td></tr>`);
+  document.getElementById("queue-body").innerHTML = rows.join("") ||
+    "<tr><td colspan=5 class=muted>file vide — enregistre un plan puis « Générer »</td></tr>";
+}
+async function delPending(stem) {
+  if (!confirm("Retirer cette vidéo de la file ?")) return;
+  await api("/api/queue/" + encodeURIComponent(stem), {method: "DELETE"});
+  refresh();
+}
+async function generate() {
+  try { const {job_id} = await api("/api/generate", j({})); followJob(job_id, "gen-log", "plan-status"); }
+  catch (e) { flash("plan-status", e.message, true); }
+}
+
+/* --- Liens / téléchargement --- */
+async function saveLinks() {
+  await api("/api/links", j({text: document.getElementById("links").value}));
+  flash("links-status", "enregistré ✓");
+}
+async function download() {
+  await saveLinks();
+  try { const {job_id} = await api("/api/download", j({})); followJob(job_id, "dl-log", "links-status"); }
+  catch (e) { flash("links-status", e.message, true); }
+}
+
+/* --- Jobs --- */
+async function followJob(jobId, logElId, statusElId) {
+  const logEl = document.getElementById(logElId);
+  logEl.style.display = "block";
+  const timer = setInterval(async () => {
+    const job = await api("/api/jobs/" + jobId);
+    logEl.textContent = job.log.join("\n");
+    logEl.scrollTop = logEl.scrollHeight;
+    if (job.status !== "running") {
+      clearInterval(timer);
+      flash(statusElId, job.status === "done" ? "terminé ✓" : "échec — voir le journal", job.status !== "done");
+      refresh();
+    }
+  }, 1500);
+}
+
+/* --- Tracks --- */
+async function uploadTrack() {
+  const input = document.getElementById("track-file");
+  if (!input.files.length) return flash("track-status", "choisis un fichier", true);
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  try {
+    await api("/api/tracks", {method: "POST", body: form});
+    flash("track-status", "uploadé ✓"); refresh();
+  } catch (e) { flash("track-status", e.message, true); }
+}
+
+/* --- Comptes --- */
+async function authUrl() {
+  try {
+    const {url} = await api("/api/auth/url");
+    const a = document.getElementById("auth-link");
+    a.href = url; a.style.display = "inline";
+  } catch (e) { flash("auth-status", e.message, true); }
+}
+async function authCode() {
+  try {
+    const account = await api("/api/auth/code", j({code: document.getElementById("auth-code").value}));
+    flash("auth-status", `connecté : ${account.display_name} ✓`);
+    document.getElementById("auth-code").value = "";
+    refresh();
+  } catch (e) { flash("auth-status", e.message, true); }
+}
+
+/* --- Réglages --- */
+function renderSettings() {
+  const s = STATE.settings;
+  const set = (id, v) => document.getElementById(id)[typeof v === "boolean" ? "checked" : "value"] = v;
+  set("s-zoom", s.effects.zoom); set("s-flash", s.effects.flash);
+  set("s-shake", s.effects.shake); set("s-speed", s.effects.speed);
+  set("s-rgb", s.accents.rgb); set("s-glitch", s.accents.glitch);
+  set("s-delogo", s.delogo); set("s-chrono", s.chrono);
+  set("s-presence", s.min_presence); set("s-cutmode", s.cut_mode);
+  set("s-cutevery", s.cut_every); set("s-buildup", s.buildup); set("s-strobe", s.strobe_beats);
+}
+async function saveSettings() {
+  const chk = id => document.getElementById(id).checked;
+  const num = id => +document.getElementById(id).value;
+  await api("/api/settings", j({
+    effects: {zoom: chk("s-zoom"), flash: chk("s-flash"), shake: chk("s-shake"), speed: chk("s-speed")},
+    accents: {rgb: chk("s-rgb"), glitch: chk("s-glitch")},
+    delogo: chk("s-delogo"), chrono: chk("s-chrono"),
+    min_presence: num("s-presence"), cut_mode: document.getElementById("s-cutmode").value,
+    cut_every: num("s-cutevery"), buildup: num("s-buildup"), strobe_beats: num("s-strobe"),
+  }));
+  flash("set-status", "réglages enregistrés ✓");
+}
+
+function flash(id, msg, isError) {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = isError ? "err" : "ok";
+  setTimeout(() => { el.textContent = ""; }, 5000);
+}
+
+refresh();
+</script>
+</body>
+</html>

@@ -49,7 +49,20 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Utilisation
+## Interface graphique
+
+```bash
+uv run python webui.py        # puis ouvre http://127.0.0.1:8765
+```
+
+Tout se pilote depuis le navigateur (local uniquement, rien d'exposé) :
+liens YouTube et téléchargement des sons, upload de tracks, connexion des
+comptes TikTok (OAuth), édition du plan de publication, génération des
+vidéos avec journal en direct, gestion de la file d'attente, et réglages du
+montage (effets, accents, cadrage, rythme — persistés dans `settings.json`
+et pris en compte par tous les rendus).
+
+## Utilisation en ligne de commande
 
 ### 1. Récupérer les morceaux depuis YouTube (optionnel)
 

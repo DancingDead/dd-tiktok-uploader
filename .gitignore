@@ -9,6 +9,11 @@ tracks/
 clips/
 output/
 
-# File de publication et plan réel (données locales)
+# File de publication, plan et réglages réels (données locales)
 queue/
 plan.toml
+settings.json
+
+# Secrets TikTok et tokens OAuth — JAMAIS dans git
+.env
+tokens/

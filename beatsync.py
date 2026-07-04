@@ -41,6 +41,34 @@ DEFAULT_CONFIG = {
 }
 
 
+def merge_settings(base: dict, overrides: dict) -> dict:
+    """Applique des réglages utilisateur sur une config, sans muter la base.
+    Les clés inconnues sont ignorées ; les dicts imbriqués (effects, accents)
+    sont fusionnés clé par clé."""
+    merged: dict = {}
+    for key, value in base.items():
+        if key in overrides:
+            if isinstance(value, dict) and isinstance(overrides[key], dict):
+                merged[key] = {**value, **{k: v for k, v in overrides[key].items() if k in value}}
+            else:
+                merged[key] = overrides[key]
+        else:
+            merged[key] = dict(value) if isinstance(value, dict) else value
+    return merged
+
+
+SETTINGS_PATH = Path(__file__).parent / "settings.json"
+
+
+def load_settings(path: Path | None = None) -> dict:
+    """DEFAULT_CONFIG fusionné avec settings.json (réglages de l'interface web)."""
+    config = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULT_CONFIG.items()}
+    settings_path = path or SETTINGS_PATH
+    if settings_path.is_file():
+        config = merge_settings(config, json.loads(settings_path.read_text()))
+    return config
+
+
 def analyze_audio(track_path: Path) -> dict:
     """Grille de beats (s), BPM et enveloppe d'énergie RMS du morceau."""
     import librosa  # import paresseux : coûteux (~2 s), inutile pour la logique pure
@@ -662,7 +690,7 @@ def main() -> None:
 
     if args.start is not None and args.start >= analysis["duration"]:
         sys.exit(f"--start {args.start} dépasse la durée du morceau ({analysis['duration']:.1f} s)")
-    config = resolve_window(analysis, dict(DEFAULT_CONFIG), start=args.start, duration=args.duration)
+    config = resolve_window(analysis, load_settings(), start=args.start, duration=args.duration)
     drop = config["drop_time"]
     print(f"  drop détecté à {drop:.1f} s" if drop is not None else "  pas de drop net détecté")
     print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s "
