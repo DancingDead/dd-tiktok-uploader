@@ -141,8 +141,8 @@ def create_niche(conn: sqlite3.Connection, data_root: Path, name: str, *,
          json.dumps(hashtags or [], ensure_ascii=False),
          json.dumps(preset_ids or []),
          json.dumps(subtitles or {}, ensure_ascii=False)))
-    conn.commit()
     niche_clips_dir(data_root, slug).mkdir(parents=True, exist_ok=True)
+    conn.commit()
     return cur.lastrowid
 
 

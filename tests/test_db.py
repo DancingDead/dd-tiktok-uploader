@@ -81,6 +81,8 @@ def test_niche_crud_and_folders(conn, tmp_path):
     assert niche["preset_ids"] == [1]
     assert niche["subtitles"]["enabled"] is True
     assert niche_clips_dir(tmp_path, "naruto-edits").is_dir()
+    assert niche_links_path(tmp_path, "naruto-edits") == \
+        tmp_path / "niches" / "naruto-edits" / "links.txt"
 
     update_niche(conn, nid, cadence=3, hashtags=["anime"])
     assert get_niche(conn, nid)["cadence"] == 3
