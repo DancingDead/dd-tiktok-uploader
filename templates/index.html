@@ -3,166 +3,267 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dancing Dead — usine à vidéos</title>
+<title>Dancing Dead — Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root{--bg:#0d0d10;--panel:#16161c;--line:#2a2a33;--txt:#eaeaea;--dim:#9a9aa2;--red:#e05252;--green:#7ee787}
+  :root{
+    --bg:#050506;         /* noir profond OLED */
+    --panel:#0d0e11;      /* cartes / nav */
+    --panel-2:#14161a;    /* champs, hovers */
+    --line:#20232a;       /* bordures */
+    --txt:#f2f4f6;        /* texte principal */
+    --dim:#868c96;        /* texte secondaire */
+    --accent:#2dd4bf;     /* teal Dancing Dead */
+    --accent-ink:#04120f; /* texte sur accent */
+    --accent-soft:rgba(45,212,191,.12);
+    --green:#5ee29a;
+    --err:#ff6b6b;
+    --radius:10px;
+  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--txt);display:flex;min-height:100vh}
-  nav{width:200px;background:var(--panel);border-right:1px solid var(--line);padding:1rem 0;flex-shrink:0}
-  nav h1{font-size:.95rem;letter-spacing:.15em;text-transform:uppercase;text-align:center;color:var(--red)}
-  nav button{display:block;width:100%;padding:.7rem 1.2rem;background:none;border:0;color:var(--dim);text-align:left;font-size:.95rem;cursor:pointer}
-  nav button.active{color:var(--txt);background:#1f1f27;border-left:3px solid var(--red)}
-  main{flex:1;padding:1.5rem 2rem;max-width:960px}
-  section{display:none}section.active{display:block}
-  h2{font-size:1.1rem;margin-top:0}
-  textarea,input,select{background:#1a1a20;border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:.5rem;font-size:.9rem}
-  textarea{width:100%;min-height:180px;font-family:ui-monospace,monospace}
-  button.act{background:var(--red);border:0;border-radius:6px;color:#fff;padding:.55rem 1.1rem;font-size:.9rem;cursor:pointer;margin:.3rem .3rem .3rem 0}
-  button.sec{background:#26262e;border:1px solid var(--line);border-radius:6px;color:var(--txt);padding:.5rem 1rem;cursor:pointer;margin:.3rem .3rem .3rem 0}
+  html{scroll-behavior:smooth}
+  body{margin:0;font-family:'Fira Sans',-apple-system,'Segoe UI',Roboto,sans-serif;
+       background:var(--bg);color:var(--txt);display:flex;min-height:100vh;
+       -webkit-font-smoothing:antialiased;letter-spacing:.01em}
+  ::selection{background:var(--accent-soft)}
+
+  /* --- Navigation --- */
+  nav{width:216px;background:var(--panel);border-right:1px solid var(--line);
+      padding:1.1rem .7rem;flex-shrink:0;display:flex;flex-direction:column;gap:.15rem}
+  .brand{display:flex;align-items:center;gap:.6rem;padding:.2rem .5rem 1rem;margin-bottom:.4rem}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);
+              box-shadow:0 0 12px var(--accent);flex-shrink:0}
+  .brand b{font-size:.82rem;letter-spacing:.22em;text-transform:uppercase;color:var(--txt)}
+  .member{font-size:.78rem;color:var(--dim);padding:0 .5rem .7rem;
+          border-bottom:1px solid var(--line);margin-bottom:.6rem;
+          display:flex;align-items:center;justify-content:space-between;gap:.4rem}
+  .member a{color:var(--dim);display:inline-flex;transition:color .15s}
+  .member a:hover{color:var(--accent)}
+  nav button.tab{display:flex;align-items:center;gap:.7rem;width:100%;
+      padding:.6rem .7rem;background:none;border:0;border-radius:var(--radius);
+      color:var(--dim);text-align:left;font-size:.9rem;font-family:inherit;cursor:pointer;
+      transition:background .15s,color .15s}
+  nav button.tab:hover{background:var(--panel-2);color:var(--txt)}
+  nav button.tab.active{background:var(--accent-soft);color:var(--accent)}
+  nav button.tab svg{width:18px;height:18px;flex-shrink:0}
+
+  /* --- Layout --- */
+  main{flex:1;padding:2rem 2.4rem;max-width:1000px}
+  section{display:none;animation:fade .25s ease}
+  section.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .head{display:flex;align-items:center;gap:.6rem;margin:0 0 .3rem}
+  .head svg{width:22px;height:22px;color:var(--accent)}
+  h2{font-size:1.15rem;font-weight:600;margin:0}
+  .sub{color:var(--dim);font-size:.86rem;margin:.1rem 0 1.2rem}
+
+  /* --- Champs & boutons --- */
+  textarea,input,select{background:var(--panel-2);border:1px solid var(--line);
+      border-radius:8px;color:var(--txt);padding:.5rem .6rem;font-size:.9rem;
+      font-family:inherit;transition:border-color .15s,box-shadow .15s}
+  textarea:focus,input:focus,select:focus{outline:none;border-color:var(--accent);
+      box-shadow:0 0 0 3px var(--accent-soft)}
+  textarea{width:100%;min-height:150px;font-family:'Fira Code',ui-monospace,monospace;font-size:.85rem;resize:vertical}
+  button.act,button.sec,button.ghost{display:inline-flex;align-items:center;gap:.4rem;
+      border-radius:8px;font-size:.88rem;font-family:inherit;cursor:pointer;
+      padding:.55rem 1rem;transition:transform .1s,background .15s,border-color .15s,opacity .15s}
+  button.act{background:var(--accent);border:0;color:var(--accent-ink);font-weight:600}
+  button.act:hover{opacity:.88}
+  button.sec{background:var(--panel-2);border:1px solid var(--line);color:var(--txt)}
+  button.sec:hover{border-color:var(--accent);color:var(--accent)}
+  button.ghost{background:none;border:1px solid var(--line);color:var(--dim);padding:.4rem .7rem}
+  button.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  button:active{transform:translateY(1px)}
+  button svg{width:15px;height:15px}
+  .icon-btn{background:none;border:0;color:var(--dim);cursor:pointer;padding:.3rem;
+      border-radius:6px;display:inline-flex;transition:color .15s,background .15s}
+  .icon-btn:hover{color:var(--err);background:var(--panel-2)}
+  .icon-btn svg{width:16px;height:16px}
+
+  /* --- Tables --- */
   table{width:100%;border-collapse:collapse;font-size:.88rem}
-  th,td{padding:.45rem .6rem;border-bottom:1px solid var(--line);text-align:left}
-  th{color:var(--dim);font-weight:500}
-  .log{background:#101014;border:1px solid var(--line);border-radius:6px;padding:.7rem;font-family:ui-monospace,monospace;font-size:.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;color:var(--dim)}
-  .ok{color:var(--green)}.err{color:#ff7b72}
-  .row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:1rem;margin-bottom:1rem}
-  label.chk{display:inline-flex;align-items:center;gap:.4rem;margin:.3rem 1rem .3rem 0;color:var(--dim)}
+  th,td{padding:.5rem .6rem;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--dim);font-weight:500;font-size:.78rem;text-transform:uppercase;letter-spacing:.05em}
+  tbody tr{transition:background .12s}
+
+  /* --- Cartes --- */
+  .log{background:#020203;border:1px solid var(--line);border-radius:8px;padding:.8rem;
+       font-family:'Fira Code',ui-monospace,monospace;font-size:.78rem;white-space:pre-wrap;
+       max-height:240px;overflow-y:auto;color:var(--dim);margin-top:.6rem}
+  .ok{color:var(--green)}.err{color:var(--err)}
+  .row{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.5rem 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+        padding:1.1rem;margin-bottom:1rem}
+  .card > b{font-size:.82rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+            display:block;margin-bottom:.6rem}
+  label.chk{display:inline-flex;align-items:center;gap:.45rem;margin:.35rem 1rem .35rem 0;
+            color:var(--txt);font-size:.9rem;cursor:pointer}
+  label.chk input{accent-color:var(--accent);width:15px;height:15px;cursor:pointer}
   .muted{color:var(--dim);font-size:.85rem}
-  .pill{display:inline-block;background:#26262e;border-radius:99px;padding:.1rem .6rem;font-size:.75rem;color:var(--dim)}
+  .pill{display:inline-block;background:var(--accent-soft);color:var(--accent);
+        border-radius:99px;padding:.12rem .6rem;font-size:.72rem;font-weight:500}
+  code{font-family:'Fira Code',monospace;font-size:.82em;color:var(--accent)}
+
+  /* --- Grille de niches (cartes) --- */
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.9rem;margin-bottom:1rem}
+  .niche-card,.add-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+        padding:1rem;cursor:pointer;transition:border-color .15s,transform .1s;text-align:left}
+  .niche-card:hover,.add-card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .niche-card.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  .niche-card .nm{font-weight:600;font-size:1rem;margin-bottom:.15rem}
+  .niche-card .meta{display:flex;gap:.9rem;color:var(--dim);font-size:.8rem;margin-top:.7rem}
+  .niche-card .meta span{display:inline-flex;align-items:center;gap:.3rem}
+  .niche-card .meta svg{width:14px;height:14px}
+  .add-card{display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:.4rem;color:var(--dim);border-style:dashed;min-height:96px}
+  .add-card:hover{color:var(--accent)}
+  .add-card svg{width:22px;height:22px}
+  .empty{color:var(--dim);font-size:.9rem;padding:2rem;text-align:center;
+         border:1px dashed var(--line);border-radius:var(--radius)}
+
+  /* --- Login --- */
+  #login{display:none;position:fixed;inset:0;background:var(--bg);z-index:20;
+         align-items:center;justify-content:center}
+  #login .card{width:300px;text-align:center;margin:0}
+  #login .dot{width:12px;height:12px;border-radius:50%;background:var(--accent);
+              box-shadow:0 0 16px var(--accent);margin:0 auto .8rem}
+  #login h2{letter-spacing:.22em;text-transform:uppercase;font-size:.9rem;margin-bottom:1.2rem}
+  #login input{width:100%;margin:.35rem 0}
+  #login button{width:100%;margin-top:.5rem;justify-content:center}
+
+  @media (max-width:720px){
+    body{flex-direction:column}
+    nav{width:100%;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}
+    .brand,.member{display:none}
+    main{padding:1.2rem}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
-<div id="login" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:10;align-items:center;justify-content:center">
-  <div class="card" style="width:280px">
+
+<div id="login">
+  <div class="card">
+    <div class="dot"></div>
     <h2>Dancing Dead</h2>
-    <input id="l-name" placeholder="membre" style="width:100%;margin:.3rem 0">
-    <input id="l-pass" type="password" placeholder="mot de passe" style="width:100%;margin:.3rem 0" onkeydown="if(event.key==='Enter')doLogin()">
-    <button class="act" style="width:100%" onclick="doLogin()">Entrer</button>
-    <div id="l-status" class="err"></div>
+    <input id="l-name" placeholder="membre" autocomplete="username">
+    <input id="l-pass" type="password" placeholder="mot de passe" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="act" onclick="doLogin()">Entrer</button>
+    <div id="l-status" class="err" style="margin-top:.6rem;font-size:.85rem"></div>
   </div>
 </div>
+
 <nav>
-  <h1>Dancing Dead</h1>
-  <div class="muted" style="padding:.3rem 1.2rem .8rem;font-size:.8rem;border-bottom:1px solid var(--line);margin-bottom:.5rem">
-    <span id="nav-member"></span><br>
-    <a href="#" onclick="doLogout();return false" style="color:var(--red)">Déconnexion</a>
+  <div class="brand"><span class="dot"></span><b>Dancing Dead</b></div>
+  <div class="member"><span id="nav-member"></span>
+    <a href="#" onclick="doLogout();return false" title="Déconnexion" aria-label="Déconnexion">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </a>
   </div>
-  <button data-tab="liens" class="active">Liens YouTube</button>
-  <button data-tab="tracks">Tracks</button>
-  <button data-tab="niches">Niches</button>
-  <button data-tab="presets">Presets</button>
-  <button data-tab="comptes">Comptes TikTok</button>
-  <button data-tab="plan">Plan &amp; file</button>
-  <button data-tab="reglages">Réglages montage</button>
+  <button class="tab active" data-tab="niches"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Niches</button>
+  <button class="tab" data-tab="presets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>Presets</button>
+  <button class="tab" data-tab="tracks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Tracks</button>
+  <button class="tab" data-tab="liens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Liens</button>
+  <button class="tab" data-tab="plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>Plan &amp; file</button>
+  <button class="tab" data-tab="reglages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Réglages</button>
 </nav>
+
 <main>
 
-<section id="liens" class="active">
-  <h2>Liens YouTube → tracks/</h2>
-  <p class="muted">Un lien par ligne (vidéo ou playlist), « # » pour commenter. Les mp3 arrivent dans <code>tracks/</code>.</p>
-  <textarea id="links"></textarea>
-  <div class="row">
-    <button class="act" onclick="saveLinks()">Enregistrer</button>
-    <button class="act" onclick="download()">Télécharger les sons</button>
-    <span id="links-status" class="muted"></span>
+<section id="niches" class="active">
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><h2>Niches</h2></div>
+  <p class="sub">Chaque niche est un univers de contenu : sa banque de clips, ses presets de montage, sa cadence. <span id="niches-status"></span></p>
+  <div id="niches-grid" class="grid"></div>
+  <div id="niche-detail"></div>
+</section>
+
+<section id="presets">
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><h2>Presets de montage</h2></div>
+  <p class="sub">Des styles nommés (« strobo hard », « posé »…) réutilisables entre niches.</p>
+  <div class="row" style="align-items:flex-start;gap:1.4rem">
+    <div style="min-width:180px">
+      <div id="presets-list"></div>
+      <button class="sec" style="width:100%;justify-content:center;margin-top:.5rem" onclick="addPreset()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Nouveau</button>
+    </div>
+    <div id="preset-detail" style="flex:1;min-width:300px"></div>
   </div>
-  <div id="dl-log" class="log" style="display:none"></div>
 </section>
 
 <section id="tracks">
-  <h2>Tracks</h2>
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><h2>Tracks du label</h2></div>
+  <p class="sub">Le catalogue musical partagé — les niches y piochent leurs morceaux.</p>
   <div class="row">
     <input type="file" id="track-file" accept=".wav,.mp3,.flac,.m4a,.ogg,.aiff">
-    <button class="act" onclick="uploadTrack()">Uploader</button>
+    <button class="act" onclick="uploadTrack()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Uploader</button>
     <span id="track-status" class="muted"></span>
   </div>
   <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="tracks-body"></tbody></table>
 </section>
 
-<section id="niches">
-  <h2>Niches</h2>
-  <table><thead><tr><th>Nom</th><th>Owner</th><th>Cadence</th><th>Clips</th></tr></thead>
-  <tbody id="niches-body"></tbody></table>
+<section id="liens">
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><h2>Liens YouTube → tracks/</h2></div>
+  <p class="sub">Un lien par ligne (vidéo ou playlist), <code>#</code> pour commenter. Les mp3 arrivent dans <code>tracks/</code>.</p>
+  <textarea id="links"></textarea>
   <div class="row">
-    <button class="sec" onclick="addNiche()">+ Nouvelle niche</button>
-    <span id="niches-status" class="muted"></span>
+    <button class="sec" onclick="saveLinks()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Enregistrer</button>
+    <button class="act" onclick="download()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Télécharger les sons</button>
+    <span id="links-status" class="muted"></span>
   </div>
-  <div id="niche-detail"></div>
-</section>
-
-<section id="presets">
-  <h2>Presets de montage</h2>
-  <table><thead><tr><th>Nom</th></tr></thead><tbody id="presets-body"></tbody></table>
-  <div class="row">
-    <button class="sec" onclick="addPreset()">+ Nouveau preset</button>
-  </div>
-  <div id="preset-detail"></div>
-</section>
-
-<section id="comptes">
-  <h2>Comptes TikTok</h2>
-  <table><thead><tr><th>Compte</th><th>open_id</th><th>Token expire</th></tr></thead><tbody id="accounts-body"></tbody></table>
-  <div class="card">
-    <b>Connecter un compte</b>
-    <p class="muted">1. Génère l'URL, ouvre-la, connecte-toi avec le compte du label et autorise.<br>
-       2. La page de callback affiche un code : colle-le ci-dessous.</p>
-    <div class="row">
-      <button class="act" onclick="authUrl()">Générer l'URL d'autorisation</button>
-      <a id="auth-link" target="_blank" style="display:none;color:var(--red)">Ouvrir la page d'autorisation ↗</a>
-    </div>
-    <div class="row">
-      <input id="auth-code" placeholder="colle le code (ou l'URL de callback complète)" style="flex:1">
-      <button class="act" onclick="authCode()">Connecter</button>
-      <span id="auth-status" class="muted"></span>
-    </div>
-  </div>
+  <div id="dl-log" class="log" style="display:none"></div>
 </section>
 
 <section id="plan">
-  <h2>Plan de publication</h2>
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg><h2>Plan de génération</h2></div>
+  <p class="sub">Décline des morceaux en vidéos prêtes à poster à la main (téléchargement depuis la file).</p>
   <div class="card">
     <b>Défauts</b>
     <div class="row">
       Durée <input id="d-duration" type="number" style="width:70px"> s&nbsp;
-      Légende <input id="d-caption" style="flex:1" placeholder="{title} — OUT NOW 🔥">
+      Légende <input id="d-caption" style="flex:1" placeholder="{title} — OUT NOW">
     </div>
     <div class="row">Hashtags <input id="d-hashtags" style="flex:1" placeholder="hardstyle, anime, edit"></div>
   </div>
   <div class="card">
     <b>Posts</b>
-    <table><thead><tr><th>Morceau</th><th>Titre</th><th>Comptes</th><th>Date</th><th>Heure</th><th></th></tr></thead>
+    <table><thead><tr><th>Morceau</th><th>Titre</th><th>Libellés</th><th>Date</th><th>Heure</th><th></th></tr></thead>
     <tbody id="posts-body"></tbody></table>
-    <button class="sec" onclick="addPost()">+ Ajouter un post</button>
+    <button class="sec" style="margin-top:.6rem" onclick="addPost()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Ajouter un post</button>
   </div>
   <div class="row">
-    <button class="act" onclick="savePlan()">Enregistrer le plan</button>
-    <button class="act" onclick="generate()">Générer les vidéos</button>
+    <button class="sec" onclick="savePlan()">Enregistrer le plan</button>
+    <button class="act" onclick="generate()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>Générer les vidéos</button>
     <span id="plan-status" class="muted"></span>
   </div>
   <div id="gen-log" class="log" style="display:none"></div>
-  <h2 style="margin-top:1.4rem">File d'attente</h2>
-  <table><thead><tr><th>Vidéo</th><th>Compte</th><th>Prévu le</th><th>Légende</th><th></th></tr></thead>
+  <div class="head" style="margin-top:1.6rem"><h2 style="font-size:1rem">File d'attente</h2></div>
+  <table><thead><tr><th>Vidéo</th><th>Libellé</th><th>Prévu le</th><th>Légende</th><th></th></tr></thead>
   <tbody id="queue-body"></tbody></table>
 </section>
 
 <section id="reglages">
-  <h2>Réglages du montage</h2>
-  <div class="card"><b>Effets</b><br>
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><h2>Réglages du montage par défaut</h2></div>
+  <p class="sub">Base appliquée à tous les rendus. Chaque preset s'empile par-dessus ces valeurs.</p>
+  <div class="card"><b>Effets</b>
     <label class="chk"><input type="checkbox" id="s-zoom"> Punch-zoom</label>
     <label class="chk"><input type="checkbox" id="s-flash"> Flash blanc</label>
     <label class="chk"><input type="checkbox" id="s-shake"> Shake</label>
     <label class="chk"><input type="checkbox" id="s-speed"> Slow-mo avant drop</label>
   </div>
-  <div class="card"><b>Accents</b><br>
+  <div class="card"><b>Accents</b>
     <label class="chk"><input type="checkbox" id="s-rgb"> RGB split à l'impact</label>
     <label class="chk"><input type="checkbox" id="s-glitch"> Micro-glitch</label>
   </div>
-  <div class="card"><b>Cadrage &amp; contenu</b><br>
+  <div class="card"><b>Cadrage &amp; contenu</b>
     <label class="chk"><input type="checkbox" id="s-delogo"> Gommer le logo (delogo)</label>
     <label class="chk"><input type="checkbox" id="s-chrono"> Chronologie de l'histoire</label>
     <div class="row">Présence personnages min <input id="s-presence" type="number" step="0.05" min="0" max="1" style="width:80px"></div>
   </div>
-  <div class="card"><b>Rythme</b><br>
+  <div class="card"><b>Rythme</b>
     <div class="row">
       Mode <select id="s-cutmode"><option value="energy">énergie (auto)</option><option value="fixed">fixe</option></select>
       &nbsp;Coupe tous les <input id="s-cutevery" type="number" min="1" style="width:60px"> beats (mode fixe)
@@ -177,8 +278,17 @@
 <script>
 let STATE = null;
 
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
-  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+/* Icônes SVG réutilisées côté JS (Lucide-style, pas d'emoji) */
+const SVG = {
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  film: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>',
+  layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
+};
+
+document.querySelectorAll("nav button.tab").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button.tab").forEach(x => x.classList.remove("active"));
   document.querySelectorAll("main section").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
   document.getElementById(b.dataset.tab).classList.add("active");
@@ -219,10 +329,8 @@ async function refresh() {
   document.getElementById("nav-member").textContent = STATE.member;
   document.getElementById("links").value = STATE.links;
   document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
-    `<tr><td>${esc(t.name)}</td><td>${t.size_mb} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
-  document.getElementById("accounts-body").innerHTML = STATE.accounts.map(a =>
-    `<tr><td>${esc(a.display_name)}</td><td class=muted>${esc(a.open_id)}</td><td class=muted>${esc(a.expires_at).slice(0,16)}</td></tr>`
-  ).join("") || "<tr><td colspan=3 class=muted>aucun compte connecté</td></tr>";
+    `<tr><td>${esc(t.name)}</td><td class=muted>${esc(t.size_mb)} Mo</td></tr>`).join("")
+    || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
   renderPlan(); renderQueue(); renderSettings(); renderNiches(); renderPresets();
 }
 
@@ -243,10 +351,10 @@ function postRow(p, i) {
   tr.innerHTML =
     `<td><select data-f=track>${tracks}</select></td>` +
     `<td><input data-f=title value="${esc(p.title || "")}" style="width:150px"></td>` +
-    `<td><input data-f=accounts value="${esc((p.accounts || []).join(", "))}" style="width:130px" placeholder="dd.main, dd.edits"></td>` +
+    `<td><input data-f=accounts value="${esc((p.accounts || []).join(", "))}" style="width:130px" placeholder="edit, teaser"></td>` +
     `<td><input data-f=date type=date value="${esc(p.date || "")}"></td>` +
     `<td><input data-f=time type=time value="${esc(p.time || "")}"></td>` +
-    `<td><button class=sec onclick="STATE.plan.posts.splice(${i},1);renderPlan()">✕</button></td>`;
+    `<td><button class="icon-btn" title="Retirer" onclick="STATE.plan.posts.splice(${i},1);renderPlan()">${SVG.x}</button></td>`;
   return tr;
 }
 function addPost() {
@@ -269,13 +377,13 @@ function collectPlan() {
 }
 async function savePlan() {
   await api("/api/plan", j(collectPlan()));
-  flash("plan-status", "plan enregistré ✓");
+  flash("plan-status", "plan enregistré");
 }
 function renderQueue() {
   const rows = STATE.queue.pending.map(s =>
-    `<tr><td>${esc(s.video)}</td><td>${esc(s.account)}</td><td>${esc(s.scheduled_at).slice(0,16)}</td>` +
+    `<tr><td>${esc(s.video)}</td><td class=muted>${esc(s.account)}</td><td class=muted>${esc(s.scheduled_at).slice(0,16)}</td>` +
     `<td class=muted>${esc(s.caption).slice(0, 40)}…</td>` +
-    `<td><button class=sec onclick="delPending('${esc(s.video.replace('.mp4',''))}')">✕</button></td></tr>`);
+    `<td><button class="icon-btn" title="Retirer" onclick="delPending('${esc(s.video.replace('.mp4',''))}')">${SVG.x}</button></td></tr>`);
   document.getElementById("queue-body").innerHTML = rows.join("") ||
     "<tr><td colspan=5 class=muted>file vide — enregistre un plan puis « Générer »</td></tr>";
 }
@@ -292,7 +400,7 @@ async function generate() {
 /* --- Liens / téléchargement --- */
 async function saveLinks() {
   await api("/api/links", j({text: document.getElementById("links").value}));
-  flash("links-status", "enregistré ✓");
+  flash("links-status", "enregistré");
 }
 async function download() {
   await saveLinks();
@@ -310,7 +418,7 @@ async function followJob(jobId, logElId, statusElId) {
     logEl.scrollTop = logEl.scrollHeight;
     if (job.status !== "running") {
       clearInterval(timer);
-      flash(statusElId, job.status === "done" ? "terminé ✓" : "échec — voir le journal", job.status !== "done");
+      flash(statusElId, job.status === "done" ? "terminé" : "échec — voir le journal", job.status !== "done");
       refresh();
     }
   }, 1500);
@@ -324,7 +432,7 @@ async function uploadTrack() {
   form.append("file", input.files[0]);
   try {
     await api("/api/tracks", {method: "POST", body: form});
-    flash("track-status", "uploadé ✓"); refresh();
+    flash("track-status", "uploadé"); refresh();
   } catch (e) { flash("track-status", e.message, true); }
 }
 
@@ -332,16 +440,27 @@ async function uploadTrack() {
 let selectedNicheId = null;
 
 function renderNiches() {
-  const body = document.getElementById("niches-body");
-  body.innerHTML = STATE.niches.map(n =>
-    `<tr style="cursor:pointer${n.id === selectedNicheId ? ";background:#1f1f27" : ""}" onclick="selectNiche(${n.id})">` +
-    `<td>${esc(n.name)}</td><td class=muted>${esc(n.owner)}</td><td>${esc(n.cadence)}</td><td>${n.clips.length}</td></tr>`
-  ).join("") || "<tr><td colspan=4 class=muted>aucune niche — crée-en une</td></tr>";
+  const grid = document.getElementById("niches-grid");
+  const cards = STATE.niches.map(n => {
+    const presetCount = (n.preset_ids || []).length;
+    return `<button class="niche-card ${n.id === selectedNicheId ? "sel" : ""}" onclick="selectNiche(${n.id})">
+      <div class="nm">${esc(n.name)}</div>
+      <div class="muted" style="font-size:.78rem">${esc(n.owner || "—")}</div>
+      <div class="meta">
+        <span>${SVG.film}${n.clips.length} clips</span>
+        <span>${SVG.layers}${presetCount} preset${presetCount > 1 ? "s" : ""}</span>
+        <span>${SVG.bolt}${esc(n.cadence)}/j</span>
+      </div></button>`;
+  }).join("");
+  grid.innerHTML = cards + `<button class="add-card" onclick="addNiche()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    <span>Nouvelle niche</span></button>`;
   renderNicheDetail();
 }
 function selectNiche(id) {
-  selectedNicheId = id;
+  selectedNicheId = (id === selectedNicheId) ? null : id;
   renderNiches();
+  if (selectedNicheId) document.getElementById("niche-detail").scrollIntoView({behavior: "smooth", block: "nearest"});
 }
 async function addNiche() {
   const name = prompt("Nom de la niche :");
@@ -349,7 +468,7 @@ async function addNiche() {
   try {
     const {id} = await api("/api/niches", j({name}));
     await refresh();
-    selectNiche(id);
+    selectedNicheId = id; renderNiches();
   } catch (e) { flash("niches-status", e.message, true); }
 }
 function renderNicheDetail() {
@@ -362,36 +481,37 @@ function renderNicheDetail() {
   ).join("") || "<span class=muted>aucun preset — crée-en un dans l'onglet Presets</span>";
   el.innerHTML = `
     <div class="card">
-      <b>${esc(n.name)}</b> <span class="pill">${esc(n.slug)}</span>
+      <div class="row" style="justify-content:space-between;margin-top:0">
+        <div style="font-size:1.05rem;font-weight:600">${esc(n.name)} <span class="pill">${esc(n.slug)}</span></div>
+        <button class="icon-btn" title="Supprimer la niche" onclick="deleteNiche(${n.id})">${SVG.trash}</button>
+      </div>
       <div class="row">Cadence <input id="n-cadence" type="number" min="1" value="${esc(n.cadence)}" style="width:70px"> vidéos / jour</div>
       <div class="row">Légende <input id="n-caption" style="flex:1" value="${esc(n.caption_template)}"></div>
       <div class="row">Hashtags <input id="n-hashtags" style="flex:1" value="${esc((n.hashtags || []).join(', '))}" placeholder="hardstyle, anime, edit"></div>
-      <div><b>Presets liés</b><br>${presetChecks}</div>
-      <div class="row"><label class="chk"><input type="checkbox" id="n-sub-enabled" ${sub.enabled ? "checked" : ""}> Sous-titres générés (pré-prompt)</label></div>
-      <textarea id="n-sub-preprompt" style="min-height:80px" placeholder="pré-prompt pour la génération des sous-titres">${esc(sub.preprompt || "")}</textarea>
+      <div style="margin:.6rem 0 .3rem"><b style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)">Presets liés</b></div>
+      ${presetChecks}
+      <div class="row" style="margin-top:.6rem"><label class="chk"><input type="checkbox" id="n-sub-enabled" ${sub.enabled ? "checked" : ""}> Sous-titres générés (pré-prompt)</label></div>
+      <textarea id="n-sub-preprompt" style="min-height:70px" placeholder="pré-prompt pour la génération des punchlines">${esc(sub.preprompt || "")}</textarea>
       <div class="row">
         <button class="act" onclick="saveNiche(${n.id})">Enregistrer</button>
-        <button class="sec" onclick="deleteNiche(${n.id})">Supprimer la niche</button>
         <span id="niche-status" class="muted"></span>
       </div>
     </div>
     <div class="card">
-      <b>Clips</b>
+      <b>Banque de clips — ${n.clips.length} fichier${n.clips.length > 1 ? "s" : ""}</b>
       <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody>
-        ${n.clips.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.size_mb)} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucun clip</td></tr>"}
+        ${n.clips.map(c => `<tr><td>${esc(c.name)}</td><td class=muted>${esc(c.size_mb)} Mo</td></tr>`).join("")
+          || "<tr><td colspan=2 class=muted>aucun clip — uploade ou télécharge ci-dessous</td></tr>"}
       </tbody></table>
-      <div class="row">
+      <div class="row" style="margin-top:.8rem">
         <input type="file" id="niche-clip-file" accept=".mp4,.mov,.m4v,.mkv,.webm,.avi">
-        <button class="act" onclick="uploadNicheClip(${n.id})">Uploader</button>
+        <button class="sec" onclick="uploadNicheClip(${n.id})">Uploader un clip</button>
         <span id="niche-clip-status" class="muted"></span>
       </div>
-    </div>
-    <div class="card">
-      <b>Liens YouTube (source des clips)</b>
-      <p class="muted">Un lien par ligne (vidéo ou playlist). Les vidéos arrivent dans la banque de clips de la niche.</p>
-      <textarea id="niche-links" style="min-height:100px">${esc(n.links || "")}</textarea>
+      <p class="muted" style="margin:.9rem 0 .3rem">Ou colle des liens YouTube (un par ligne) — téléchargés en vidéo ≤1080p dans la banque :</p>
+      <textarea id="niche-links" style="min-height:80px">${esc(n.links || "")}</textarea>
       <div class="row">
-        <button class="act" onclick="downloadNicheClips(${n.id})">Télécharger les clips</button>
+        <button class="act" onclick="downloadNicheClips(${n.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Télécharger les clips</button>
         <span id="niche-links-status" class="muted"></span>
       </div>
       <div id="niche-dl-log" class="log" style="display:none"></div>
@@ -412,7 +532,7 @@ async function saveNiche(id) {
   try {
     await api(`/api/niches/${id}`, {...j(body), method: "PATCH"});
     await refresh();
-    flash("niche-status", "enregistré ✓");
+    flash("niche-status", "enregistré");
   } catch (e) { flash("niche-status", e.message, true); }
 }
 async function deleteNiche(id) {
@@ -429,7 +549,7 @@ async function uploadNicheClip(id) {
   try {
     await api(`/api/niches/${id}/clips`, {method: "POST", body: form});
     await refresh();
-    flash("niche-clip-status", "uploadé ✓");
+    flash("niche-clip-status", "uploadé");
   } catch (e) { flash("niche-clip-status", e.message, true); }
 }
 async function downloadNicheClips(id) {
@@ -444,10 +564,11 @@ async function downloadNicheClips(id) {
 let selectedPresetId = null; // null = nouveau preset en cours d'édition
 
 function renderPresets() {
-  const body = document.getElementById("presets-body");
-  body.innerHTML = STATE.presets.map(p =>
-    `<tr style="cursor:pointer${p.id === selectedPresetId ? ";background:#1f1f27" : ""}" onclick="selectPreset(${p.id})"><td>${esc(p.name)}</td></tr>`
-  ).join("") || "<tr><td class=muted>aucun preset</td></tr>";
+  const list = document.getElementById("presets-list");
+  list.innerHTML = STATE.presets.map(p =>
+    `<button class="niche-card ${p.id === selectedPresetId ? "sel" : ""}" style="margin-bottom:.4rem;width:100%;padding:.6rem .8rem" onclick="selectPreset(${p.id})">
+      <div class="nm" style="font-size:.9rem">${esc(p.name)}</div></button>`
+  ).join("") || "<p class=muted style='font-size:.85rem'>aucun preset</p>";
   renderPresetDetail();
 }
 function selectPreset(id) {
@@ -468,36 +589,35 @@ function renderPresetDetail() {
   const eff = o.effects || {}, acc = o.accents || {};
   el.innerHTML = `
     <div class="card">
-      <div class="row"><b>${isNew ? "Nouveau preset" : "Éditer"}</b></div>
-      <div class="row">Nom <input id="p-name" value="${esc(name)}" style="flex:1"></div>
-      <div class="card"><b>Effets</b><br>
+      <div class="row" style="margin-top:0">Nom <input id="p-name" value="${esc(name)}" style="flex:1" placeholder="ex. strobo hard"></div>
+      <div class="card" style="background:var(--panel-2)"><b>Effets</b>
         <label class="chk"><input type="checkbox" id="p-zoom" ${eff.zoom ? "checked" : ""}> Punch-zoom</label>
         <label class="chk"><input type="checkbox" id="p-flash" ${eff.flash ? "checked" : ""}> Flash blanc</label>
         <label class="chk"><input type="checkbox" id="p-shake" ${eff.shake ? "checked" : ""}> Shake</label>
         <label class="chk"><input type="checkbox" id="p-speed" ${eff.speed ? "checked" : ""}> Slow-mo avant drop</label>
       </div>
-      <div class="card"><b>Accents</b><br>
+      <div class="card" style="background:var(--panel-2)"><b>Accents</b>
         <label class="chk"><input type="checkbox" id="p-rgb" ${acc.rgb ? "checked" : ""}> RGB split à l'impact</label>
         <label class="chk"><input type="checkbox" id="p-glitch" ${acc.glitch ? "checked" : ""}> Micro-glitch</label>
       </div>
-      <div class="card"><b>Cadrage &amp; contenu</b><br>
+      <div class="card" style="background:var(--panel-2)"><b>Cadrage &amp; contenu</b>
         <label class="chk"><input type="checkbox" id="p-delogo" ${o.delogo ? "checked" : ""}> Gommer le logo (delogo)</label>
         <label class="chk"><input type="checkbox" id="p-chrono" ${o.chrono ? "checked" : ""}> Chronologie de l'histoire</label>
         <div class="row">Présence personnages min <input id="p-presence" type="number" step="0.05" min="0" max="1" style="width:80px" value="${esc(o.min_presence ?? 0)}"></div>
       </div>
-      <div class="card"><b>Rythme</b><br>
+      <div class="card" style="background:var(--panel-2)"><b>Rythme</b>
         <div class="row">
           Mode <select id="p-cutmode">
             <option value="energy" ${o.cut_mode !== "fixed" ? "selected" : ""}>énergie (auto)</option>
             <option value="fixed" ${o.cut_mode === "fixed" ? "selected" : ""}>fixe</option>
           </select>
-          &nbsp;Coupe tous les <input id="p-cutevery" type="number" min="1" style="width:60px" value="${esc(o.cut_every ?? 2)}"> beats (mode fixe)
+          &nbsp;Coupe tous les <input id="p-cutevery" type="number" min="1" style="width:60px" value="${esc(o.cut_every ?? 2)}"> beats
         </div>
         <div class="row">Buildup <input id="p-buildup" type="number" style="width:70px" value="${esc(o.buildup ?? 10)}"> s
           &nbsp;Strobo après drop <input id="p-strobe" type="number" style="width:70px" value="${esc(o.strobe_beats ?? 16)}"> beats</div>
       </div>
       <div class="row">
-        <button class="act" onclick="savePreset()">Enregistrer</button>
+        <button class="act" onclick="savePreset()">${isNew ? "Créer le preset" : "Enregistrer"}</button>
         ${isNew ? "" : `<button class="sec" onclick="deletePreset(${selectedPresetId})">Supprimer</button>`}
         <span id="preset-status" class="muted"></span>
       </div>
@@ -524,7 +644,7 @@ async function savePreset() {
       await api(`/api/presets/${selectedPresetId}`, {...j({name, overrides}), method: "PATCH"});
     }
     await refresh();
-    flash("preset-status", "enregistré ✓");
+    flash("preset-status", "enregistré");
   } catch (e) { flash("preset-status", e.message, true); }
 }
 async function deletePreset(id) {
@@ -532,23 +652,6 @@ async function deletePreset(id) {
   await api(`/api/presets/${id}`, {method: "DELETE"});
   selectedPresetId = null;
   refresh();
-}
-
-/* --- Comptes --- */
-async function authUrl() {
-  try {
-    const {url} = await api("/api/auth/url");
-    const a = document.getElementById("auth-link");
-    a.href = url; a.style.display = "inline";
-  } catch (e) { flash("auth-status", e.message, true); }
-}
-async function authCode() {
-  try {
-    const account = await api("/api/auth/code", j({code: document.getElementById("auth-code").value}));
-    flash("auth-status", `connecté : ${account.display_name} ✓`);
-    document.getElementById("auth-code").value = "";
-    refresh();
-  } catch (e) { flash("auth-status", e.message, true); }
 }
 
 /* --- Réglages --- */
@@ -572,7 +675,7 @@ async function saveSettings() {
     min_presence: num("s-presence"), cut_mode: document.getElementById("s-cutmode").value,
     cut_every: num("s-cutevery"), buildup: num("s-buildup"), strobe_beats: num("s-strobe"),
   }));
-  flash("set-status", "réglages enregistrés ✓");
+  flash("set-status", "réglages enregistrés");
 }
 
 function flash(id, msg, isError) {

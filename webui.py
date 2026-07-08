@@ -1,7 +1,7 @@
 """webui — interface locale de gestion de l'usine à vidéos.
 
-Onglets : liens YouTube, tracks, comptes TikTok, plan & file, réglages.
-Local uniquement (127.0.0.1) : manipule fichiers, tokens et secrets du projet.
+Onglets : niches, presets, tracks, liens YouTube, plan & file, réglages.
+Local uniquement (127.0.0.1) : manipule fichiers et secrets du projet.
 
     uv run python webui.py    puis  http://127.0.0.1:8765
 """
@@ -23,7 +23,6 @@ QUEUE_DIR = ROOT / "queue"
 LINKS_PATH = ROOT / "links.txt"
 PLAN_PATH = ROOT / "plan.toml"
 SETTINGS_PATH = ROOT / "settings.json"
-TOKENS_DIR = ROOT / "tokens"
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aiff"}
 # Réglages exposés dans l'onglet Paramètres (sous-ensemble sûr de DEFAULT_CONFIG)
@@ -119,7 +118,7 @@ def create_app(root: Path | None = None):
         "db": root / "platform.db", "data": root / "data",
         "tracks": root / "tracks", "queue": root / "queue",
         "links": root / "links.txt", "plan": root / "plan.toml",
-        "settings": root / "settings.json", "tokens": root / "tokens",
+        "settings": root / "settings.json",
     }
     paths["data"].mkdir(exist_ok=True)
     secret_file = paths["data"] / "secret_key"
@@ -167,7 +166,6 @@ def create_app(root: Path | None = None):
     @app.get("/api/state")
     def state():
         tracks_dir = paths["tracks"]
-        tokens_dir = paths["tokens"]
         queue_dir = paths["queue"]
         links_path = paths["links"]
         plan_path = paths["plan"]
@@ -180,18 +178,6 @@ def create_app(root: Path | None = None):
             ),
             key=lambda t: t["name"],
         ) if tracks_dir.is_dir() else []
-
-        accounts = []
-        if tokens_dir.is_dir():
-            for path in sorted(tokens_dir.glob("*.json")):
-                data = json.loads(path.read_text())
-                accounts.append(
-                    {
-                        "display_name": data.get("display_name", "?"),
-                        "open_id": data.get("open_id", "?"),
-                        "expires_at": data.get("expires_at", "?"),
-                    }
-                )
 
         plan = {"defaults": {"duration": 30, "caption": "{title} — OUT NOW 🔥",
                              "hashtags": ["hardstyle", "anime", "edit", "dancingdead"]},
@@ -235,7 +221,6 @@ def create_app(root: Path | None = None):
                 "presets": presets,
                 "links": links_path.read_text() if links_path.is_file() else "",
                 "tracks": tracks,
-                "accounts": accounts,
                 "plan": plan,
                 "queue": {"pending": sidecars("pending"), "posted": sidecars("posted")},
                 "settings": {k: settings[k] for k in EDITABLE_SETTINGS},
@@ -295,23 +280,6 @@ def create_app(root: Path | None = None):
                 path.unlink()
                 removed.append(path.name)
         return jsonify({"removed": removed})
-
-    @app.get("/api/auth/url")
-    def auth_url():
-        from tiktok_auth import REDIRECT_URI, _load_credentials, build_auth_url
-
-        client_key, _ = _load_credentials()
-        return jsonify({"url": build_auth_url(client_key, REDIRECT_URI, uuid.uuid4().hex[:12])})
-
-    @app.post("/api/auth/code")
-    def auth_code():
-        from tiktok_auth import exchange_and_store, parse_code_input
-
-        try:
-            account = exchange_and_store(parse_code_input(request.json["code"]))
-        except Exception as exc:  # erreurs API TikTok remontées telles quelles à l'UI
-            return jsonify({"error": str(exc)}), 400
-        return jsonify(account)
 
     @app.get("/api/jobs/<job_id>")
     def job_status(job_id: str):
