@@ -62,6 +62,31 @@ vidéos avec journal en direct, gestion de la file d'attente, et réglages du
 montage (effets, accents, cadrage, rythme — persistés dans `settings.json`
 et pris en compte par tous les rendus).
 
+## Plateforme d'équipe (phase 1)
+
+L'interface est protégée par un login par membre. Crée les comptes en ligne
+de commande (aucune page d'inscription) :
+
+```bash
+uv run python db.py add-member theo      # demande le mot de passe (masqué)
+uv run python db.py list-members
+```
+
+Puis, dans l'interface :
+
+- **Niches** — chaque membre gère ses univers (ex. « Naruto Édits ») : cadence
+  de production, légende et hashtags, banque de clips propre (upload direct ou
+  liens YouTube téléchargés en vidéo ≤1080p), subtitles générés par pré-prompt,
+  et les presets de montage utilisés. Chaque niche a son dossier
+  `data/niches/<slug>/clips/`.
+- **Presets** — des styles de montage nommés (« strobo hard », « posé »,
+  « reels clean »…) réutilisables entre niches. Un preset ne stocke que ses
+  écarts par rapport aux réglages par défaut ; ordre de fusion :
+  `DEFAULT_CONFIG ← settings.json ← preset`.
+
+L'état vit dans `platform.db` (SQLite) et `data/` — tous deux locaux,
+jamais commités. Les mots de passe sont hachés (werkzeug).
+
 ## Utilisation en ligne de commande
 
 ### 1. Récupérer les morceaux depuis YouTube (optionnel)
