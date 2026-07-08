@@ -19,3 +19,8 @@ settings.json
 tokens/
 tiktok*.txt
 .DS_Store
+.superpowers/
+
+# Base de données plateforme et données locales
+platform.db
+data/
