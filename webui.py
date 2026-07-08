@@ -95,10 +95,56 @@ def start_job(name: str, argv: list[str]) -> str:
 # --- Application Flask ------------------------------------------------------------
 
 
-def create_app():
-    from flask import Flask, jsonify, render_template, request
+def create_app(root: Path | None = None):
+    import secrets as pysecrets
+
+    from flask import Flask, jsonify, render_template, request, session
+
+    import db as dbmod
+
+    root = root or ROOT
+    paths = {
+        "db": root / "platform.db", "data": root / "data",
+        "tracks": root / "tracks", "queue": root / "queue",
+        "links": root / "links.txt", "plan": root / "plan.toml",
+        "settings": root / "settings.json", "tokens": root / "tokens",
+    }
+    paths["data"].mkdir(exist_ok=True)
+    secret_file = paths["data"] / "secret_key"
+    if not secret_file.is_file():
+        secret_file.write_text(pysecrets.token_hex(32))
+        secret_file.chmod(0o600)
 
     app = Flask(__name__)
+    app.secret_key = secret_file.read_text()
+    app.config["PATHS"] = paths
+
+    def get_conn():
+        return dbmod.connect(paths["db"])
+
+    @app.before_request
+    def require_login():
+        if not request.path.startswith("/api") or request.path == "/api/login":
+            return None
+        if "member" not in session:
+            return jsonify({"error": "non connecté"}), 401
+
+    @app.post("/api/login")
+    def login():
+        data = request.json or {}
+        conn = get_conn()
+        try:
+            if dbmod.verify_member(conn, data.get("name", ""), data.get("password", "")):
+                session["member"] = data["name"]
+                return jsonify({"ok": True, "member": data["name"]})
+        finally:
+            conn.close()
+        return jsonify({"error": "identifiants invalides"}), 401
+
+    @app.post("/api/logout")
+    def logout():
+        session.pop("member", None)
+        return jsonify({"ok": True})
 
     @app.get("/")
     def index():
@@ -106,18 +152,24 @@ def create_app():
 
     @app.get("/api/state")
     def state():
+        tracks_dir = paths["tracks"]
+        tokens_dir = paths["tokens"]
+        queue_dir = paths["queue"]
+        links_path = paths["links"]
+        plan_path = paths["plan"]
+
         tracks = sorted(
             (
                 {"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 1)}
-                for p in TRACKS_DIR.glob("*")
+                for p in tracks_dir.glob("*")
                 if p.suffix.lower() in AUDIO_EXTENSIONS
             ),
             key=lambda t: t["name"],
-        ) if TRACKS_DIR.is_dir() else []
+        ) if tracks_dir.is_dir() else []
 
         accounts = []
-        if TOKENS_DIR.is_dir():
-            for path in sorted(TOKENS_DIR.glob("*.json")):
+        if tokens_dir.is_dir():
+            for path in sorted(tokens_dir.glob("*.json")):
                 data = json.loads(path.read_text())
                 accounts.append(
                     {
@@ -130,24 +182,35 @@ def create_app():
         plan = {"defaults": {"duration": 30, "caption": "{title} — OUT NOW 🔥",
                              "hashtags": ["hardstyle", "anime", "edit", "dancingdead"]},
                 "posts": []}
-        if PLAN_PATH.is_file():
-            with open(PLAN_PATH, "rb") as f:
+        if plan_path.is_file():
+            with open(plan_path, "rb") as f:
                 loaded = tomllib.load(f)
             plan["defaults"].update(loaded.get("defaults", {}))
             plan["posts"] = loaded.get("posts", [])
 
         def sidecars(folder: str):
-            directory = QUEUE_DIR / folder
+            directory = queue_dir / folder
             if not directory.is_dir():
                 return []
             return [json.loads(p.read_text()) for p in sorted(directory.glob("*.json"))]
 
-        settings = load_settings()
+        settings = load_settings(paths["settings"])
         with _jobs_lock:
             jobs = {jid: dict(job) for jid, job in _jobs.items()}
+
+        conn = get_conn()
+        try:
+            niches = dbmod.list_niches(conn)
+            presets = dbmod.list_presets(conn)
+        finally:
+            conn.close()
+
         return jsonify(
             {
-                "links": LINKS_PATH.read_text() if LINKS_PATH.is_file() else "",
+                "member": session["member"],
+                "niches": niches,
+                "presets": presets,
+                "links": links_path.read_text() if links_path.is_file() else "",
                 "tracks": tracks,
                 "accounts": accounts,
                 "plan": plan,
@@ -159,7 +222,7 @@ def create_app():
 
     @app.post("/api/links")
     def save_links():
-        LINKS_PATH.write_text(request.json["text"])
+        paths["links"].write_text(request.json["text"])
         return jsonify({"ok": True})
 
     @app.post("/api/download")
@@ -176,19 +239,19 @@ def create_app():
         name = Path(file.filename).name  # pas de traversée de chemin
         if Path(name).suffix.lower() not in AUDIO_EXTENSIONS:
             return jsonify({"error": f"format non supporté : {name}"}), 400
-        TRACKS_DIR.mkdir(exist_ok=True)
-        file.save(TRACKS_DIR / name)
+        paths["tracks"].mkdir(exist_ok=True)
+        file.save(paths["tracks"] / name)
         return jsonify({"ok": True, "name": name})
 
     @app.post("/api/settings")
     def save_settings():
         overrides = {k: v for k, v in request.json.items() if k in EDITABLE_SETTINGS}
-        SETTINGS_PATH.write_text(json.dumps(overrides, ensure_ascii=False, indent=2) + "\n")
+        paths["settings"].write_text(json.dumps(overrides, ensure_ascii=False, indent=2) + "\n")
         return jsonify({"ok": True})
 
     @app.post("/api/plan")
     def save_plan():
-        PLAN_PATH.write_text(plan_to_toml(request.json))
+        paths["plan"].write_text(plan_to_toml(request.json))
         return jsonify({"ok": True})
 
     @app.post("/api/generate")
@@ -204,7 +267,7 @@ def create_app():
         stem = Path(stem).name
         removed = []
         for suffix in (".mp4", ".json"):
-            path = QUEUE_DIR / "pending" / f"{stem}{suffix}"
+            path = paths["queue"] / "pending" / f"{stem}{suffix}"
             if path.is_file():
                 path.unlink()
                 removed.append(path.name)
