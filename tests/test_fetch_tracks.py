@@ -40,3 +40,7 @@ def test_ytdlp_args_video_mode():
     assert "--extract-audio" not in args
     assert any("bv*[height<=1080]" in a for a in args)
     assert "--remux-video" in args and "mp4" in args
+    # chaque alternative du sélecteur -f doit être plafonnée à 1080p
+    selector = args[args.index("-f") + 1]
+    for alternative in selector.split("/"):
+        assert "[height<=1080]" in alternative, alternative
