@@ -241,6 +241,25 @@ def create_app(root: Path | None = None):
             return jsonify({"error": str(exc)}), 409
         return jsonify({"job_id": job_id})
 
+    @app.get("/api/link-info")
+    def link_info():
+        """Titre + miniature d'un lien YouTube via l'oEmbed public (sans clé API).
+        On ne contacte QUE youtube.com ; l'URL de l'utilisateur y est passée en
+        paramètre (pas de requête sortante vers une URL arbitraire). Dégrade en
+        nulls si indisponible (playlist, vidéo privée, réseau)."""
+        import urllib.parse
+        import urllib.request
+
+        url = request.args.get("url", "")
+        try:
+            oembed = "https://www.youtube.com/oembed?format=json&url=" + urllib.parse.quote(url, safe="")
+            with urllib.request.urlopen(oembed, timeout=6) as resp:
+                data = json.loads(resp.read())
+            return jsonify({"title": data.get("title"), "author": data.get("author_name"),
+                            "thumbnail": data.get("thumbnail_url")})
+        except Exception:
+            return jsonify({"title": None, "author": None, "thumbnail": None})
+
     @app.post("/api/tracks")
     def upload_track():
         file = request.files["file"]

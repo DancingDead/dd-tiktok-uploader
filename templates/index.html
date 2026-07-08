@@ -133,6 +133,19 @@
   #login input{width:100%;margin:.35rem 0}
   #login button{width:100%;margin-top:.5rem;justify-content:center}
 
+  /* Gestionnaire de liens YouTube (cartes) */
+  .link-card{display:flex;align-items:center;gap:.85rem;background:var(--panel);border:1px solid var(--line);
+             border-radius:10px;padding:.55rem .7rem;margin-bottom:.5rem;transition:border-color .15s}
+  .link-card:hover{border-color:var(--line)}
+  .link-card .thumb{width:68px;height:38px;object-fit:cover;border-radius:5px;flex-shrink:0;
+                    background:var(--panel-2);border:1px solid var(--line)}
+  .link-card .lk-body{flex:1;min-width:0}
+  .link-card .lk-title{font-size:.9rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .link-card .lk-url{font-size:.75rem;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                     font-family:'Fira Code',monospace;margin-top:.1rem}
+  .empty{color:var(--dim);font-size:.9rem;padding:1.4rem;text-align:center;border:1px dashed var(--line);
+         border-radius:10px;margin-bottom:.6rem}
+
   /* Barre de progression globale (requêtes réseau en cours) */
   #progress{position:fixed;top:0;left:0;height:2px;width:100%;z-index:40;overflow:hidden;
             opacity:0;transition:opacity .2s;pointer-events:none}
@@ -242,13 +255,18 @@
 
 <section id="liens">
   <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><h2>Liens YouTube → tracks/</h2></div>
-  <p class="sub">Un lien par ligne (vidéo ou playlist), <code>#</code> pour commenter. Les mp3 arrivent dans <code>tracks/</code>.</p>
-  <textarea id="links"></textarea>
+  <p class="sub">Ajoute des vidéos ou playlists ; « Télécharger » récupère l'audio en mp3 dans <code>tracks/</code>.</p>
   <div class="row">
-    <button class="sec" onclick="saveLinks()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Enregistrer</button>
-    <button class="act" onclick="download()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Télécharger les sons</button>
-    <span id="links-status" class="muted"></span>
+    <input id="link-input" placeholder="Colle un lien YouTube (vidéo ou playlist)…" style="flex:1"
+           onkeydown="if(event.key==='Enter')addLink()">
+    <button class="sec" onclick="addLink()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Ajouter</button>
   </div>
+  <div id="links-list"></div>
+  <div class="row">
+    <button class="act" onclick="download()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Télécharger les sons</button>
+    <button class="ghost" onclick="toggleRawLinks()">Éditer en texte</button>
+  </div>
+  <textarea id="links" style="display:none;margin-top:.6rem" oninput="onRawEdit()"></textarea>
   <div id="dl-log" class="log" style="display:none"></div>
 </section>
 
@@ -427,11 +445,10 @@ async function refresh() {
   try { data = await api("/api/state"); } catch (e) { return; }
   STATE = data;
   document.getElementById("nav-member").textContent = STATE.member;
-  document.getElementById("links").value = STATE.links;
   document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
     `<tr><td>${esc(t.name)}</td><td class=muted>${esc(t.size_mb)} Mo</td></tr>`).join("")
     || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
-  renderPlan(); renderQueue(); renderSettings(); renderNiches(); renderPresets();
+  renderLinks(); renderPlan(); renderQueue(); renderSettings(); renderNiches(); renderPresets();
 }
 
 /* --- Plan --- */
@@ -497,15 +514,71 @@ async function generate() {
   catch (e) { flash("plan-status", e.message, true); }
 }
 
-/* --- Liens / téléchargement --- */
-async function saveLinks() {
-  await api("/api/links", j({text: document.getElementById("links").value}));
-  flash("links-status", "enregistré");
+/* --- Liens YouTube (gestionnaire de cartes) --- */
+let LINKS = [];
+const parseLinkText = t => (t || "").split("\n").map(s => s.trim()).filter(s => s && !s.startsWith("#"));
+const YT_RE = /^https?:\/\/(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i;
+
+function renderLinks() {
+  LINKS = parseLinkText(STATE.links);
+  document.getElementById("links").value = LINKS.join("\n");
+  const list = document.getElementById("links-list");
+  if (!LINKS.length) {
+    list.innerHTML = '<div class="empty">Aucun lien pour l\'instant — colle une URL YouTube ci-dessus.</div>';
+    return;
+  }
+  list.innerHTML = LINKS.map((u, i) => `
+    <div class="link-card" data-i="${i}">
+      <img class="thumb" alt="" style="visibility:hidden">
+      <div class="lk-body"><div class="lk-title muted">chargement du titre…</div><div class="lk-url">${esc(u)}</div></div>
+      <button class="icon-btn" title="Retirer" onclick="removeLink(${i})">${SVG.trash}</button>
+    </div>`).join("");
+  LINKS.forEach(enrichLink);
+}
+async function enrichLink(url, i) {
+  let info = {};
+  try { info = await (await fetch("/api/link-info?url=" + encodeURIComponent(url))).json(); } catch (e) {}
+  const card = document.querySelector(`.link-card[data-i="${i}"]`);
+  if (!card) return;
+  const title = card.querySelector(".lk-title");
+  title.textContent = info.title || "titre indisponible (playlist ou vidéo privée)";
+  title.classList.toggle("muted", !info.title);
+  if (info.thumbnail) { const img = card.querySelector(".thumb"); img.src = info.thumbnail; img.style.visibility = "visible"; }
+}
+function saveLinksArr() {
+  STATE.links = LINKS.join("\n");
+  document.getElementById("links").value = STATE.links;
+  return api("/api/links", j({text: STATE.links}));
+}
+async function addLink() {
+  const inp = document.getElementById("link-input");
+  const u = inp.value.trim();
+  if (!u) return;
+  if (!YT_RE.test(u)) return toast("ce n'est pas un lien YouTube valide", "err");
+  if (LINKS.includes(u)) { inp.value = ""; return toast("ce lien est déjà dans la liste", "err"); }
+  LINKS.push(u); inp.value = "";
+  try { await saveLinksArr(); renderLinks(); toast("lien ajouté"); }
+  catch (e) { toast(e.message, "err"); }
+}
+async function removeLink(i) {
+  LINKS.splice(i, 1);
+  try { await saveLinksArr(); renderLinks(); toast("lien retiré"); }
+  catch (e) { toast(e.message, "err"); }
+}
+function toggleRawLinks() {
+  const t = document.getElementById("links");
+  t.style.display = t.style.display === "none" ? "block" : "none";
+  if (t.style.display === "block") t.focus();
+}
+function onRawEdit() {
+  STATE.links = document.getElementById("links").value;
+  renderLinks();
+  saveLinksArr();
 }
 async function download() {
-  await saveLinks();
+  await saveLinksArr();
   try { const {job_id} = await api("/api/download", j({})); followJob(job_id, "dl-log", "links-status"); }
-  catch (e) { flash("links-status", e.message, true); }
+  catch (e) { toast(e.message, "err"); }
 }
 
 /* --- Jobs --- */
