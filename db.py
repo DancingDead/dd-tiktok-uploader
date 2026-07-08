@@ -2,7 +2,10 @@
 
 import re
 import sqlite3
+import sys
 from pathlib import Path
+
+from werkzeug.security import check_password_hash, generate_password_hash
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -52,3 +55,43 @@ def connect(path: Path) -> sqlite3.Connection:
 
 def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+DB_PATH = Path(__file__).parent / "platform.db"
+
+
+def add_member(conn: sqlite3.Connection, name: str, password: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO members (name, password_hash) VALUES (?, ?)",
+        (name, generate_password_hash(password)))
+    conn.commit()
+    return cur.lastrowid
+
+
+def verify_member(conn: sqlite3.Connection, name: str, password: str) -> bool:
+    row = conn.execute(
+        "SELECT password_hash FROM members WHERE name = ?", (name,)).fetchone()
+    return bool(row) and check_password_hash(row["password_hash"], password)
+
+
+def list_members(conn: sqlite3.Connection) -> list[str]:
+    return [r["name"] for r in conn.execute("SELECT name FROM members ORDER BY name")]
+
+
+def main() -> None:
+    import getpass
+
+    command = sys.argv[1] if len(sys.argv) > 1 else ""
+    conn = connect(DB_PATH)
+    if command == "add-member" and len(sys.argv) == 3:
+        password = getpass.getpass(f"mot de passe pour {sys.argv[2]} : ")
+        add_member(conn, sys.argv[2], password)
+        print(f"membre ajouté : {sys.argv[2]}")
+    elif command == "list-members":
+        print("\n".join(list_members(conn)) or "aucun membre")
+    else:
+        sys.exit("usage : python db.py add-member <name> | list-members")
+
+
+if __name__ == "__main__":
+    main()

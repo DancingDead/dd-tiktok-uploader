@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from db import connect, slugify
+from db import connect, slugify, add_member, list_members, verify_member
 
 
 @pytest.fixture
@@ -29,3 +29,17 @@ def test_connect_enforces_foreign_keys(conn):
 def test_slugify():
     assert slugify("Naruto Edits — Sombre") == "naruto-edits-sombre"
     assert slugify("  Gym / Phonk!  ") == "gym-phonk"
+
+
+def test_member_roundtrip(conn):
+    add_member(conn, "theo", "s3cret")
+    assert verify_member(conn, "theo", "s3cret") is True
+    assert verify_member(conn, "theo", "mauvais") is False
+    assert verify_member(conn, "inconnu", "s3cret") is False
+    assert list_members(conn) == ["theo"]
+
+
+def test_member_password_is_hashed(conn):
+    add_member(conn, "theo", "s3cret")
+    stored = conn.execute("SELECT password_hash FROM members").fetchone()[0]
+    assert "s3cret" not in stored
