@@ -118,3 +118,24 @@ def test_video_lifecycle(conn, tmp_path):
 
     set_video_status(conn, vid, "failed", error="ffmpeg a explosé")
     assert list_videos(conn)[0]["error"] == "ffmpeg a explosé"
+
+
+def test_delete_niche_cascades_videos(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Cascade Test")
+    vid = create_video(conn, niche_id=nid, track="tracks/x.wav", seed=1,
+                       file="data/niches/cascade-test/videos/v.mp4",
+                       created_at="2026-07-08T12:00:00")
+    delete_niche(conn, nid)
+    assert get_niche(conn, nid) is None
+    assert vid not in [v["id"] for v in list_videos(conn)]
+
+
+def test_video_status_check_constraint(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Status Test")
+    vid = create_video(conn, niche_id=nid, track="tracks/x.wav", seed=1,
+                       file="data/niches/status-test/videos/v.mp4",
+                       created_at="2026-07-08T12:00:00")
+    with pytest.raises(sqlite3.IntegrityError):
+        set_video_status(conn, vid, "bogus")
+    set_video_status(conn, vid, "approved")
+    assert list_videos(conn)[0]["status"] == "approved"

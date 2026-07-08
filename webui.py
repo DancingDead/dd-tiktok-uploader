@@ -7,6 +7,7 @@ Local uniquement (127.0.0.1) : manipule fichiers, tokens et secrets du projet.
 """
 
 import json
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -353,6 +354,8 @@ def create_app(root: Path | None = None):
         conn = get_conn()
         try:
             dbmod.delete_niche(conn, niche_id)   # fichiers conservés sur disque
+        except sqlite3.IntegrityError as exc:
+            return jsonify({"error": str(exc)}), 409
         finally:
             conn.close()
         return jsonify({"ok": True})

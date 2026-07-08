@@ -35,12 +35,13 @@ CREATE TABLE IF NOT EXISTS niches (
 );
 CREATE TABLE IF NOT EXISTS videos (
   id INTEGER PRIMARY KEY,
-  niche_id INTEGER NOT NULL REFERENCES niches(id),
+  niche_id INTEGER NOT NULL REFERENCES niches(id) ON DELETE CASCADE,
   preset_id INTEGER,
   track TEXT NOT NULL,
   seed INTEGER NOT NULL,
   file TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'proposed',
+  status TEXT NOT NULL DEFAULT 'proposed'
+    CHECK (status IN ('proposed','approved','rejected','posted','failed')),
   caption TEXT NOT NULL DEFAULT '',
   subtitles TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
