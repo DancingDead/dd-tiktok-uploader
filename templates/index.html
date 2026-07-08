@@ -133,6 +133,38 @@
   #login input{width:100%;margin:.35rem 0}
   #login button{width:100%;margin-top:.5rem;justify-content:center}
 
+  /* Barre de progression globale (requêtes réseau en cours) */
+  #progress{position:fixed;top:0;left:0;height:2px;width:100%;z-index:40;overflow:hidden;
+            opacity:0;transition:opacity .2s;pointer-events:none}
+  #progress.on{opacity:1}
+  #progress::after{content:"";position:absolute;height:100%;width:35%;background:var(--accent);
+                   border-radius:2px;animation:prog 1.1s ease-in-out infinite}
+  @keyframes prog{0%{left:-35%}100%{left:100%}}
+
+  /* Toasts (retour d'action, coin bas-droit) */
+  #toast-wrap{position:fixed;bottom:1.2rem;right:1.2rem;z-index:50;display:flex;
+              flex-direction:column;gap:.5rem;max-width:340px}
+  .toast{display:flex;align-items:center;gap:.6rem;background:var(--panel);
+         border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;
+         padding:.7rem .9rem;font-size:.86rem;color:var(--txt);box-shadow:0 10px 30px rgba(0,0,0,.45);
+         animation:toastin .22s ease}
+  .toast.ok{border-left-color:var(--green)}.toast.ok svg{color:var(--green)}
+  .toast.err{border-left-color:var(--err)}.toast.err svg{color:var(--err)}
+  .toast svg{width:17px;height:17px;flex-shrink:0}
+  .toast.out{opacity:0;transform:translateX(14px);transition:opacity .2s,transform .2s}
+  @keyframes toastin{from{opacity:0;transform:translateX(14px)}to{opacity:1;transform:none}}
+
+  /* Modales (création / confirmation) */
+  #modal-root{position:fixed;inset:0;z-index:45;display:none;align-items:center;
+              justify-content:center;background:rgba(0,0,0,.62)}
+  #modal-root.on{display:flex}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.4rem;
+         width:360px;max-width:90vw;animation:fade .2s ease;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal h3{margin:0 0 .5rem;font-size:1.02rem;font-weight:600}
+  .modal p{color:var(--dim);font-size:.88rem;margin:0 0 1.1rem;line-height:1.5}
+  .modal input{width:100%;margin-bottom:1.1rem}
+  .modal .row{justify-content:flex-end;margin:0;gap:.5rem}
+
   @media (max-width:720px){
     body{flex-direction:column}
     nav{width:100%;flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line)}
@@ -143,6 +175,10 @@
 </style>
 </head>
 <body>
+
+<div id="progress"></div>
+<div id="toast-wrap"></div>
+<div id="modal-root"></div>
 
 <div id="login">
   <div class="card">
@@ -294,18 +330,82 @@ document.querySelectorAll("nav button.tab").forEach(b => b.onclick = () => {
   document.getElementById(b.dataset.tab).classList.add("active");
 });
 
+/* Barre de progression : visible tant qu'une requête réseau est en vol */
+let _pending = 0;
+function _prog(delta) {
+  _pending = Math.max(0, _pending + delta);
+  document.getElementById("progress").classList.toggle("on", _pending > 0);
+}
 async function api(path, opts) {
-  const r = await fetch(path, opts);
-  const data = await r.json().catch(() => ({}));
-  if (r.status === 401) {
-    document.getElementById("login").style.display = "flex";
-    throw new Error(data.error || "non connecté");
-  }
-  if (!r.ok) throw new Error(data.error || r.statusText);
-  return data;
+  _prog(1);
+  try {
+    const r = await fetch(path, opts);
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 401) {
+      const ov = document.getElementById("login");
+      ov.style.display = "flex";
+      document.getElementById("l-name").focus();
+      throw new Error(data.error || "non connecté");
+    }
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    return data;
+  } finally { _prog(-1); }
 }
 const j = body => ({method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* Toasts */
+const T_ICON = {
+  ok: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  err: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+};
+function toast(msg, type = "ok") {
+  const el = document.createElement("div");
+  el.className = "toast " + type;
+  el.innerHTML = T_ICON[type] + "<span></span>";
+  el.querySelector("span").textContent = msg;
+  document.getElementById("toast-wrap").appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 200); }, 4000);
+}
+
+/* Modales — remplacent prompt()/confirm() natifs */
+function _closeModal() {
+  const root = document.getElementById("modal-root");
+  root.classList.remove("on"); root.innerHTML = ""; document.onkeydown = null;
+}
+function confirmModal(message, {okLabel = "Supprimer"} = {}) {
+  return new Promise(res => {
+    const root = document.getElementById("modal-root");
+    root.innerHTML = `<div class="modal"><h3>Confirmer</h3><p>${esc(message)}</p>
+      <div class="row"><button class="sec" data-x>Annuler</button>
+      <button class="act" data-ok>${esc(okLabel)}</button></div></div>`;
+    root.classList.add("on");
+    const done = v => { _closeModal(); res(v); };
+    root.querySelector("[data-x]").onclick = () => done(false);
+    root.querySelector("[data-ok]").onclick = () => done(true);
+    root.onclick = e => { if (e.target === root) done(false); };
+    document.onkeydown = e => { if (e.key === "Escape") done(false); };
+  });
+}
+function promptModal(title, placeholder) {
+  return new Promise(res => {
+    const root = document.getElementById("modal-root");
+    root.innerHTML = `<div class="modal"><h3>${esc(title)}</h3>
+      <input id="_pm" placeholder="${esc(placeholder || "")}" autocomplete="off">
+      <div class="row"><button class="sec" data-x>Annuler</button>
+      <button class="act" data-ok>Créer</button></div></div>`;
+    root.classList.add("on");
+    const inp = document.getElementById("_pm"); inp.focus();
+    const done = v => { _closeModal(); res(v); };
+    root.querySelector("[data-x]").onclick = () => done(null);
+    root.querySelector("[data-ok]").onclick = () => done(inp.value.trim() || null);
+    root.onclick = e => { if (e.target === root) done(null); };
+    inp.onkeydown = e => {
+      if (e.key === "Enter") done(inp.value.trim() || null);
+      if (e.key === "Escape") done(null);
+    };
+  });
+}
 
 /* --- Login --- */
 const gv = id => document.getElementById(id).value;
@@ -388,7 +488,7 @@ function renderQueue() {
     "<tr><td colspan=5 class=muted>file vide — enregistre un plan puis « Générer »</td></tr>";
 }
 async function delPending(stem) {
-  if (!confirm("Retirer cette vidéo de la file ?")) return;
+  if (!await confirmModal("Retirer cette vidéo de la file ?", {okLabel: "Retirer"})) return;
   await api("/api/queue/" + encodeURIComponent(stem), {method: "DELETE"});
   refresh();
 }
@@ -463,13 +563,14 @@ function selectNiche(id) {
   if (selectedNicheId) document.getElementById("niche-detail").scrollIntoView({behavior: "smooth", block: "nearest"});
 }
 async function addNiche() {
-  const name = prompt("Nom de la niche :");
+  const name = await promptModal("Nouvelle niche", "ex. Naruto Édits");
   if (!name) return;
   try {
     const {id} = await api("/api/niches", j({name}));
     await refresh();
     selectedNicheId = id; renderNiches();
-  } catch (e) { flash("niches-status", e.message, true); }
+    toast("niche « " + name + " » créée");
+  } catch (e) { toast(e.message, "err"); }
 }
 function renderNicheDetail() {
   const el = document.getElementById("niche-detail");
@@ -536,10 +637,11 @@ async function saveNiche(id) {
   } catch (e) { flash("niche-status", e.message, true); }
 }
 async function deleteNiche(id) {
-  if (!confirm("Supprimer cette niche ? Les fichiers (clips, liens) resteront sur le disque.")) return;
+  if (!await confirmModal("Supprimer cette niche ? Les fichiers (clips, liens) resteront sur le disque.")) return;
   await api(`/api/niches/${id}`, {method: "DELETE"});
   selectedNicheId = null;
-  refresh();
+  await refresh();
+  toast("niche supprimée");
 }
 async function uploadNicheClip(id) {
   const input = document.getElementById("niche-clip-file");
@@ -648,10 +750,11 @@ async function savePreset() {
   } catch (e) { flash("preset-status", e.message, true); }
 }
 async function deletePreset(id) {
-  if (!confirm("Supprimer ce preset ?")) return;
+  if (!await confirmModal("Supprimer ce preset ?")) return;
   await api(`/api/presets/${id}`, {method: "DELETE"});
   selectedPresetId = null;
-  refresh();
+  await refresh();
+  toast("preset supprimé");
 }
 
 /* --- Réglages --- */
@@ -678,12 +781,9 @@ async function saveSettings() {
   flash("set-status", "réglages enregistrés");
 }
 
-function flash(id, msg, isError) {
-  const el = document.getElementById(id);
-  el.textContent = msg;
-  el.className = isError ? "err" : "ok";
-  setTimeout(() => { el.textContent = ""; }, 5000);
-}
+/* flash(id, msg, isError) — conservé pour compat, route désormais vers un toast
+   (visible, persiste au re-render, cohérent partout). */
+function flash(id, msg, isError) { toast(msg, isError ? "err" : "ok"); }
 
 refresh();
 </script>
