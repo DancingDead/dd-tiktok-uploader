@@ -1,11 +1,14 @@
 """db — persistance SQLite de la plateforme (membres, niches, presets, vidéos)."""
 
+import json
 import re
 import sqlite3
 import sys
 from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
+
+from beatsync import load_settings, merge_settings
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -76,6 +79,38 @@ def verify_member(conn: sqlite3.Connection, name: str, password: str) -> bool:
 
 def list_members(conn: sqlite3.Connection) -> list[str]:
     return [r["name"] for r in conn.execute("SELECT name FROM members ORDER BY name")]
+
+
+def create_preset(conn: sqlite3.Connection, name: str, overrides: dict) -> int:
+    cur = conn.execute(
+        "INSERT INTO presets (name, overrides) VALUES (?, ?)",
+        (name, json.dumps(overrides, ensure_ascii=False)))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_presets(conn: sqlite3.Connection) -> list[dict]:
+    return [
+        {"id": r["id"], "name": r["name"], "overrides": json.loads(r["overrides"])}
+        for r in conn.execute("SELECT * FROM presets ORDER BY name")
+    ]
+
+
+def update_preset(conn: sqlite3.Connection, preset_id: int, name: str, overrides: dict) -> None:
+    conn.execute(
+        "UPDATE presets SET name = ?, overrides = ? WHERE id = ?",
+        (name, json.dumps(overrides, ensure_ascii=False), preset_id))
+    conn.commit()
+
+
+def delete_preset(conn: sqlite3.Connection, preset_id: int) -> None:
+    conn.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+    conn.commit()
+
+
+def effective_config(overrides: dict) -> dict:
+    """DEFAULT_CONFIG ← settings.json ← preset (ordre de la spec)."""
+    return merge_settings(load_settings(), overrides)
 
 
 def main() -> None:

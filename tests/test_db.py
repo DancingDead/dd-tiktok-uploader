@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from db import connect, slugify, add_member, list_members, verify_member
+from db import (add_member, connect, create_preset, delete_preset,
+                effective_config, list_members, list_presets, slugify,
+                update_preset, verify_member)
 
 
 @pytest.fixture
@@ -43,3 +45,24 @@ def test_member_password_is_hashed(conn):
     add_member(conn, "theo", "s3cret")
     stored = conn.execute("SELECT password_hash FROM members").fetchone()[0]
     assert "s3cret" not in stored
+
+
+def test_preset_crud(conn):
+    pid = create_preset(conn, "strobo hard", {"cut_mode": "fixed", "cut_every": 1})
+    assert list_presets(conn) == [
+        {"id": pid, "name": "strobo hard",
+         "overrides": {"cut_mode": "fixed", "cut_every": 1}}]
+    update_preset(conn, pid, "strobo", {"cut_every": 2})
+    assert list_presets(conn)[0]["name"] == "strobo"
+    assert list_presets(conn)[0]["overrides"] == {"cut_every": 2}
+    delete_preset(conn, pid)
+    assert list_presets(conn) == []
+
+
+def test_effective_config_merges_preset_over_defaults():
+    config = effective_config({"effects": {"shake": False}, "cut_every": 4,
+                               "clé_inconnue": 1})
+    assert config["cut_every"] == 4
+    assert config["effects"]["shake"] is False
+    assert config["effects"]["zoom"] is True        # défaut préservé
+    assert "clé_inconnue" not in config             # clés inconnues ignorées
