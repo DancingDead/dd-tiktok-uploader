@@ -4,6 +4,7 @@ Pipeline : analyze_audio -> load_clips -> build_edl (logique pure) -> render.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -233,31 +234,68 @@ def _char_presence(frames: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarr
     return presence, interest, dual
 
 
-def scan_clips(clips: list[dict]) -> list[dict]:
+def _scan_one(clip: dict) -> None:
+    """Scan réel d'un clip (décodage FFmpeg + détections). Mute le dict."""
+    raw = subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-i", str(clip["path"]),
+            "-vf", f"fps={SCAN_FPS},scale={SCAN_W}:{SCAN_H}",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ],
+        capture_output=True, check=True,
+    ).stdout
+    frame_size = SCAN_W * SCAN_H * 3
+    n = len(raw) // frame_size
+    frames = np.frombuffer(raw[: n * frame_size], dtype=np.uint8).reshape(n, SCAN_H, SCAN_W, 3)
+    # Couleur/mouvement sur miniatures 32x18 (moyenne par blocs de 20x20).
+    small = frames.reshape(n, SMALL_H, SCAN_H // SMALL_H, SMALL_W, SCAN_W // SMALL_W, 3) \
+                  .mean(axis=(2, 4)).astype(np.uint8)
+    classification = classify_frames(small, 1.0 / SCAN_FPS)
+    presence, interest_x, dual = _char_presence(frames)
+    classification["presence"] = presence
+    clip["intervals"] = usable_intervals(classification, clip["duration"], 1.0 / SCAN_FPS)
+    clip["interest_x"] = interest_x
+    clip["dual"] = dual
+    clip["scan_dt"] = 1.0 / SCAN_FPS
+
+
+def _scan_payload(clip: dict) -> dict:
+    return {
+        "intervals": clip["intervals"],
+        "interest_x": [float(x) for x in clip["interest_x"]],
+        "dual": [bool(d) for d in clip["dual"]],
+        "scan_dt": clip["scan_dt"],
+    }
+
+
+def _apply_scan_payload(clip: dict, payload: dict) -> None:
+    clip["intervals"] = payload["intervals"]
+    clip["interest_x"] = np.array(payload["interest_x"], dtype=float)
+    clip["dual"] = np.array(payload["dual"], dtype=bool)
+    clip["scan_dt"] = payload["scan_dt"]
+
+
+def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
     """Enrichit chaque clip de ses plages exploitables : cartes orange, noir et
-    passages statiques exclus, score de présence des personnages par plage."""
+    passages statiques exclus, score de présence des personnages par plage.
+    Avec cache par fichier (clé md5 du chemin, invalidé par mtime) quand
+    cache_dir est fourni — on ne re-décode pas 30 clips à chaque génération."""
     for clip in clips:
-        raw = subprocess.run(
-            [
-                "ffmpeg", "-v", "error", "-i", str(clip["path"]),
-                "-vf", f"fps={SCAN_FPS},scale={SCAN_W}:{SCAN_H}",
-                "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
-            ],
-            capture_output=True, check=True,
-        ).stdout
-        frame_size = SCAN_W * SCAN_H * 3
-        n = len(raw) // frame_size
-        frames = np.frombuffer(raw[: n * frame_size], dtype=np.uint8).reshape(n, SCAN_H, SCAN_W, 3)
-        # Couleur/mouvement sur miniatures 32x18 (moyenne par blocs de 20x20).
-        small = frames.reshape(n, SMALL_H, SCAN_H // SMALL_H, SMALL_W, SCAN_W // SMALL_W, 3) \
-                      .mean(axis=(2, 4)).astype(np.uint8)
-        classification = classify_frames(small, 1.0 / SCAN_FPS)
-        presence, interest_x, dual = _char_presence(frames)
-        classification["presence"] = presence
-        clip["intervals"] = usable_intervals(classification, clip["duration"], 1.0 / SCAN_FPS)
-        clip["interest_x"] = interest_x
-        clip["dual"] = dual
-        clip["scan_dt"] = 1.0 / SCAN_FPS
+        cache_path = None
+        if cache_dir is not None:
+            digest = hashlib.md5(str(clip["path"]).encode()).hexdigest()
+            cache_path = cache_dir / f"{digest}.json"
+            if cache_path.is_file():
+                cached = json.loads(cache_path.read_text())
+                if cached.get("mtime") == clip["path"].stat().st_mtime:
+                    _apply_scan_payload(clip, cached)
+                    continue
+        _scan_one(clip)
+        if cache_path is not None:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(
+                {"mtime": clip["path"].stat().st_mtime, **_scan_payload(clip)},
+                ensure_ascii=False))
     return clips
 
 
