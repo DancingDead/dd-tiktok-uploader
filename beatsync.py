@@ -34,6 +34,12 @@ DEFAULT_CONFIG = {
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
+    "subtitles": {                      # punchlines incrustées, générées par Claude
+        "enabled": False,               # désactivé par défaut
+        "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
+        "min_dur": 1.4,                 # durée min. d'affichage d'une punchline (lisibilité)
+        "model": "claude-opus-4-8",     # modèle de génération
+    },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,
@@ -573,6 +579,117 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     return edl
 
 
+# --- Punchlines incrustées (sous-titres générés) ----------------------------
+
+_CAPTION_FONTS = [
+    "/System/Library/Fonts/Supplemental/Impact.ttf",   # look motivation/edit
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+
+def _caption_font() -> str | None:
+    for path in _CAPTION_FONTS:
+        if Path(path).is_file():
+            return path
+    return None
+
+
+def _drawtext_escape(text: str) -> str:
+    """Échappe le texte pour l'option drawtext de FFmpeg (argument non shell)."""
+    out = text.replace("\\", "\\\\")
+    for ch in (":", "'", "%", ",", ";", "[", "]"):
+        out = out.replace(ch, "\\" + ch)
+    return out
+
+
+def assign_caption_slots(edl: list[dict], min_dur: float) -> int:
+    """Regroupe les segments en créneaux de sous-titre : une punchline reste
+    affichée ≥ `min_dur` (lisibilité) puis change à la coupe suivante. Annote
+    chaque entrée d'un `caption_slot` (index) ; retourne le nombre de créneaux."""
+    slot = -1
+    slot_start = 0.0
+    for entry in edl:
+        if slot < 0 or entry["timeline_start"] - slot_start >= min_dur - 1e-9:
+            slot += 1
+            slot_start = entry["timeline_start"]
+        entry["caption_slot"] = slot
+    return slot + 1
+
+
+def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+    """Appelle Claude pour générer `count` punchlines. Sortie JSON structurée.
+    Isolé pour être mocké dans les tests."""
+    import anthropic
+
+    client = anthropic.Anthropic()
+    schema = {
+        "type": "object",
+        "properties": {"punchlines": {"type": "array", "items": {"type": "string"}}},
+        "required": ["punchlines"],
+        "additionalProperties": False,
+    }
+    resp = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=("Tu écris des punchlines courtes et percutantes incrustées sur des edits "
+                "vidéo verticaux. Chaque punchline fait 2 à 6 mots, sans hashtag, sans emoji, "
+                "sans ponctuation finale, et forme une progression cohérente d'une à l'autre."),
+        messages=[{"role": "user", "content":
+                   f"Génère exactement {count} punchlines distinctes.\n"
+                   f"Style / consigne : {preprompt}\nVariation n°{seed}."}],
+        output_config={"format": {"type": "json_schema", "schema": schema}},
+    )
+    text = next(b.text for b in resp.content if b.type == "text")
+    return [str(p) for p in json.loads(text)["punchlines"]]
+
+
+def generate_punchlines(preprompt: str, count: int, seed: int,
+                        cache_dir: Path | None = None,
+                        model: str = "claude-opus-4-8") -> list[str]:
+    """Punchlines pour une vidéo. Mises en cache par (modèle, préprompt, count,
+    seed) → reproductibles à seed égal. Dégrade en [] si pas de clé / échec API
+    (l'usine ne bloque jamais sur le LLM)."""
+    if count <= 0 or not preprompt.strip():
+        return []
+    cache_path = None
+    if cache_dir is not None:
+        key = hashlib.md5(f"{model}|{preprompt}|{count}|{seed}".encode()).hexdigest()
+        cache_path = cache_dir / f"{key}.json"
+        if cache_path.is_file():
+            try:
+                return json.loads(cache_path.read_text())["punchlines"][:count]
+            except (json.JSONDecodeError, OSError, KeyError):
+                pass
+    try:
+        punchlines = _call_llm(preprompt, count, seed, model)[:count]
+    except Exception:
+        return []
+    if cache_path is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"punchlines": punchlines}, ensure_ascii=False))
+    return punchlines
+
+
+def apply_subtitles(edl: list[dict], config: dict, seed: int,
+                    cache_dir: Path | None = None) -> list[dict]:
+    """Annote l'EDL de punchlines (clé `caption` par segment) si les sous-titres
+    sont activés. Segments d'un même créneau partagent la punchline ; texte vide
+    si la génération échoue (rendu sans sous-titres, jamais de plantage)."""
+    sub = config.get("subtitles") or {}
+    if not sub.get("enabled"):
+        return edl
+    n = assign_caption_slots(edl, float(sub.get("min_dur", 1.4)))
+    lines = generate_punchlines(sub.get("preprompt", ""), n, seed, cache_dir,
+                                sub.get("model", "claude-opus-4-8"))
+    for entry in edl:
+        i = entry.get("caption_slot", 0)
+        entry["caption"] = lines[i] if i < len(lines) else ""
+    return edl
+
+
 def _run_ffmpeg(args: list[str]) -> None:
     result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args],
                             capture_output=True, text=True)
@@ -614,6 +731,15 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post.append("rgbashift=rh=-14:gv=10:bh=14:edge=smear:enable='lt(n,2)'")
     elif "rgb" in effects:
         post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
+    # Punchline incrustée (après les accents pour rester nette), bas-centrée
+    cap = entry.get("caption")
+    font = _caption_font()
+    if cap and font:
+        post.append(
+            f"drawtext=fontfile={font}:text={_drawtext_escape(cap)}"
+            ":fontsize=64:fontcolor=white:borderw=5:bordercolor=black@0.9"
+            ":x=(w-text_w)/2:y=h*0.70"
+        )
     post.append("setsar=1,format=yuv420p")
     post.append("tpad=stop_mode=clone:stop_duration=1")
     post_chain = ",".join(post)
@@ -720,6 +846,8 @@ def main() -> None:
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
+    parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,
+                        help='génère des punchlines incrustées via Claude (ex. "punchlines motivation gym, français, 5 mots max"). Requiert ANTHROPIC_API_KEY.')
     args = parser.parse_args()
 
     if not Path(args.track).is_file():
@@ -758,6 +886,14 @@ def main() -> None:
     n_fx = sum(bool(e["effects"]) for e in edl)
     print(f"  EDL : {len(edl)} segments sur {config['end'] - config['start']:.1f} s "
           f"(seed {args.seed}, {n_fx} segments avec effets)")
+
+    if args.subtitles:
+        config["subtitles"] = {**config["subtitles"], "enabled": True, "preprompt": args.subtitles}
+        print("  génération des punchlines (Claude)…")
+        apply_subtitles(edl, config, seed=args.seed, cache_dir=Path("data/cache/subtitles"))
+        n_cap = len({e.get("caption") for e in edl if e.get("caption")})
+        print(f"  {n_cap} punchline(s) distincte(s)" if n_cap
+              else "  aucune punchline (pas de clé API ? rendu sans texte)")
 
     print("Rendu FFmpeg…")
     render(edl, Path(args.track), Path(args.output), config)

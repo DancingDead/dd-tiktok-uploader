@@ -3,6 +3,7 @@ librosa>=0.11.0
 numpy>=2.4
 yt-dlp>=2026.6.9
 opencv-python-headless>=4.10,<5
+anthropic>=0.40           # génération des punchlines incrustées (subtitles)
 
 # Tests
 pytest>=8.0
