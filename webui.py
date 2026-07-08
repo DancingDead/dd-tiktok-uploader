@@ -150,6 +150,8 @@ def create_app(root: Path | None = None):
     def index():
         return render_template("index.html")
 
+    VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+
     @app.get("/api/state")
     def state():
         tracks_dir = paths["tracks"]
@@ -204,6 +206,15 @@ def create_app(root: Path | None = None):
             presets = dbmod.list_presets(conn)
         finally:
             conn.close()
+
+        for niche in niches:
+            clips_dir = dbmod.niche_clips_dir(paths["data"], niche["slug"])
+            niche["clips"] = sorted(
+                ({"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 1)}
+                 for p in clips_dir.glob("*") if p.suffix.lower() in VIDEO_EXTS),
+                key=lambda c: c["name"]) if clips_dir.is_dir() else []
+            links = dbmod.niche_links_path(paths["data"], niche["slug"])
+            niche["links"] = links.read_text() if links.is_file() else ""
 
         return jsonify(
             {
@@ -295,6 +306,121 @@ def create_app(root: Path | None = None):
         with _jobs_lock:
             job = _jobs.get(job_id)
             return (jsonify(dict(job)), 200) if job else (jsonify({"error": "job inconnu"}), 404)
+
+    @app.post("/api/niches")
+    def create_niche_ep():
+        data = request.json or {}
+        conn = get_conn()
+        try:
+            nid = dbmod.create_niche(
+                conn, paths["data"], data["name"],
+                owner=data.get("owner", session["member"]),
+                cadence=int(data.get("cadence", 1)),
+                caption_template=data.get("caption_template", "{title}"),
+                hashtags=data.get("hashtags", []),
+                preset_ids=data.get("preset_ids", []),
+                subtitles=data.get("subtitles", {}))
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+        finally:
+            conn.close()
+        return jsonify({"id": nid})
+
+    @app.patch("/api/niches/<int:niche_id>")
+    def update_niche_ep(niche_id):
+        conn = get_conn()
+        try:
+            dbmod.update_niche(conn, niche_id, **(request.json or {}))
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.delete("/api/niches/<int:niche_id>")
+    def delete_niche_ep(niche_id):
+        conn = get_conn()
+        try:
+            dbmod.delete_niche(conn, niche_id)   # fichiers conservés sur disque
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    def _niche_or_404(niche_id):
+        conn = get_conn()
+        try:
+            niche = dbmod.get_niche(conn, niche_id)
+        finally:
+            conn.close()
+        return niche
+
+    @app.post("/api/niches/<int:niche_id>/clips")
+    def upload_niche_clip(niche_id):
+        niche = _niche_or_404(niche_id)
+        if niche is None:
+            return jsonify({"error": "niche inconnue"}), 404
+        file = request.files["file"]
+        name = Path(file.filename).name
+        if Path(name).suffix.lower() not in VIDEO_EXTS:
+            return jsonify({"error": f"format non supporté : {name}"}), 400
+        target = dbmod.niche_clips_dir(paths["data"], niche["slug"])
+        target.mkdir(parents=True, exist_ok=True)
+        file.save(target / name)
+        return jsonify({"ok": True, "name": name})
+
+    @app.post("/api/niches/<int:niche_id>/links")
+    def save_niche_links(niche_id):
+        niche = _niche_or_404(niche_id)
+        if niche is None:
+            return jsonify({"error": "niche inconnue"}), 404
+        links = dbmod.niche_links_path(paths["data"], niche["slug"])
+        links.parent.mkdir(parents=True, exist_ok=True)
+        links.write_text(request.json["text"])
+        return jsonify({"ok": True})
+
+    @app.post("/api/niches/<int:niche_id>/download")
+    def download_niche_clips(niche_id):
+        niche = _niche_or_404(niche_id)
+        if niche is None:
+            return jsonify({"error": "niche inconnue"}), 404
+        links = dbmod.niche_links_path(paths["data"], niche["slug"])
+        clips = dbmod.niche_clips_dir(paths["data"], niche["slug"])
+        try:
+            job_id = start_job(f"clips-{niche['slug']}",
+                               [sys.executable, "fetch_tracks.py", str(links),
+                                "--video", "--dest", str(clips)])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"job_id": job_id})
+
+    @app.post("/api/presets")
+    def create_preset_ep():
+        data = request.json or {}
+        conn = get_conn()
+        try:
+            pid = dbmod.create_preset(conn, data["name"], data.get("overrides", {}))
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 400
+        finally:
+            conn.close()
+        return jsonify({"id": pid})
+
+    @app.patch("/api/presets/<int:preset_id>")
+    def update_preset_ep(preset_id):
+        data = request.json or {}
+        conn = get_conn()
+        try:
+            dbmod.update_preset(conn, preset_id, data["name"], data.get("overrides", {}))
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.delete("/api/presets/<int:preset_id>")
+    def delete_preset_ep(preset_id):
+        conn = get_conn()
+        try:
+            dbmod.delete_preset(conn, preset_id)
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
 
     return app
 
