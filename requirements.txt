@@ -6,3 +6,4 @@ opencv-python-headless>=4.10,<5
 
 # Tests
 pytest>=8.0
+werkzeug>=3.0

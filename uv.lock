@@ -283,6 +283,7 @@ dependencies = [
     { name = "librosa" },
     { name = "numpy" },
     { name = "opencv-python-headless" },
+    { name = "werkzeug" },
     { name = "yt-dlp" },
 ]
 
@@ -297,6 +298,7 @@ requires-dist = [
     { name = "librosa", specifier = ">=0.11.0" },
     { name = "numpy", specifier = ">=2.4.6" },
     { name = "opencv-python-headless", specifier = ">=4.10,<5" },
+    { name = "werkzeug", specifier = ">=3.1.8" },
     { name = "yt-dlp", specifier = ">=2026.6.9" },
 ]
 
