@@ -32,10 +32,25 @@
 </style>
 </head>
 <body>
+<div id="login" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:10;align-items:center;justify-content:center">
+  <div class="card" style="width:280px">
+    <h2>Dancing Dead</h2>
+    <input id="l-name" placeholder="membre" style="width:100%;margin:.3rem 0">
+    <input id="l-pass" type="password" placeholder="mot de passe" style="width:100%;margin:.3rem 0" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="act" style="width:100%" onclick="doLogin()">Entrer</button>
+    <div id="l-status" class="err"></div>
+  </div>
+</div>
 <nav>
   <h1>Dancing Dead</h1>
+  <div class="muted" style="padding:.3rem 1.2rem .8rem;font-size:.8rem;border-bottom:1px solid var(--line);margin-bottom:.5rem">
+    <span id="nav-member"></span><br>
+    <a href="#" onclick="doLogout();return false" style="color:var(--red)">Déconnexion</a>
+  </div>
   <button data-tab="liens" class="active">Liens YouTube</button>
   <button data-tab="tracks">Tracks</button>
+  <button data-tab="niches">Niches</button>
+  <button data-tab="presets">Presets</button>
   <button data-tab="comptes">Comptes TikTok</button>
   <button data-tab="plan">Plan &amp; file</button>
   <button data-tab="reglages">Réglages montage</button>
@@ -62,6 +77,26 @@
     <span id="track-status" class="muted"></span>
   </div>
   <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="tracks-body"></tbody></table>
+</section>
+
+<section id="niches">
+  <h2>Niches</h2>
+  <table><thead><tr><th>Nom</th><th>Owner</th><th>Cadence</th><th>Clips</th></tr></thead>
+  <tbody id="niches-body"></tbody></table>
+  <div class="row">
+    <button class="sec" onclick="addNiche()">+ Nouvelle niche</button>
+    <span id="niches-status" class="muted"></span>
+  </div>
+  <div id="niche-detail"></div>
+</section>
+
+<section id="presets">
+  <h2>Presets de montage</h2>
+  <table><thead><tr><th>Nom</th></tr></thead><tbody id="presets-body"></tbody></table>
+  <div class="row">
+    <button class="sec" onclick="addPreset()">+ Nouveau preset</button>
+  </div>
+  <div id="preset-detail"></div>
 </section>
 
 <section id="comptes">
@@ -152,21 +187,43 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const data = await r.json().catch(() => ({}));
+  if (r.status === 401) {
+    document.getElementById("login").style.display = "flex";
+    throw new Error(data.error || "non connecté");
+  }
   if (!r.ok) throw new Error(data.error || r.statusText);
   return data;
 }
 const j = body => ({method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+/* --- Login --- */
+const gv = id => document.getElementById(id).value;
+async function doLogin() {
+  try {
+    await api("/api/login", j({name: gv("l-name"), password: gv("l-pass")}));
+    document.getElementById("l-status").textContent = "";
+    document.getElementById("login").style.display = "none";
+    refresh();
+  } catch (e) { document.getElementById("l-status").textContent = e.message; }
+}
+async function doLogout() {
+  await api("/api/logout", {method: "POST"});
+  location.reload();
+}
+
 async function refresh() {
-  STATE = await api("/api/state");
+  let data;
+  try { data = await api("/api/state"); } catch (e) { return; }
+  STATE = data;
+  document.getElementById("nav-member").textContent = STATE.member;
   document.getElementById("links").value = STATE.links;
   document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
     `<tr><td>${esc(t.name)}</td><td>${t.size_mb} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
   document.getElementById("accounts-body").innerHTML = STATE.accounts.map(a =>
     `<tr><td>${esc(a.display_name)}</td><td class=muted>${esc(a.open_id)}</td><td class=muted>${esc(a.expires_at).slice(0,16)}</td></tr>`
   ).join("") || "<tr><td colspan=3 class=muted>aucun compte connecté</td></tr>";
-  renderPlan(); renderQueue(); renderSettings();
+  renderPlan(); renderQueue(); renderSettings(); renderNiches(); renderPresets();
 }
 
 /* --- Plan --- */
@@ -269,6 +326,212 @@ async function uploadTrack() {
     await api("/api/tracks", {method: "POST", body: form});
     flash("track-status", "uploadé ✓"); refresh();
   } catch (e) { flash("track-status", e.message, true); }
+}
+
+/* --- Niches --- */
+let selectedNicheId = null;
+
+function renderNiches() {
+  const body = document.getElementById("niches-body");
+  body.innerHTML = STATE.niches.map(n =>
+    `<tr style="cursor:pointer${n.id === selectedNicheId ? ";background:#1f1f27" : ""}" onclick="selectNiche(${n.id})">` +
+    `<td>${esc(n.name)}</td><td class=muted>${esc(n.owner)}</td><td>${n.cadence}</td><td>${n.clips.length}</td></tr>`
+  ).join("") || "<tr><td colspan=4 class=muted>aucune niche — crée-en une</td></tr>";
+  renderNicheDetail();
+}
+function selectNiche(id) {
+  selectedNicheId = id;
+  renderNiches();
+}
+async function addNiche() {
+  const name = prompt("Nom de la niche :");
+  if (!name) return;
+  try {
+    const {id} = await api("/api/niches", j({name}));
+    await refresh();
+    selectNiche(id);
+  } catch (e) { flash("niches-status", e.message, true); }
+}
+function renderNicheDetail() {
+  const el = document.getElementById("niche-detail");
+  const n = STATE.niches.find(x => x.id === selectedNicheId);
+  if (!n) { el.innerHTML = ""; return; }
+  const sub = n.subtitles || {};
+  const presetChecks = STATE.presets.map(p =>
+    `<label class="chk"><input type="checkbox" data-preset="${p.id}" ${(n.preset_ids || []).includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`
+  ).join("") || "<span class=muted>aucun preset — crée-en un dans l'onglet Presets</span>";
+  el.innerHTML = `
+    <div class="card">
+      <b>${esc(n.name)}</b> <span class="pill">${esc(n.slug)}</span>
+      <div class="row">Cadence <input id="n-cadence" type="number" min="1" value="${n.cadence}" style="width:70px"> vidéos / jour</div>
+      <div class="row">Légende <input id="n-caption" style="flex:1" value="${esc(n.caption_template)}"></div>
+      <div class="row">Hashtags <input id="n-hashtags" style="flex:1" value="${esc((n.hashtags || []).join(', '))}" placeholder="hardstyle, anime, edit"></div>
+      <div><b>Presets liés</b><br>${presetChecks}</div>
+      <div class="row"><label class="chk"><input type="checkbox" id="n-sub-enabled" ${sub.enabled ? "checked" : ""}> Sous-titres générés (pré-prompt)</label></div>
+      <textarea id="n-sub-preprompt" style="min-height:80px" placeholder="pré-prompt pour la génération des sous-titres">${esc(sub.preprompt || "")}</textarea>
+      <div class="row">
+        <button class="act" onclick="saveNiche(${n.id})">Enregistrer</button>
+        <button class="sec" onclick="deleteNiche(${n.id})">Supprimer la niche</button>
+        <span id="niche-status" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <b>Clips</b>
+      <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody>
+        ${n.clips.map(c => `<tr><td>${esc(c.name)}</td><td>${c.size_mb} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucun clip</td></tr>"}
+      </tbody></table>
+      <div class="row">
+        <input type="file" id="niche-clip-file" accept=".mp4,.mov,.m4v,.mkv,.webm,.avi">
+        <button class="act" onclick="uploadNicheClip(${n.id})">Uploader</button>
+        <span id="niche-clip-status" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <b>Liens YouTube (source des clips)</b>
+      <p class="muted">Un lien par ligne (vidéo ou playlist). Les vidéos arrivent dans la banque de clips de la niche.</p>
+      <textarea id="niche-links" style="min-height:100px">${esc(n.links || "")}</textarea>
+      <div class="row">
+        <button class="act" onclick="downloadNicheClips(${n.id})">Télécharger les clips</button>
+        <span id="niche-links-status" class="muted"></span>
+      </div>
+      <div id="niche-dl-log" class="log" style="display:none"></div>
+    </div>
+  `;
+}
+async function saveNiche(id) {
+  const presetIds = [...document.querySelectorAll("#niche-detail [data-preset]")]
+    .filter(c => c.checked).map(c => +c.dataset.preset);
+  const body = {
+    cadence: +document.getElementById("n-cadence").value,
+    caption_template: document.getElementById("n-caption").value,
+    hashtags: document.getElementById("n-hashtags").value.split(",").map(s => s.trim()).filter(Boolean),
+    preset_ids: presetIds,
+    subtitles: {enabled: document.getElementById("n-sub-enabled").checked,
+                preprompt: document.getElementById("n-sub-preprompt").value},
+  };
+  try {
+    await api(`/api/niches/${id}`, {...j(body), method: "PATCH"});
+    await refresh();
+    flash("niche-status", "enregistré ✓");
+  } catch (e) { flash("niche-status", e.message, true); }
+}
+async function deleteNiche(id) {
+  if (!confirm("Supprimer cette niche ? Les fichiers (clips, liens) resteront sur le disque.")) return;
+  await api(`/api/niches/${id}`, {method: "DELETE"});
+  selectedNicheId = null;
+  refresh();
+}
+async function uploadNicheClip(id) {
+  const input = document.getElementById("niche-clip-file");
+  if (!input.files.length) return flash("niche-clip-status", "choisis un fichier", true);
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  try {
+    await api(`/api/niches/${id}/clips`, {method: "POST", body: form});
+    await refresh();
+    flash("niche-clip-status", "uploadé ✓");
+  } catch (e) { flash("niche-clip-status", e.message, true); }
+}
+async function downloadNicheClips(id) {
+  try {
+    await api(`/api/niches/${id}/links`, j({text: document.getElementById("niche-links").value}));
+    const {job_id} = await api(`/api/niches/${id}/download`, j({}));
+    followJob(job_id, "niche-dl-log", "niche-links-status");
+  } catch (e) { flash("niche-links-status", e.message, true); }
+}
+
+/* --- Presets --- */
+let selectedPresetId = null; // null = nouveau preset en cours d'édition
+
+function renderPresets() {
+  const body = document.getElementById("presets-body");
+  body.innerHTML = STATE.presets.map(p =>
+    `<tr style="cursor:pointer${p.id === selectedPresetId ? ";background:#1f1f27" : ""}" onclick="selectPreset(${p.id})"><td>${esc(p.name)}</td></tr>`
+  ).join("") || "<tr><td class=muted>aucun preset</td></tr>";
+  renderPresetDetail();
+}
+function selectPreset(id) {
+  selectedPresetId = id;
+  renderPresets();
+}
+function addPreset() {
+  selectedPresetId = null;
+  renderPresets();
+}
+function renderPresetDetail() {
+  const el = document.getElementById("preset-detail");
+  const isNew = selectedPresetId === null;
+  const p = isNew ? null : STATE.presets.find(x => x.id === selectedPresetId);
+  if (!isNew && !p) { el.innerHTML = ""; return; }
+  const name = p ? p.name : "";
+  const o = p ? (p.overrides || {}) : {};
+  const eff = o.effects || {}, acc = o.accents || {};
+  el.innerHTML = `
+    <div class="card">
+      <div class="row"><b>${isNew ? "Nouveau preset" : "Éditer"}</b></div>
+      <div class="row">Nom <input id="p-name" value="${esc(name)}" style="flex:1"></div>
+      <div class="card"><b>Effets</b><br>
+        <label class="chk"><input type="checkbox" id="p-zoom" ${eff.zoom ? "checked" : ""}> Punch-zoom</label>
+        <label class="chk"><input type="checkbox" id="p-flash" ${eff.flash ? "checked" : ""}> Flash blanc</label>
+        <label class="chk"><input type="checkbox" id="p-shake" ${eff.shake ? "checked" : ""}> Shake</label>
+        <label class="chk"><input type="checkbox" id="p-speed" ${eff.speed ? "checked" : ""}> Slow-mo avant drop</label>
+      </div>
+      <div class="card"><b>Accents</b><br>
+        <label class="chk"><input type="checkbox" id="p-rgb" ${acc.rgb ? "checked" : ""}> RGB split à l'impact</label>
+        <label class="chk"><input type="checkbox" id="p-glitch" ${acc.glitch ? "checked" : ""}> Micro-glitch</label>
+      </div>
+      <div class="card"><b>Cadrage &amp; contenu</b><br>
+        <label class="chk"><input type="checkbox" id="p-delogo" ${o.delogo ? "checked" : ""}> Gommer le logo (delogo)</label>
+        <label class="chk"><input type="checkbox" id="p-chrono" ${o.chrono ? "checked" : ""}> Chronologie de l'histoire</label>
+        <div class="row">Présence personnages min <input id="p-presence" type="number" step="0.05" min="0" max="1" style="width:80px" value="${o.min_presence ?? 0}"></div>
+      </div>
+      <div class="card"><b>Rythme</b><br>
+        <div class="row">
+          Mode <select id="p-cutmode">
+            <option value="energy" ${o.cut_mode !== "fixed" ? "selected" : ""}>énergie (auto)</option>
+            <option value="fixed" ${o.cut_mode === "fixed" ? "selected" : ""}>fixe</option>
+          </select>
+          &nbsp;Coupe tous les <input id="p-cutevery" type="number" min="1" style="width:60px" value="${o.cut_every ?? 2}"> beats (mode fixe)
+        </div>
+        <div class="row">Buildup <input id="p-buildup" type="number" style="width:70px" value="${o.buildup ?? 10}"> s
+          &nbsp;Strobo après drop <input id="p-strobe" type="number" style="width:70px" value="${o.strobe_beats ?? 16}"> beats</div>
+      </div>
+      <div class="row">
+        <button class="act" onclick="savePreset()">Enregistrer</button>
+        ${isNew ? "" : `<button class="sec" onclick="deletePreset(${selectedPresetId})">Supprimer</button>`}
+        <span id="preset-status" class="muted"></span>
+      </div>
+    </div>
+  `;
+}
+async function savePreset() {
+  const name = document.getElementById("p-name").value.trim();
+  if (!name) return flash("preset-status", "nom requis", true);
+  const chk = id => document.getElementById(id).checked;
+  const num = id => +document.getElementById(id).value;
+  const overrides = {
+    effects: {zoom: chk("p-zoom"), flash: chk("p-flash"), shake: chk("p-shake"), speed: chk("p-speed")},
+    accents: {rgb: chk("p-rgb"), glitch: chk("p-glitch")},
+    delogo: chk("p-delogo"), chrono: chk("p-chrono"),
+    min_presence: num("p-presence"), cut_mode: document.getElementById("p-cutmode").value,
+    cut_every: num("p-cutevery"), buildup: num("p-buildup"), strobe_beats: num("p-strobe"),
+  };
+  try {
+    if (selectedPresetId === null) {
+      const {id} = await api("/api/presets", j({name, overrides}));
+      selectedPresetId = id;
+    } else {
+      await api(`/api/presets/${selectedPresetId}`, {...j({name, overrides}), method: "PATCH"});
+    }
+    await refresh();
+    flash("preset-status", "enregistré ✓");
+  } catch (e) { flash("preset-status", e.message, true); }
+}
+async function deletePreset(id) {
+  if (!confirm("Supprimer ce preset ?")) return;
+  await api(`/api/presets/${id}`, {method: "DELETE"});
+  selectedPresetId = null;
+  refresh();
 }
 
 /* --- Comptes --- */
