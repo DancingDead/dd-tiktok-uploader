@@ -286,10 +286,15 @@ def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
             digest = hashlib.md5(str(clip["path"]).encode()).hexdigest()
             cache_path = cache_dir / f"{digest}.json"
             if cache_path.is_file():
-                cached = json.loads(cache_path.read_text())
-                if cached.get("mtime") == clip["path"].stat().st_mtime:
-                    _apply_scan_payload(clip, cached)
-                    continue
+                # Cache tronqué/corrompu (process tué en pleine écriture) :
+                # traité comme un miss, on re-scanne et on réécrit le cache.
+                try:
+                    cached = json.loads(cache_path.read_text())
+                    if cached.get("mtime") == clip["path"].stat().st_mtime:
+                        _apply_scan_payload(clip, cached)
+                        continue
+                except (json.JSONDecodeError, OSError, KeyError):
+                    pass
         _scan_one(clip)
         if cache_path is not None:
             cache_dir.mkdir(parents=True, exist_ok=True)
