@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import sys
+import unicodedata
 from pathlib import Path
 
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -57,6 +58,7 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def slugify(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
@@ -105,6 +107,73 @@ def update_preset(conn: sqlite3.Connection, preset_id: int, name: str, overrides
 
 def delete_preset(conn: sqlite3.Connection, preset_id: int) -> None:
     conn.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+    conn.commit()
+
+
+NICHE_JSON_FIELDS = {"hashtags": "[]", "preset_ids": "[]", "subtitles": "{}"}
+
+
+def niche_clips_dir(data_root: Path, slug: str) -> Path:
+    return data_root / "niches" / slug / "clips"
+
+
+def niche_links_path(data_root: Path, slug: str) -> Path:
+    return data_root / "niches" / slug / "links.txt"
+
+
+def _niche_row_to_dict(row: sqlite3.Row) -> dict:
+    niche = dict(row)
+    for field in NICHE_JSON_FIELDS:
+        niche[field] = json.loads(niche[field])
+    return niche
+
+
+def create_niche(conn: sqlite3.Connection, data_root: Path, name: str, *,
+                 owner: str = "", cadence: int = 1,
+                 caption_template: str = "{title}",
+                 hashtags: list | None = None, preset_ids: list | None = None,
+                 subtitles: dict | None = None) -> int:
+    slug = slugify(name)
+    cur = conn.execute(
+        "INSERT INTO niches (name, slug, owner, cadence, caption_template,"
+        " hashtags, preset_ids, subtitles) VALUES (?,?,?,?,?,?,?,?)",
+        (name, slug, owner, cadence, caption_template,
+         json.dumps(hashtags or [], ensure_ascii=False),
+         json.dumps(preset_ids or []),
+         json.dumps(subtitles or {}, ensure_ascii=False)))
+    conn.commit()
+    niche_clips_dir(data_root, slug).mkdir(parents=True, exist_ok=True)
+    return cur.lastrowid
+
+
+def get_niche(conn: sqlite3.Connection, niche_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM niches WHERE id = ?", (niche_id,)).fetchone()
+    return _niche_row_to_dict(row) if row else None
+
+
+def list_niches(conn: sqlite3.Connection) -> list[dict]:
+    return [_niche_row_to_dict(r)
+            for r in conn.execute("SELECT * FROM niches ORDER BY name")]
+
+
+def update_niche(conn: sqlite3.Connection, niche_id: int, **fields) -> None:
+    allowed = {"name", "owner", "cadence", "caption_template",
+               "hashtags", "preset_ids", "subtitles"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    assignments, values = [], []
+    for key, value in updates.items():
+        assignments.append(f"{key} = ?")
+        values.append(json.dumps(value, ensure_ascii=False)
+                      if key in NICHE_JSON_FIELDS else value)
+    conn.execute(f"UPDATE niches SET {', '.join(assignments)} WHERE id = ?",
+                 (*values, niche_id))
+    conn.commit()
+
+
+def delete_niche(conn: sqlite3.Connection, niche_id: int) -> None:
+    conn.execute("DELETE FROM niches WHERE id = ?", (niche_id,))
     conn.commit()
 
 

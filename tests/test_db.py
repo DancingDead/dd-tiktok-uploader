@@ -3,9 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from db import (add_member, connect, create_preset, delete_preset,
-                effective_config, list_members, list_presets, slugify,
-                update_preset, verify_member)
+from db import (add_member, connect, create_niche, create_preset,
+                delete_niche, delete_preset, effective_config, get_niche,
+                list_members, list_niches, list_presets, niche_clips_dir,
+                niche_links_path, slugify, update_niche, update_preset,
+                verify_member)
 
 
 @pytest.fixture
@@ -31,6 +33,7 @@ def test_connect_enforces_foreign_keys(conn):
 def test_slugify():
     assert slugify("Naruto Edits — Sombre") == "naruto-edits-sombre"
     assert slugify("  Gym / Phonk!  ") == "gym-phonk"
+    assert slugify("Édits Café Été") == "edits-cafe-ete"
 
 
 def test_member_roundtrip(conn):
@@ -66,3 +69,31 @@ def test_effective_config_merges_preset_over_defaults():
     assert config["effects"]["shake"] is False
     assert config["effects"]["zoom"] is True        # défaut préservé
     assert "clé_inconnue" not in config             # clés inconnues ignorées
+
+
+def test_niche_crud_and_folders(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Naruto Edits", owner="theo", cadence=2,
+                       hashtags=["naruto", "edit"], preset_ids=[1],
+                       subtitles={"enabled": True, "preprompt": "sombre"})
+    niche = get_niche(conn, nid)
+    assert niche["slug"] == "naruto-edits"
+    assert niche["hashtags"] == ["naruto", "edit"]
+    assert niche["preset_ids"] == [1]
+    assert niche["subtitles"]["enabled"] is True
+    assert niche_clips_dir(tmp_path, "naruto-edits").is_dir()
+
+    update_niche(conn, nid, cadence=3, hashtags=["anime"])
+    assert get_niche(conn, nid)["cadence"] == 3
+    assert get_niche(conn, nid)["hashtags"] == ["anime"]
+
+    assert [n["slug"] for n in list_niches(conn)] == ["naruto-edits"]
+    delete_niche(conn, nid)
+    assert get_niche(conn, nid) is None
+
+
+def test_niche_slug_collision_rejected(conn, tmp_path):
+    create_niche(conn, tmp_path, "Gym")
+    import sqlite3 as sq
+    import pytest as pt
+    with pt.raises(sq.IntegrityError):
+        create_niche(conn, tmp_path, "GYM !")   # même slug "gym"
