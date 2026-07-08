@@ -4,10 +4,10 @@ from pathlib import Path
 import pytest
 
 from db import (add_member, connect, create_niche, create_preset,
-                delete_niche, delete_preset, effective_config, get_niche,
-                list_members, list_niches, list_presets, niche_clips_dir,
-                niche_links_path, slugify, update_niche, update_preset,
-                verify_member)
+                create_video, delete_niche, delete_preset, effective_config,
+                get_niche, list_members, list_niches, list_presets,
+                list_videos, niche_clips_dir, niche_links_path, set_video_status,
+                slugify, update_niche, update_preset, verify_member)
 
 
 @pytest.fixture
@@ -99,3 +99,22 @@ def test_niche_slug_collision_rejected(conn, tmp_path):
     import pytest as pt
     with pt.raises(sq.IntegrityError):
         create_niche(conn, tmp_path, "GYM !")   # même slug "gym"
+
+
+def test_video_lifecycle(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Test")
+    vid = create_video(conn, niche_id=nid, track="tracks/x.wav", seed=42,
+                       file="data/niches/test/videos/v.mp4",
+                       caption="X 🔥", subtitles={"hook": "..."},
+                       created_at="2026-07-08T12:00:00")
+    videos = list_videos(conn)
+    assert videos[0]["status"] == "proposed"
+    assert videos[0]["subtitles"] == {"hook": "..."}
+
+    set_video_status(conn, vid, "approved")
+    assert list_videos(conn, status="approved")[0]["id"] == vid
+    assert list_videos(conn, status="rejected") == []
+    assert list_videos(conn, niche_id=nid + 1) == []
+
+    set_video_status(conn, vid, "failed", error="ffmpeg a explosé")
+    assert list_videos(conn)[0]["error"] == "ffmpeg a explosé"

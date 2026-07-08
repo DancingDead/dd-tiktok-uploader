@@ -177,6 +177,43 @@ def delete_niche(conn: sqlite3.Connection, niche_id: int) -> None:
     conn.commit()
 
 
+def create_video(conn: sqlite3.Connection, *, niche_id: int, track: str,
+                 seed: int, file: str, created_at: str, preset_id: int | None = None,
+                 caption: str = "", subtitles: dict | None = None) -> int:
+    cur = conn.execute(
+        "INSERT INTO videos (niche_id, preset_id, track, seed, file, caption,"
+        " subtitles, created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (niche_id, preset_id, track, seed, file, caption,
+         json.dumps(subtitles or {}, ensure_ascii=False), created_at))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_videos(conn: sqlite3.Connection, status: str | None = None,
+                niche_id: int | None = None) -> list[dict]:
+    query, params = "SELECT * FROM videos WHERE 1=1", []
+    if status is not None:
+        query += " AND status = ?"
+        params.append(status)
+    if niche_id is not None:
+        query += " AND niche_id = ?"
+        params.append(niche_id)
+    rows = conn.execute(query + " ORDER BY created_at DESC", params)
+    videos = []
+    for row in rows:
+        video = dict(row)
+        video["subtitles"] = json.loads(video["subtitles"])
+        videos.append(video)
+    return videos
+
+
+def set_video_status(conn: sqlite3.Connection, video_id: int, status: str,
+                     error: str | None = None) -> None:
+    conn.execute("UPDATE videos SET status = ?, error = ? WHERE id = ?",
+                 (status, error, video_id))
+    conn.commit()
+
+
 def effective_config(overrides: dict) -> dict:
     """DEFAULT_CONFIG ← settings.json ← preset (ordre de la spec)."""
     return merge_settings(load_settings(), overrides)
