@@ -335,7 +335,7 @@ function renderNiches() {
   const body = document.getElementById("niches-body");
   body.innerHTML = STATE.niches.map(n =>
     `<tr style="cursor:pointer${n.id === selectedNicheId ? ";background:#1f1f27" : ""}" onclick="selectNiche(${n.id})">` +
-    `<td>${esc(n.name)}</td><td class=muted>${esc(n.owner)}</td><td>${n.cadence}</td><td>${n.clips.length}</td></tr>`
+    `<td>${esc(n.name)}</td><td class=muted>${esc(n.owner)}</td><td>${esc(n.cadence)}</td><td>${n.clips.length}</td></tr>`
   ).join("") || "<tr><td colspan=4 class=muted>aucune niche — crée-en une</td></tr>";
   renderNicheDetail();
 }
@@ -363,7 +363,7 @@ function renderNicheDetail() {
   el.innerHTML = `
     <div class="card">
       <b>${esc(n.name)}</b> <span class="pill">${esc(n.slug)}</span>
-      <div class="row">Cadence <input id="n-cadence" type="number" min="1" value="${n.cadence}" style="width:70px"> vidéos / jour</div>
+      <div class="row">Cadence <input id="n-cadence" type="number" min="1" value="${esc(n.cadence)}" style="width:70px"> vidéos / jour</div>
       <div class="row">Légende <input id="n-caption" style="flex:1" value="${esc(n.caption_template)}"></div>
       <div class="row">Hashtags <input id="n-hashtags" style="flex:1" value="${esc((n.hashtags || []).join(', '))}" placeholder="hardstyle, anime, edit"></div>
       <div><b>Presets liés</b><br>${presetChecks}</div>
@@ -378,7 +378,7 @@ function renderNicheDetail() {
     <div class="card">
       <b>Clips</b>
       <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody>
-        ${n.clips.map(c => `<tr><td>${esc(c.name)}</td><td>${c.size_mb} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucun clip</td></tr>"}
+        ${n.clips.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.size_mb)} Mo</td></tr>`).join("") || "<tr><td colspan=2 class=muted>aucun clip</td></tr>"}
       </tbody></table>
       <div class="row">
         <input type="file" id="niche-clip-file" accept=".mp4,.mov,.m4v,.mkv,.webm,.avi">
@@ -483,7 +483,7 @@ function renderPresetDetail() {
       <div class="card"><b>Cadrage &amp; contenu</b><br>
         <label class="chk"><input type="checkbox" id="p-delogo" ${o.delogo ? "checked" : ""}> Gommer le logo (delogo)</label>
         <label class="chk"><input type="checkbox" id="p-chrono" ${o.chrono ? "checked" : ""}> Chronologie de l'histoire</label>
-        <div class="row">Présence personnages min <input id="p-presence" type="number" step="0.05" min="0" max="1" style="width:80px" value="${o.min_presence ?? 0}"></div>
+        <div class="row">Présence personnages min <input id="p-presence" type="number" step="0.05" min="0" max="1" style="width:80px" value="${esc(o.min_presence ?? 0)}"></div>
       </div>
       <div class="card"><b>Rythme</b><br>
         <div class="row">
@@ -491,10 +491,10 @@ function renderPresetDetail() {
             <option value="energy" ${o.cut_mode !== "fixed" ? "selected" : ""}>énergie (auto)</option>
             <option value="fixed" ${o.cut_mode === "fixed" ? "selected" : ""}>fixe</option>
           </select>
-          &nbsp;Coupe tous les <input id="p-cutevery" type="number" min="1" style="width:60px" value="${o.cut_every ?? 2}"> beats (mode fixe)
+          &nbsp;Coupe tous les <input id="p-cutevery" type="number" min="1" style="width:60px" value="${esc(o.cut_every ?? 2)}"> beats (mode fixe)
         </div>
-        <div class="row">Buildup <input id="p-buildup" type="number" style="width:70px" value="${o.buildup ?? 10}"> s
-          &nbsp;Strobo après drop <input id="p-strobe" type="number" style="width:70px" value="${o.strobe_beats ?? 16}"> beats</div>
+        <div class="row">Buildup <input id="p-buildup" type="number" style="width:70px" value="${esc(o.buildup ?? 10)}"> s
+          &nbsp;Strobo après drop <input id="p-strobe" type="number" style="width:70px" value="${esc(o.strobe_beats ?? 16)}"> beats</div>
       </div>
       <div class="row">
         <button class="act" onclick="savePreset()">Enregistrer</button>

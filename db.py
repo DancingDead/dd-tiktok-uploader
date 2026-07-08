@@ -162,6 +162,8 @@ def update_niche(conn: sqlite3.Connection, niche_id: int, **fields) -> None:
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
+    if "cadence" in updates:
+        updates["cadence"] = int(updates["cadence"])  # ValueError/TypeError si non numérique
     assignments, values = [], []
     for key, value in updates.items():
         assignments.append(f"{key} = ?")

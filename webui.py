@@ -30,6 +30,17 @@ EDITABLE_SETTINGS = [
     "effects", "accents", "delogo", "chrono", "min_presence",
     "buildup", "strobe_beats", "cut_mode", "cut_every",
 ]
+# Clés d'overrides de preset qui doivent être numériques (défense XSS : jamais de HTML stocké)
+NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats")
+
+
+def coerce_overrides(overrides: dict) -> dict:
+    """Force les clés numériques connues en nombres ; ValueError/TypeError sinon."""
+    coerced = dict(overrides)
+    for key in NUMERIC_OVERRIDE_KEYS:
+        if key in coerced and not isinstance(coerced[key], (int, float)):
+            coerced[key] = float(coerced[key])
+    return coerced
 
 
 # --- Logique pure ---------------------------------------------------------------
@@ -331,6 +342,8 @@ def create_app(root: Path | None = None):
         conn = get_conn()
         try:
             dbmod.update_niche(conn, niche_id, **(request.json or {}))
+        except (TypeError, ValueError) as exc:
+            return jsonify({"error": f"champ invalide : {exc}"}), 400
         finally:
             conn.close()
         return jsonify({"ok": True})
@@ -396,7 +409,8 @@ def create_app(root: Path | None = None):
         data = request.json or {}
         conn = get_conn()
         try:
-            pid = dbmod.create_preset(conn, data["name"], data.get("overrides", {}))
+            pid = dbmod.create_preset(conn, data["name"],
+                                      coerce_overrides(data.get("overrides", {})))
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
         finally:
@@ -408,7 +422,10 @@ def create_app(root: Path | None = None):
         data = request.json or {}
         conn = get_conn()
         try:
-            dbmod.update_preset(conn, preset_id, data["name"], data.get("overrides", {}))
+            dbmod.update_preset(conn, preset_id, data["name"],
+                                coerce_overrides(data.get("overrides", {})))
+        except (KeyError, TypeError, ValueError) as exc:
+            return jsonify({"error": f"données invalides : {exc}"}), 400
         finally:
             conn.close()
         return jsonify({"ok": True})
