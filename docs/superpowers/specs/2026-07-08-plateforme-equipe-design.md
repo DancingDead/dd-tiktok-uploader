@@ -37,6 +37,29 @@ se concentre sur la CRÉATION automatique ; l'équipe poste elle-même
   (`proposed` → `approved` | `rejected` ; `approved` → `downloaded`/`posted`
   marqué à la main pour le suivi), created_at, caption générée.
 
+## Subtitles générés (par niche, optionnel)
+
+Certaines niches affichent des punchlines incrustées (« subtitles » au sens
+edit TikTok : hook + punch, pas de la transcription). Ajouté en review de
+spec par Théo. NB : le titre incrusté V4 avait été retiré (« passait mal ») —
+cette fois le style est soigné et PAR NICHE.
+
+- Config niche : `subtitles: {enabled, preprompt, style}` — le pré-prompt
+  décrit le ton/thème (ex. « punchlines sombres sur le dépassement, style
+  edit Naruto, français, 6 mots max »). Style : position, taille, casse,
+  contour.
+- Génération à l'usine : appel Claude API (`claude-opus-4-8`, sortie JSON
+  structurée `{hook, punch}` via output_config). La seed de la vidéo varie le
+  prompt (« variation n°<seed> ») pour la diversité. IMPORTANT : pas de graine
+  d'échantillonnage LLM — le texte généré est STOCKÉ avec la vidéo
+  (reproductibilité par persistance) ; re-génération = nouveau texte.
+- Rendu : drawtext par segment (l'architecture segment-par-segment le permet) —
+  hook pendant le buildup, punch à partir du drop. Validation visuelle frame
+  par frame obligatoire avant de généraliser.
+- Échec de l'appel API → vidéo générée SANS texte + avertissement (l'usine ne
+  bloque jamais sur le LLM).
+- Coût : ~0,005 €/vidéo (négligeable). Requiert `ANTHROPIC_API_KEY` dans .env.
+
 ## Stockage fichiers
 
 - `tracks/` : catalogue DD partagé (inchangé, alimenté par liens YouTube/upload).
