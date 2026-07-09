@@ -4,8 +4,10 @@ Pipeline : analyze_audio -> load_clips -> build_edl (logique pure) -> render.
 """
 
 import argparse
+import hashlib
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -33,6 +35,12 @@ DEFAULT_CONFIG = {
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
+    "subtitles": {                      # punchlines incrustées, générées par Claude
+        "enabled": False,               # désactivé par défaut
+        "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
+        "min_dur": 1.4,                 # durée min. d'affichage d'une punchline (lisibilité)
+        "model": "claude-opus-4-8",     # modèle de génération
+    },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,
@@ -233,31 +241,73 @@ def _char_presence(frames: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarr
     return presence, interest, dual
 
 
-def scan_clips(clips: list[dict]) -> list[dict]:
+def _scan_one(clip: dict) -> None:
+    """Scan réel d'un clip (décodage FFmpeg + détections). Mute le dict."""
+    raw = subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-i", str(clip["path"]),
+            "-vf", f"fps={SCAN_FPS},scale={SCAN_W}:{SCAN_H}",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ],
+        capture_output=True, check=True,
+    ).stdout
+    frame_size = SCAN_W * SCAN_H * 3
+    n = len(raw) // frame_size
+    frames = np.frombuffer(raw[: n * frame_size], dtype=np.uint8).reshape(n, SCAN_H, SCAN_W, 3)
+    # Couleur/mouvement sur miniatures 32x18 (moyenne par blocs de 20x20).
+    small = frames.reshape(n, SMALL_H, SCAN_H // SMALL_H, SMALL_W, SCAN_W // SMALL_W, 3) \
+                  .mean(axis=(2, 4)).astype(np.uint8)
+    classification = classify_frames(small, 1.0 / SCAN_FPS)
+    presence, interest_x, dual = _char_presence(frames)
+    classification["presence"] = presence
+    clip["intervals"] = usable_intervals(classification, clip["duration"], 1.0 / SCAN_FPS)
+    clip["interest_x"] = interest_x
+    clip["dual"] = dual
+    clip["scan_dt"] = 1.0 / SCAN_FPS
+
+
+def _scan_payload(clip: dict) -> dict:
+    return {
+        "intervals": clip["intervals"],
+        "interest_x": [float(x) for x in clip["interest_x"]],
+        "dual": [bool(d) for d in clip["dual"]],
+        "scan_dt": clip["scan_dt"],
+    }
+
+
+def _apply_scan_payload(clip: dict, payload: dict) -> None:
+    clip["intervals"] = payload["intervals"]
+    clip["interest_x"] = np.array(payload["interest_x"], dtype=float)
+    clip["dual"] = np.array(payload["dual"], dtype=bool)
+    clip["scan_dt"] = payload["scan_dt"]
+
+
+def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
     """Enrichit chaque clip de ses plages exploitables : cartes orange, noir et
-    passages statiques exclus, score de présence des personnages par plage."""
+    passages statiques exclus, score de présence des personnages par plage.
+    Avec cache par fichier (clé md5 du chemin, invalidé par mtime) quand
+    cache_dir est fourni — on ne re-décode pas 30 clips à chaque génération."""
     for clip in clips:
-        raw = subprocess.run(
-            [
-                "ffmpeg", "-v", "error", "-i", str(clip["path"]),
-                "-vf", f"fps={SCAN_FPS},scale={SCAN_W}:{SCAN_H}",
-                "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
-            ],
-            capture_output=True, check=True,
-        ).stdout
-        frame_size = SCAN_W * SCAN_H * 3
-        n = len(raw) // frame_size
-        frames = np.frombuffer(raw[: n * frame_size], dtype=np.uint8).reshape(n, SCAN_H, SCAN_W, 3)
-        # Couleur/mouvement sur miniatures 32x18 (moyenne par blocs de 20x20).
-        small = frames.reshape(n, SMALL_H, SCAN_H // SMALL_H, SMALL_W, SCAN_W // SMALL_W, 3) \
-                      .mean(axis=(2, 4)).astype(np.uint8)
-        classification = classify_frames(small, 1.0 / SCAN_FPS)
-        presence, interest_x, dual = _char_presence(frames)
-        classification["presence"] = presence
-        clip["intervals"] = usable_intervals(classification, clip["duration"], 1.0 / SCAN_FPS)
-        clip["interest_x"] = interest_x
-        clip["dual"] = dual
-        clip["scan_dt"] = 1.0 / SCAN_FPS
+        cache_path = None
+        if cache_dir is not None:
+            digest = hashlib.md5(str(clip["path"]).encode()).hexdigest()
+            cache_path = cache_dir / f"{digest}.json"
+            if cache_path.is_file():
+                # Cache tronqué/corrompu (process tué en pleine écriture) :
+                # traité comme un miss, on re-scanne et on réécrit le cache.
+                try:
+                    cached = json.loads(cache_path.read_text())
+                    if cached.get("mtime") == clip["path"].stat().st_mtime:
+                        _apply_scan_payload(clip, cached)
+                        continue
+                except (json.JSONDecodeError, OSError, KeyError):
+                    pass
+        _scan_one(clip)
+        if cache_path is not None:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps(
+                {"mtime": clip["path"].stat().st_mtime, **_scan_payload(clip)},
+                ensure_ascii=False))
     return clips
 
 
@@ -530,6 +580,161 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     return edl
 
 
+# --- Punchlines incrustées (sous-titres générés) ----------------------------
+
+_CAPTION_FONTS = [
+    "/System/Library/Fonts/Supplemental/Impact.ttf",   # look motivation/edit
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/System/Library/Fonts/HelveticaNeue.ttc",
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
+
+
+def _caption_font() -> str | None:
+    for path in _CAPTION_FONTS:
+        if Path(path).is_file():
+            return path
+    return None
+
+
+def _drawtext_escape(text: str) -> str:
+    """Échappe le texte pour l'option drawtext de FFmpeg (argument non shell)."""
+    out = text.replace("\\", "\\\\")
+    for ch in (":", "'", "%", ",", ";", "[", "]"):
+        out = out.replace(ch, "\\" + ch)
+    return out
+
+
+def assign_caption_slots(edl: list[dict], min_dur: float) -> int:
+    """Regroupe les segments en créneaux de sous-titre : une punchline reste
+    affichée ≥ `min_dur` (lisibilité) puis change à la coupe suivante. Annote
+    chaque entrée d'un `caption_slot` (index) ; retourne le nombre de créneaux."""
+    slot = -1
+    slot_start = 0.0
+    for entry in edl:
+        if slot < 0 or entry["timeline_start"] - slot_start >= min_dur - 1e-9:
+            slot += 1
+            slot_start = entry["timeline_start"]
+        entry["caption_slot"] = slot
+    return slot + 1
+
+
+def _load_dotenv(path: Path | None = None) -> None:
+    """Charge .env dans os.environ (sans écraser l'existant) pour que
+    ANTHROPIC_API_KEY posée dans .env soit prise en compte sans export manuel."""
+    env_path = path or (Path(__file__).parent / ".env")
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
+def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+    """Appelle Claude pour générer `count` punchlines. Sortie JSON structurée.
+    Isolé pour être mocké dans les tests."""
+    import anthropic
+
+    _load_dotenv()
+    client = anthropic.Anthropic()
+    schema = {
+        "type": "object",
+        "properties": {"punchlines": {"type": "array", "items": {"type": "string"}}},
+        "required": ["punchlines"],
+        "additionalProperties": False,
+    }
+    resp = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=("Tu écris des punchlines courtes et percutantes incrustées sur des edits "
+                "vidéo verticaux. Chaque punchline fait 2 à 6 mots, sans hashtag, sans emoji, "
+                "sans ponctuation finale, et forme une progression cohérente d'une à l'autre."),
+        messages=[{"role": "user", "content":
+                   f"Génère exactement {count} punchlines distinctes.\n"
+                   f"Style / consigne : {preprompt}\nVariation n°{seed}."}],
+        output_config={"format": {"type": "json_schema", "schema": schema}},
+    )
+    text = next(b.text for b in resp.content if b.type == "text")
+    return [str(p) for p in json.loads(text)["punchlines"]]
+
+
+def generate_punchlines(preprompt: str, count: int, seed: int,
+                        cache_dir: Path | None = None,
+                        model: str = "claude-opus-4-8") -> list[str]:
+    """Punchlines pour une vidéo. Mises en cache par (modèle, préprompt, count,
+    seed) → reproductibles à seed égal. Dégrade en [] si pas de clé / échec API
+    (l'usine ne bloque jamais sur le LLM)."""
+    if count <= 0 or not preprompt.strip():
+        return []
+    cache_path = None
+    if cache_dir is not None:
+        key = hashlib.md5(f"{model}|{preprompt}|{count}|{seed}".encode()).hexdigest()
+        cache_path = cache_dir / f"{key}.json"
+        if cache_path.is_file():
+            try:
+                return json.loads(cache_path.read_text())["punchlines"][:count]
+            except (json.JSONDecodeError, OSError, KeyError):
+                pass
+    try:
+        punchlines = _call_llm(preprompt, count, seed, model)[:count]
+    except Exception:
+        return []
+    if cache_path is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({"punchlines": punchlines}, ensure_ascii=False))
+    return punchlines
+
+
+def apply_subtitles(edl: list[dict], config: dict, seed: int,
+                    cache_dir: Path | None = None) -> list[dict]:
+    """Annote l'EDL de punchlines (clé `caption` par segment) si les sous-titres
+    sont activés. Segments d'un même créneau partagent la punchline ; texte vide
+    si la génération échoue (rendu sans sous-titres, jamais de plantage)."""
+    sub = config.get("subtitles") or {}
+    if not sub.get("enabled"):
+        return edl
+    n = assign_caption_slots(edl, float(sub.get("min_dur", 1.4)))
+    lines = generate_punchlines(sub.get("preprompt", ""), n, seed, cache_dir,
+                                sub.get("model", "claude-opus-4-8"))
+    for entry in edl:
+        i = entry.get("caption_slot", 0)
+        entry["caption"] = lines[i] if i < len(lines) else ""
+    return edl
+
+
+def generate_video(track_path, clips: list[dict], config: dict, seed: int,
+                   output_path, *, start: float | None = None,
+                   duration: float | str = 30, subtitles_cache_dir: Path | None = None,
+                   log=lambda m: None) -> dict:
+    """Produit UNE vidéo montée à partir d'un morceau + clips pré-scannés.
+    Point d'entrée réutilisable (CLI et usine par niche). `config` n'est pas
+    muté (copie interne). Retourne un récapitulatif {segments, window, captions}."""
+    analysis = analyze_audio(Path(track_path))
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in config.items()}
+    resolve_window(analysis, cfg, start=start, duration=duration)
+    drop = cfg["drop_time"]
+    log(f"  {analysis['bpm']:.0f} BPM ; fenêtre {cfg['start']:.1f}→{cfg['end']:.1f}s"
+        + (f" (drop {drop:.1f}s)" if drop is not None else " (pas de drop net)"))
+
+    edl = build_edl(analysis, clips, cfg, seed=seed)
+    log(f"  EDL : {len(edl)} segments (seed {seed})")
+
+    captions = []
+    if (cfg.get("subtitles") or {}).get("enabled"):
+        log("  génération des punchlines (Claude)…")
+        apply_subtitles(edl, cfg, seed=seed, cache_dir=subtitles_cache_dir)
+        captions = sorted({e["caption"] for e in edl if e.get("caption")})
+        log(f"  {len(captions)} punchline(s)" if captions
+            else "  aucune punchline (pas de clé API ? rendu sans texte)")
+
+    render(edl, Path(track_path), Path(output_path), cfg)
+    return {"segments": len(edl), "window": (cfg["start"], cfg["end"]), "captions": captions}
+
+
 def _run_ffmpeg(args: list[str]) -> None:
     result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args],
                             capture_output=True, text=True)
@@ -571,6 +776,15 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post.append("rgbashift=rh=-14:gv=10:bh=14:edge=smear:enable='lt(n,2)'")
     elif "rgb" in effects:
         post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
+    # Punchline incrustée (après les accents pour rester nette), bas-centrée
+    cap = entry.get("caption")
+    font = _caption_font()
+    if cap and font:
+        post.append(
+            f"drawtext=fontfile={font}:text={_drawtext_escape(cap)}"
+            ":fontsize=64:fontcolor=white:borderw=5:bordercolor=black@0.9"
+            ":x=(w-text_w)/2:y=h*0.70"
+        )
     post.append("setsar=1,format=yuv420p")
     post.append("tpad=stop_mode=clone:stop_duration=1")
     post_chain = ",".join(post)
@@ -677,6 +891,8 @@ def main() -> None:
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
+    parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,
+                        help='génère des punchlines incrustées via Claude (ex. "punchlines motivation gym, français, 5 mots max"). Requiert ANTHROPIC_API_KEY.')
     args = parser.parse_args()
 
     if not Path(args.track).is_file():
@@ -684,40 +900,21 @@ def main() -> None:
     if not Path(args.clips_dir).is_dir():
         sys.exit(f"dossier de clips introuvable : {args.clips_dir}")
 
-    print(f"Analyse de {args.track}…")
-    analysis = analyze_audio(Path(args.track))
-    print(f"  {analysis['bpm']:.1f} BPM, {len(analysis['beats'])} beats, {analysis['duration']:.1f} s")
+    clips = load_clips(Path(args.clips_dir))
+    print(f"Scan des plages exploitables ({len(clips)} clips)…")
+    scan_clips(clips, cache_dir=Path("data/cache/scan"))
 
-    if args.start is not None and args.start >= analysis["duration"]:
-        sys.exit(f"--start {args.start} dépasse la durée du morceau ({analysis['duration']:.1f} s)")
-    config = resolve_window(analysis, load_settings(), start=args.start, duration=args.duration)
-    drop = config["drop_time"]
-    print(f"  drop détecté à {drop:.1f} s" if drop is not None else "  pas de drop net détecté")
-    print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s "
-          f"({config['end'] - config['start']:.1f} s, fin sur phrase)")
+    config = load_settings()
     if args.cut_every is not None:
         config["cut_mode"] = "fixed"
         config["cut_every"] = args.cut_every
+    if args.subtitles:
+        config["subtitles"] = {**config["subtitles"], "enabled": True, "preprompt": args.subtitles}
 
-    clips = load_clips(Path(args.clips_dir))
-    print(f"  {len(clips)} clips dans {args.clips_dir}, scan des plages exploitables…")
-    scan_clips(clips)
-    for clip in clips:
-        usable_s = sum(iv["end"] - iv["start"] for iv in clip["intervals"])
-        with_chars = sum(
-            iv["end"] - iv["start"] for iv in clip["intervals"]
-            if iv["presence"] >= config["min_presence"]
-        )
-        print(f"    {clip['path'].name} : {usable_s:.0f} s exploitables / {clip['duration']:.0f} s "
-              f"({len(clip['intervals'])} plage(s), {with_chars:.0f} s avec personnages)")
-
-    edl = build_edl(analysis, clips, config, seed=args.seed)
-    n_fx = sum(bool(e["effects"]) for e in edl)
-    print(f"  EDL : {len(edl)} segments sur {config['end'] - config['start']:.1f} s "
-          f"(seed {args.seed}, {n_fx} segments avec effets)")
-
-    print("Rendu FFmpeg…")
-    render(edl, Path(args.track), Path(args.output), config)
+    print("Génération…")
+    generate_video(args.track, clips, config, seed=args.seed, output_path=args.output,
+                   start=args.start, duration=args.duration,
+                   subtitles_cache_dir=Path("data/cache/subtitles"), log=print)
     print(f"OK → {args.output}")
 
 

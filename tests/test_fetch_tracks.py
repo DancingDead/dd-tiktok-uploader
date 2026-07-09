@@ -1,6 +1,8 @@
 """Tests de parse_links — la partie pure de fetch_tracks."""
 
-from fetch_tracks import parse_links
+from pathlib import Path
+
+from fetch_tracks import parse_links, ytdlp_args
 
 
 def test_one_link_per_line():
@@ -25,3 +27,20 @@ def test_dedupes_preserving_order():
 def test_empty_text_gives_empty_list():
     assert parse_links("") == []
     assert parse_links("# rien que des commentaires\n\n") == []
+
+
+def test_ytdlp_args_audio_default():
+    args = ytdlp_args(Path("tracks"), video=False)
+    assert "--extract-audio" in args
+    assert "mp3" in args
+
+
+def test_ytdlp_args_video_mode():
+    args = ytdlp_args(Path("clips"), video=True)
+    assert "--extract-audio" not in args
+    assert any("bv*[height<=1080]" in a for a in args)
+    assert "--remux-video" in args and "mp4" in args
+    # chaque alternative du sélecteur -f doit être plafonnée à 1080p
+    selector = args[args.index("-f") + 1]
+    for alternative in selector.split("/"):
+        assert "[height<=1080]" in alternative, alternative
