@@ -706,6 +706,35 @@ def apply_subtitles(edl: list[dict], config: dict, seed: int,
     return edl
 
 
+def generate_video(track_path, clips: list[dict], config: dict, seed: int,
+                   output_path, *, start: float | None = None,
+                   duration: float | str = 30, subtitles_cache_dir: Path | None = None,
+                   log=lambda m: None) -> dict:
+    """Produit UNE vidéo montée à partir d'un morceau + clips pré-scannés.
+    Point d'entrée réutilisable (CLI et usine par niche). `config` n'est pas
+    muté (copie interne). Retourne un récapitulatif {segments, window, captions}."""
+    analysis = analyze_audio(Path(track_path))
+    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in config.items()}
+    resolve_window(analysis, cfg, start=start, duration=duration)
+    drop = cfg["drop_time"]
+    log(f"  {analysis['bpm']:.0f} BPM ; fenêtre {cfg['start']:.1f}→{cfg['end']:.1f}s"
+        + (f" (drop {drop:.1f}s)" if drop is not None else " (pas de drop net)"))
+
+    edl = build_edl(analysis, clips, cfg, seed=seed)
+    log(f"  EDL : {len(edl)} segments (seed {seed})")
+
+    captions = []
+    if (cfg.get("subtitles") or {}).get("enabled"):
+        log("  génération des punchlines (Claude)…")
+        apply_subtitles(edl, cfg, seed=seed, cache_dir=subtitles_cache_dir)
+        captions = sorted({e["caption"] for e in edl if e.get("caption")})
+        log(f"  {len(captions)} punchline(s)" if captions
+            else "  aucune punchline (pas de clé API ? rendu sans texte)")
+
+    render(edl, Path(track_path), Path(output_path), cfg)
+    return {"segments": len(edl), "window": (cfg["start"], cfg["end"]), "captions": captions}
+
+
 def _run_ffmpeg(args: list[str]) -> None:
     result = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args],
                             capture_output=True, text=True)
@@ -871,48 +900,21 @@ def main() -> None:
     if not Path(args.clips_dir).is_dir():
         sys.exit(f"dossier de clips introuvable : {args.clips_dir}")
 
-    print(f"Analyse de {args.track}…")
-    analysis = analyze_audio(Path(args.track))
-    print(f"  {analysis['bpm']:.1f} BPM, {len(analysis['beats'])} beats, {analysis['duration']:.1f} s")
+    clips = load_clips(Path(args.clips_dir))
+    print(f"Scan des plages exploitables ({len(clips)} clips)…")
+    scan_clips(clips, cache_dir=Path("data/cache/scan"))
 
-    if args.start is not None and args.start >= analysis["duration"]:
-        sys.exit(f"--start {args.start} dépasse la durée du morceau ({analysis['duration']:.1f} s)")
-    config = resolve_window(analysis, load_settings(), start=args.start, duration=args.duration)
-    drop = config["drop_time"]
-    print(f"  drop détecté à {drop:.1f} s" if drop is not None else "  pas de drop net détecté")
-    print(f"  fenêtre : {config['start']:.1f} → {config['end']:.1f} s "
-          f"({config['end'] - config['start']:.1f} s, fin sur phrase)")
+    config = load_settings()
     if args.cut_every is not None:
         config["cut_mode"] = "fixed"
         config["cut_every"] = args.cut_every
-
-    clips = load_clips(Path(args.clips_dir))
-    print(f"  {len(clips)} clips dans {args.clips_dir}, scan des plages exploitables…")
-    scan_clips(clips)
-    for clip in clips:
-        usable_s = sum(iv["end"] - iv["start"] for iv in clip["intervals"])
-        with_chars = sum(
-            iv["end"] - iv["start"] for iv in clip["intervals"]
-            if iv["presence"] >= config["min_presence"]
-        )
-        print(f"    {clip['path'].name} : {usable_s:.0f} s exploitables / {clip['duration']:.0f} s "
-              f"({len(clip['intervals'])} plage(s), {with_chars:.0f} s avec personnages)")
-
-    edl = build_edl(analysis, clips, config, seed=args.seed)
-    n_fx = sum(bool(e["effects"]) for e in edl)
-    print(f"  EDL : {len(edl)} segments sur {config['end'] - config['start']:.1f} s "
-          f"(seed {args.seed}, {n_fx} segments avec effets)")
-
     if args.subtitles:
         config["subtitles"] = {**config["subtitles"], "enabled": True, "preprompt": args.subtitles}
-        print("  génération des punchlines (Claude)…")
-        apply_subtitles(edl, config, seed=args.seed, cache_dir=Path("data/cache/subtitles"))
-        n_cap = len({e.get("caption") for e in edl if e.get("caption")})
-        print(f"  {n_cap} punchline(s) distincte(s)" if n_cap
-              else "  aucune punchline (pas de clé API ? rendu sans texte)")
 
-    print("Rendu FFmpeg…")
-    render(edl, Path(args.track), Path(args.output), config)
+    print("Génération…")
+    generate_video(args.track, clips, config, seed=args.seed, output_path=args.output,
+                   start=args.start, duration=args.duration,
+                   subtitles_cache_dir=Path("data/cache/subtitles"), log=print)
     print(f"OK → {args.output}")
 
 

@@ -20,7 +20,10 @@ façon edit animé TikTok :
   de la vidéo — le drop tombe sur le climax du clip ;
 - **Fin musicale** : la vidéo s'étend jusqu'à la fin de phrase (16 beats)
   suivante — la musique ne coupe jamais en plein milieu ;
-- **Accents** : RGB split à l'impact, micro-glitch sur les temps forts.
+- **Accents** : RGB split à l'impact, micro-glitch sur les temps forts ;
+- **Punchlines incrustées** : sous-titres générés par Claude à partir d'un
+  pré-prompt (ex. « motivation gym »), une phrase par coupe, incrustées en
+  bas de l'image.
 
 ## Prérequis
 
@@ -56,11 +59,15 @@ uv run python webui.py        # puis ouvre http://127.0.0.1:8765
 ```
 
 Tout se pilote depuis le navigateur (local uniquement, rien d'exposé) :
-liens YouTube et téléchargement des sons, upload de tracks, connexion des
-comptes TikTok (OAuth), édition du plan de publication, génération des
-vidéos avec journal en direct, gestion de la file d'attente, et réglages du
-montage (effets, accents, cadrage, rythme — persistés dans `settings.json`
-et pris en compte par tous les rendus).
+liens YouTube et téléchargement des sons, upload de tracks, gestion des
+niches, lancement d'un lot de vidéos par niche avec journal en direct,
+bibliothèque des vidéos produites (lecture, validation/rejet, téléchargement)
+et réglages du montage (effets, accents, cadrage, rythme — persistés dans
+`settings.json` et pris en compte par tous les rendus).
+
+> **Pas de publication automatique.** La sortie de l'usine est une
+> bibliothèque de vidéos à télécharger et poster à la main (décision du
+> 2026-07-08). Aucune connexion à l'API TikTok.
 
 ## Plateforme d'équipe (phase 1)
 
@@ -72,17 +79,29 @@ uv run python db.py add-member theo      # demande le mot de passe (masqué)
 uv run python db.py list-members
 ```
 
-Puis, dans l'interface :
+Puis, dans l'interface, une **niche** (ex. « Naruto Édits », « Motivation
+Gym ») relie tout ce qu'il faut pour produire :
 
-- **Niches** — chaque membre gère ses univers (ex. « Naruto Édits ») : cadence
-  de production, légende et hashtags, banque de clips propre (upload direct ou
-  liens YouTube téléchargés en vidéo ≤1080p), subtitles générés par pré-prompt,
-  et les presets de montage utilisés. Chaque niche a son dossier
-  `data/niches/<slug>/clips/`.
-- **Presets** — des styles de montage nommés (« strobo hard », « posé »,
-  « reels clean »…) réutilisables entre niches. Un preset ne stocke que ses
-  écarts par rapport aux réglages par défaut ; ordre de fusion :
-  `DEFAULT_CONFIG ← settings.json ← preset`.
+- un **preset** de montage (le style),
+- une **banque de clips** propre (upload direct ou liens YouTube téléchargés
+  en vidéo ≤1080p) — dossier `data/niches/<slug>/clips/`,
+- une **sélection de sons** dans le catalogue partagé (`tracks/`),
+- un **préprompt de punchlines** (les sous-titres générés par Claude),
+- une légende et des hashtags.
+
+Depuis la carte **Génération**, on lance à la demande (aucune heure à
+programmer) un **lot de N variantes** : chacune tire un son et une seed
+distincts → montage ET punchlines différents. Les vidéos produites atterrissent
+dans la **bibliothèque** de la niche (`data/niches/<slug>/videos/`), où on les
+lit, les valide ou les rejette, et on les télécharge pour les poster à la main.
+
+Les **presets** sont des styles de montage nommés (« strobo hard », « posé »,
+« reels clean »…) réutilisables entre niches. Un preset ne stocke que ses
+écarts par rapport aux réglages par défaut ; ordre de fusion :
+`DEFAULT_CONFIG ← settings.json ← preset`.
+
+Les punchlines nécessitent une clé `ANTHROPIC_API_KEY` (dans `.env`, lue
+automatiquement) ; sans elle, la génération continue sans sous-titres.
 
 L'état vit dans `platform.db` (SQLite) et `data/` — tous deux locaux,
 jamais commités. Les mots de passe sont hachés (werkzeug).
@@ -102,21 +121,21 @@ uv run python fetch_tracks.py autre_liste.txt --dest autre_dossier
 Relancer le script ne retélécharge pas ce qui existe déjà, et un lien mort ne
 bloque pas les suivants.
 
-### 2. Générer en lot pour la publication (optionnel)
+### 2. Générer un lot de variantes pour une niche
 
-Copie `plan.example.toml` vers `plan.toml` (morceaux × comptes × créneaux),
-puis :
+Normalement lancé depuis l'interface (bouton **Générer**), mais accessible en
+ligne de commande :
 
 ```bash
-uv run python batch_generate.py
+uv run python generate_niche.py <niche_id> <count>
 ```
 
-Chaque post est décliné en **une vidéo différente par compte** (seed dérivée
-du trio morceau/compte/date — pas de doublon entre comptes) et déposé dans
-`queue/pending/` avec ses métadonnées de publication (compte, heure avec
-jitter, légende, hashtags). Relancer ne re-rend pas ce qui existe déjà.
-Cette file sera consommée par le worker de publication TikTok (voir
-`docs/superpowers/specs/2026-07-04-publication-tiktok-design.md`).
+Produit `count` variantes pour la niche : chacune tire un son (parmi ceux
+sélectionnés dans la niche) et une seed distincts, ce qui donne un montage ET
+des punchlines différents. Les presets liés à la niche sont alternés. Les
+vidéos sont enregistrées en base (statut `proposed`) et déposées dans
+`data/niches/<slug>/videos/`, prêtes à être passées en revue dans la
+bibliothèque.
 
 ### 3. Monter une vidéo à l'unité
 

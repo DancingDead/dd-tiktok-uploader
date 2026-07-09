@@ -11,7 +11,6 @@ import sqlite3
 import subprocess
 import sys
 import threading
-import tomllib
 import uuid
 from pathlib import Path
 
@@ -19,9 +18,7 @@ from beatsync import DEFAULT_CONFIG, load_settings, merge_settings  # noqa: F401
 
 ROOT = Path(__file__).parent
 TRACKS_DIR = ROOT / "tracks"
-QUEUE_DIR = ROOT / "queue"
 LINKS_PATH = ROOT / "links.txt"
-PLAN_PATH = ROOT / "plan.toml"
 SETTINGS_PATH = ROOT / "settings.json"
 
 AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aiff"}
@@ -41,37 +38,6 @@ def coerce_overrides(overrides: dict) -> dict:
         if key in coerced and not isinstance(coerced[key], (int, float)):
             coerced[key] = float(coerced[key])
     return coerced
-
-
-# --- Logique pure ---------------------------------------------------------------
-
-
-def _toml_value(value) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, list):
-        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
-    raise TypeError(f"type non sérialisable en TOML : {type(value)}")
-
-
-def plan_to_toml(plan: dict) -> str:
-    """Sérialise le plan (defaults + posts) en TOML relisible par tomllib."""
-    lines = ["# Généré par l'interface web (webui.py)", ""]
-    if plan.get("defaults"):
-        lines.append("[defaults]")
-        for key, value in plan["defaults"].items():
-            lines.append(f"{key} = {_toml_value(value)}")
-        lines.append("")
-    for post in plan.get("posts", []):
-        lines.append("[[posts]]")
-        for key, value in post.items():
-            lines.append(f"{key} = {_toml_value(value)}")
-        lines.append("")
-    return "\n".join(lines)
 
 
 # --- Jobs en arrière-plan (téléchargements, génération) --------------------------
@@ -116,8 +82,8 @@ def create_app(root: Path | None = None):
     root = root or ROOT
     paths = {
         "db": root / "platform.db", "data": root / "data",
-        "tracks": root / "tracks", "queue": root / "queue",
-        "links": root / "links.txt", "plan": root / "plan.toml",
+        "tracks": root / "tracks",
+        "links": root / "links.txt",
         "settings": root / "settings.json",
     }
     paths["data"].mkdir(exist_ok=True)
@@ -166,9 +132,7 @@ def create_app(root: Path | None = None):
     @app.get("/api/state")
     def state():
         tracks_dir = paths["tracks"]
-        queue_dir = paths["queue"]
         links_path = paths["links"]
-        plan_path = paths["plan"]
 
         tracks = sorted(
             (
@@ -179,21 +143,6 @@ def create_app(root: Path | None = None):
             key=lambda t: t["name"],
         ) if tracks_dir.is_dir() else []
 
-        plan = {"defaults": {"duration": 30, "caption": "{title} — OUT NOW 🔥",
-                             "hashtags": ["hardstyle", "anime", "edit", "dancingdead"]},
-                "posts": []}
-        if plan_path.is_file():
-            with open(plan_path, "rb") as f:
-                loaded = tomllib.load(f)
-            plan["defaults"].update(loaded.get("defaults", {}))
-            plan["posts"] = loaded.get("posts", [])
-
-        def sidecars(folder: str):
-            directory = queue_dir / folder
-            if not directory.is_dir():
-                return []
-            return [json.loads(p.read_text()) for p in sorted(directory.glob("*.json"))]
-
         settings = load_settings(paths["settings"])
         with _jobs_lock:
             jobs = {jid: dict(job) for jid, job in _jobs.items()}
@@ -202,6 +151,9 @@ def create_app(root: Path | None = None):
         try:
             niches = dbmod.list_niches(conn)
             presets = dbmod.list_presets(conn)
+            videos_by_niche: dict[int, list] = {}
+            for v in dbmod.list_videos(conn):
+                videos_by_niche.setdefault(v["niche_id"], []).append(v)
         finally:
             conn.close()
 
@@ -213,6 +165,12 @@ def create_app(root: Path | None = None):
                 key=lambda c: c["name"]) if clips_dir.is_dir() else []
             links = dbmod.niche_links_path(paths["data"], niche["slug"])
             niche["links"] = links.read_text() if links.is_file() else ""
+            niche["videos"] = [
+                {"id": v["id"], "status": v["status"], "seed": v["seed"],
+                 "track": Path(v["track"]).name, "caption": v["caption"],
+                 "subtitles": v["subtitles"], "created_at": v["created_at"],
+                 "exists": (paths["data"].parent / v["file"]).is_file()}
+                for v in videos_by_niche.get(niche["id"], [])]
 
         return jsonify(
             {
@@ -221,8 +179,6 @@ def create_app(root: Path | None = None):
                 "presets": presets,
                 "links": links_path.read_text() if links_path.is_file() else "",
                 "tracks": tracks,
-                "plan": plan,
-                "queue": {"pending": sidecars("pending"), "posted": sidecars("posted")},
                 "settings": {k: settings[k] for k in EDITABLE_SETTINGS},
                 "jobs": jobs,
             }
@@ -276,29 +232,49 @@ def create_app(root: Path | None = None):
         paths["settings"].write_text(json.dumps(overrides, ensure_ascii=False, indent=2) + "\n")
         return jsonify({"ok": True})
 
-    @app.post("/api/plan")
-    def save_plan():
-        paths["plan"].write_text(plan_to_toml(request.json))
-        return jsonify({"ok": True})
-
-    @app.post("/api/generate")
-    def generate():
+    @app.post("/api/niches/<int:niche_id>/generate")
+    def generate_niche_videos(niche_id):
+        niche = _niche_or_404(niche_id)
+        if niche is None:
+            return jsonify({"error": "niche inconnue"}), 404
+        if not niche["tracks"]:
+            return jsonify({"error": "aucun morceau sélectionné pour cette niche"}), 400
+        count = max(1, int((request.json or {}).get("count", niche["cadence"] or 1)))
         try:
-            job_id = start_job("generate", [sys.executable, "batch_generate.py"])
+            job_id = start_job(f"gen-{niche['slug']}",
+                               [sys.executable, "generate_niche.py", str(niche_id), str(count)])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         return jsonify({"job_id": job_id})
 
-    @app.delete("/api/queue/<stem>")
-    def delete_pending(stem: str):
-        stem = Path(stem).name
-        removed = []
-        for suffix in (".mp4", ".json"):
-            path = paths["queue"] / "pending" / f"{stem}{suffix}"
-            if path.is_file():
-                path.unlink()
-                removed.append(path.name)
-        return jsonify({"removed": removed})
+    @app.get("/api/videos/<int:video_id>")
+    def serve_video(video_id):
+        from flask import send_file
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT file FROM videos WHERE id = ?", (video_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return jsonify({"error": "vidéo inconnue"}), 404
+        path = (paths["data"].parent / row["file"]).resolve()
+        if not path.is_file() or paths["data"].resolve() not in path.parents:
+            return jsonify({"error": "fichier introuvable"}), 404
+        return send_file(path, mimetype="video/mp4",
+                         as_attachment=request.args.get("dl") == "1",
+                         download_name=path.name)
+
+    @app.post("/api/videos/<int:video_id>/status")
+    def set_video_status_ep(video_id):
+        status = (request.json or {}).get("status")
+        if status not in ("proposed", "approved", "rejected", "posted"):
+            return jsonify({"error": "statut invalide"}), 400
+        conn = get_conn()
+        try:
+            dbmod.set_video_status(conn, video_id, status)
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
 
     @app.get("/api/jobs/<job_id>")
     def job_status(job_id: str):

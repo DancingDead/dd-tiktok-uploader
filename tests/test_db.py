@@ -17,6 +17,25 @@ def conn(tmp_path):
     c.close()
 
 
+def test_connect_migrates_missing_niche_tracks_column(tmp_path):
+    # Simule une base d'avant l'ajout de `tracks` : connect() doit ajouter la
+    # colonne manquante (ALTER TABLE) au lieu de laisser la base cassée.
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""CREATE TABLE niches (id INTEGER PRIMARY KEY, name TEXT,
+        slug TEXT UNIQUE, owner TEXT DEFAULT '', cadence INTEGER DEFAULT 1,
+        caption_template TEXT DEFAULT '{title}', hashtags TEXT DEFAULT '[]',
+        preset_ids TEXT DEFAULT '[]', subtitles TEXT DEFAULT '{}');""")
+    old.execute("INSERT INTO niches (name, slug) VALUES ('X', 'x')")
+    old.commit(); old.close()
+    c = connect(path)  # doit migrer sans lever
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(niches)")}
+    assert "tracks" in cols
+    assert c.execute("SELECT tracks FROM niches WHERE slug='x'").fetchone()["tracks"] == "[]"
+    c.close()
+
+
 def test_connect_creates_schema(conn):
     tables = {r["name"] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'")}
@@ -91,6 +110,22 @@ def test_niche_crud_and_folders(conn, tmp_path):
     assert [n["slug"] for n in list_niches(conn)] == ["naruto-edits"]
     delete_niche(conn, nid)
     assert get_niche(conn, nid) is None
+
+
+def test_niche_tracks_and_videos_dir(conn, tmp_path):
+    from db import niche_videos_dir
+    nid = create_niche(conn, tmp_path, "Gym Phonk",
+                       tracks=["tracks/a.mp3", "tracks/b.wav"])
+    niche = get_niche(conn, nid)
+    assert niche["tracks"] == ["tracks/a.mp3", "tracks/b.wav"]
+    update_niche(conn, nid, tracks=["tracks/c.mp3"])
+    assert get_niche(conn, nid)["tracks"] == ["tracks/c.mp3"]
+    assert niche_videos_dir(tmp_path, "gym-phonk") == tmp_path / "niches" / "gym-phonk" / "videos"
+
+
+def test_niche_tracks_default_empty(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Vide")
+    assert get_niche(conn, nid)["tracks"] == []
 
 
 def test_niche_slug_collision_rejected(conn, tmp_path):

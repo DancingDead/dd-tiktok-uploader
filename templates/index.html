@@ -216,7 +216,6 @@
   <button class="tab" data-tab="presets"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>Presets</button>
   <button class="tab" data-tab="tracks"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>Tracks</button>
   <button class="tab" data-tab="liens"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Liens</button>
-  <button class="tab" data-tab="plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg>Plan &amp; file</button>
   <button class="tab" data-tab="reglages"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Réglages</button>
 </nav>
 
@@ -268,35 +267,6 @@
   </div>
   <textarea id="links" style="display:none;margin-top:.6rem" oninput="onRawEdit()"></textarea>
   <div id="dl-log" class="log" style="display:none"></div>
-</section>
-
-<section id="plan">
-  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/></svg><h2>Plan de génération</h2></div>
-  <p class="sub">Décline des morceaux en vidéos prêtes à poster à la main (téléchargement depuis la file).</p>
-  <div class="card">
-    <b>Défauts</b>
-    <div class="row">
-      Durée <input id="d-duration" type="number" style="width:70px"> s&nbsp;
-      Légende <input id="d-caption" style="flex:1" placeholder="{title} — OUT NOW">
-    </div>
-    <div class="row">Hashtags <input id="d-hashtags" style="flex:1" placeholder="hardstyle, anime, edit"></div>
-  </div>
-  <div class="card">
-    <b>Posts</b>
-    <table><thead><tr><th>Morceau</th><th>Titre</th><th>Libellés</th><th>Date</th><th>Heure</th><th></th></tr></thead>
-    <tbody id="posts-body"></tbody></table>
-    <button class="sec" style="margin-top:.6rem" onclick="addPost()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Ajouter un post</button>
-  </div>
-  <div class="row">
-    <button class="sec" onclick="savePlan()">Enregistrer le plan</button>
-    <button class="act" onclick="generate()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>Générer les vidéos</button>
-    <span id="plan-status" class="muted"></span>
-  </div>
-  <div id="gen-log" class="log" style="display:none"></div>
-  <div class="head" style="margin-top:1.6rem"><h2 style="font-size:1rem">File d'attente</h2></div>
-  <table><thead><tr><th>Vidéo</th><th>Libellé</th><th>Prévu le</th><th>Légende</th><th></th></tr></thead>
-  <tbody id="queue-body"></tbody></table>
 </section>
 
 <section id="reglages">
@@ -448,71 +418,9 @@ async function refresh() {
   document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
     `<tr><td>${esc(t.name)}</td><td class=muted>${esc(t.size_mb)} Mo</td></tr>`).join("")
     || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
-  renderLinks(); renderPlan(); renderQueue(); renderSettings(); renderNiches(); renderPresets();
+  renderLinks(); renderSettings(); renderNiches(); renderPresets();
 }
 
-/* --- Plan --- */
-function renderPlan() {
-  const d = STATE.plan.defaults;
-  document.getElementById("d-duration").value = d.duration;
-  document.getElementById("d-caption").value = d.caption;
-  document.getElementById("d-hashtags").value = (d.hashtags || []).join(", ");
-  const body = document.getElementById("posts-body");
-  body.innerHTML = "";
-  STATE.plan.posts.forEach((p, i) => body.appendChild(postRow(p, i)));
-}
-function postRow(p, i) {
-  const tr = document.createElement("tr");
-  const tracks = STATE.tracks.map(t =>
-    `<option value="tracks/${esc(t.name)}" ${p.track === "tracks/" + t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("");
-  tr.innerHTML =
-    `<td><select data-f=track>${tracks}</select></td>` +
-    `<td><input data-f=title value="${esc(p.title || "")}" style="width:150px"></td>` +
-    `<td><input data-f=accounts value="${esc((p.accounts || []).join(", "))}" style="width:130px" placeholder="edit, teaser"></td>` +
-    `<td><input data-f=date type=date value="${esc(p.date || "")}"></td>` +
-    `<td><input data-f=time type=time value="${esc(p.time || "")}"></td>` +
-    `<td><button class="icon-btn" title="Retirer" onclick="STATE.plan.posts.splice(${i},1);renderPlan()">${SVG.x}</button></td>`;
-  return tr;
-}
-function addPost() {
-  const today = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
-  STATE.plan.posts.push({track: STATE.tracks[0] ? "tracks/" + STATE.tracks[0].name : "",
-                         title: "", accounts: [], date: today, time: "18:00"});
-  renderPlan();
-}
-function collectPlan() {
-  const posts = [...document.querySelectorAll("#posts-body tr")].map(tr => {
-    const get = f => tr.querySelector(`[data-f=${f}]`).value;
-    return {track: get("track"), title: get("title"),
-            accounts: get("accounts").split(",").map(s => s.trim()).filter(Boolean),
-            date: get("date"), time: get("time")};
-  });
-  return {defaults: {duration: +document.getElementById("d-duration").value,
-                     caption: document.getElementById("d-caption").value,
-                     hashtags: document.getElementById("d-hashtags").value.split(",").map(s => s.trim()).filter(Boolean)},
-          posts};
-}
-async function savePlan() {
-  await api("/api/plan", j(collectPlan()));
-  flash("plan-status", "plan enregistré");
-}
-function renderQueue() {
-  const rows = STATE.queue.pending.map(s =>
-    `<tr><td>${esc(s.video)}</td><td class=muted>${esc(s.account)}</td><td class=muted>${esc(s.scheduled_at).slice(0,16)}</td>` +
-    `<td class=muted>${esc(s.caption).slice(0, 40)}…</td>` +
-    `<td><button class="icon-btn" title="Retirer" onclick="delPending('${esc(s.video.replace('.mp4',''))}')">${SVG.x}</button></td></tr>`);
-  document.getElementById("queue-body").innerHTML = rows.join("") ||
-    "<tr><td colspan=5 class=muted>file vide — enregistre un plan puis « Générer »</td></tr>";
-}
-async function delPending(stem) {
-  if (!await confirmModal("Retirer cette vidéo de la file ?", {okLabel: "Retirer"})) return;
-  await api("/api/queue/" + encodeURIComponent(stem), {method: "DELETE"});
-  refresh();
-}
-async function generate() {
-  try { const {job_id} = await api("/api/generate", j({})); followJob(job_id, "gen-log", "plan-status"); }
-  catch (e) { flash("plan-status", e.message, true); }
-}
 
 /* --- Liens YouTube (gestionnaire de cartes) --- */
 let LINKS = [];
@@ -645,6 +553,10 @@ async function addNiche() {
     toast("niche « " + name + " » créée");
   } catch (e) { toast(e.message, "err"); }
 }
+const VSTATUS = {
+  proposed: ["#26262e", "à valider"], approved: ["rgba(94,226,154,.16)", "validée"],
+  rejected: ["rgba(255,107,107,.14)", "rejetée"], posted: ["var(--accent-soft)", "postée"],
+};
 function renderNicheDetail() {
   const el = document.getElementById("niche-detail");
   const n = STATE.niches.find(x => x.id === selectedNicheId);
@@ -653,24 +565,50 @@ function renderNicheDetail() {
   const presetChecks = STATE.presets.map(p =>
     `<label class="chk"><input type="checkbox" data-preset="${p.id}" ${(n.preset_ids || []).includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`
   ).join("") || "<span class=muted>aucun preset — crée-en un dans l'onglet Presets</span>";
+  const trackChecks = STATE.tracks.map(t =>
+    `<label class="chk"><input type="checkbox" data-track="tracks/${esc(t.name)}" ${(n.tracks || []).includes("tracks/" + t.name) ? "checked" : ""}> ${esc(t.name)}</label>`
+  ).join("") || "<span class=muted>catalogue vide — ajoute des morceaux via l'onglet Tracks ou Liens</span>";
+  const videos = (n.videos || []).slice().reverse();
+  const library = videos.length ? `<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">` + videos.map(v => {
+    const lines = (v.subtitles && v.subtitles.lines) || [];
+    const [bg, label] = VSTATUS[v.status] || ["#26262e", v.status];
+    return `<div class="card" style="margin:0;padding:.6rem">
+      ${v.exists ? `<video src="/api/videos/${v.id}" controls preload="metadata" style="width:100%;border-radius:7px;background:#000;aspect-ratio:9/16"></video>`
+                 : '<div class="empty" style="padding:1rem">fichier manquant</div>'}
+      <div class="row" style="justify-content:space-between;margin:.4rem 0 .2rem">
+        <span class="pill" style="background:${bg};color:var(--txt)">${label}</span>
+        <span class="muted" style="font-size:.7rem">seed ${v.seed}</span>
+      </div>
+      ${lines.length ? `<div class="muted" style="font-size:.72rem;line-height:1.4">${lines.slice(0, 3).map(esc).join(" · ")}${lines.length > 3 ? "…" : ""}</div>` : ""}
+      <div class="row" style="margin-top:.4rem;gap:.3rem">
+        <button class="sec" style="padding:.3rem .55rem;font-size:.78rem" onclick="setVideoStatus(${v.id},'approved')">Valider</button>
+        <button class="sec" style="padding:.3rem .55rem;font-size:.78rem" onclick="setVideoStatus(${v.id},'rejected')">Rejeter</button>
+        <a class="sec" style="padding:.3rem .55rem;font-size:.78rem" href="/api/videos/${v.id}?dl=1" title="Télécharger">↓</a>
+      </div></div>`;
+  }).join("") + `</div>` : '<div class="empty">aucune vidéo — sélectionne des sons puis clique « Générer »</div>';
+
   el.innerHTML = `
     <div class="card">
       <div class="row" style="justify-content:space-between;margin-top:0">
         <div style="font-size:1.05rem;font-weight:600">${esc(n.name)} <span class="pill">${esc(n.slug)}</span></div>
         <button class="icon-btn" title="Supprimer la niche" onclick="deleteNiche(${n.id})">${SVG.trash}</button>
       </div>
-      <div class="row">Cadence <input id="n-cadence" type="number" min="1" value="${esc(n.cadence)}" style="width:70px"> vidéos / jour</div>
-      <div class="row">Légende <input id="n-caption" style="flex:1" value="${esc(n.caption_template)}"></div>
+      <div class="row">Légende du post <input id="n-caption" style="flex:1" value="${esc(n.caption_template)}"></div>
       <div class="row">Hashtags <input id="n-hashtags" style="flex:1" value="${esc((n.hashtags || []).join(', '))}" placeholder="hardstyle, anime, edit"></div>
-      <div style="margin:.6rem 0 .3rem"><b style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)">Presets liés</b></div>
+      <div style="margin:.6rem 0 .3rem"><b style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)">Presets de montage liés (alternés)</b></div>
       ${presetChecks}
-      <div class="row" style="margin-top:.6rem"><label class="chk"><input type="checkbox" id="n-sub-enabled" ${sub.enabled ? "checked" : ""}> Sous-titres générés (pré-prompt)</label></div>
-      <textarea id="n-sub-preprompt" style="min-height:70px" placeholder="pré-prompt pour la génération des punchlines">${esc(sub.preprompt || "")}</textarea>
-      <div class="row">
-        <button class="act" onclick="saveNiche(${n.id})">Enregistrer</button>
-        <span id="niche-status" class="muted"></span>
-      </div>
+      <div class="row" style="margin-top:.6rem"><label class="chk"><input type="checkbox" id="n-sub-enabled" ${sub.enabled ? "checked" : ""}> Punchlines incrustées (générées)</label></div>
+      <textarea id="n-sub-preprompt" style="min-height:60px" placeholder="pré-prompt des punchlines, ex. « motivation gym, français, percutant, 4 mots max »">${esc(sub.preprompt || "")}</textarea>
+      <div class="row"><button class="act" onclick="saveNiche(${n.id})">Enregistrer la niche</button></div>
     </div>
+
+    <div class="card">
+      <b>Sons de la niche</b>
+      <p class="muted" style="margin:-.3rem 0 .5rem">Coche les morceaux du catalogue que cette niche utilise — la génération en tire un au hasard par variante.</p>
+      ${trackChecks}
+      <div class="row" style="margin-top:.5rem"><button class="sec" onclick="saveNiche(${n.id})">Enregistrer la sélection</button></div>
+    </div>
+
     <div class="card">
       <b>Banque de clips — ${n.clips.length} fichier${n.clips.length > 1 ? "s" : ""}</b>
       <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody>
@@ -680,34 +618,57 @@ function renderNicheDetail() {
       <div class="row" style="margin-top:.8rem">
         <input type="file" id="niche-clip-file" accept=".mp4,.mov,.m4v,.mkv,.webm,.avi">
         <button class="sec" onclick="uploadNicheClip(${n.id})">Uploader un clip</button>
-        <span id="niche-clip-status" class="muted"></span>
       </div>
-      <p class="muted" style="margin:.9rem 0 .3rem">Ou colle des liens YouTube (un par ligne) — téléchargés en vidéo ≤1080p dans la banque :</p>
-      <textarea id="niche-links" style="min-height:80px">${esc(n.links || "")}</textarea>
-      <div class="row">
-        <button class="act" onclick="downloadNicheClips(${n.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Télécharger les clips</button>
-        <span id="niche-links-status" class="muted"></span>
-      </div>
+      <p class="muted" style="margin:.9rem 0 .3rem">Ou colle des liens YouTube (un par ligne) — téléchargés en vidéo ≤1080p :</p>
+      <textarea id="niche-links" style="min-height:70px">${esc(n.links || "")}</textarea>
+      <div class="row"><button class="act" onclick="downloadNicheClips(${n.id})">Télécharger les clips</button></div>
       <div id="niche-dl-log" class="log" style="display:none"></div>
+    </div>
+
+    <div class="card">
+      <b>Génération</b>
+      <div class="row">
+        <input id="n-count" type="number" min="1" max="20" value="${esc(n.cadence || 1)}" style="width:70px"> variante(s)
+        <button class="act" onclick="generateNiche(${n.id})"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>Générer</button>
+      </div>
+      <p class="muted" style="margin:.2rem 0 0">Chaque variante = un morceau + une seed différents → montage et punchlines distincts.</p>
+      <div id="niche-gen-log" class="log" style="display:none"></div>
+      <div style="margin:.9rem 0 .4rem"><b style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)">Bibliothèque — ${videos.length} vidéo${videos.length > 1 ? "s" : ""}</b></div>
+      ${library}
     </div>
   `;
 }
 async function saveNiche(id) {
-  const presetIds = [...document.querySelectorAll("#niche-detail [data-preset]")]
-    .filter(c => c.checked).map(c => +c.dataset.preset);
+  const checked = sel => [...document.querySelectorAll(`#niche-detail [${sel}]`)].filter(c => c.checked);
   const body = {
-    cadence: +document.getElementById("n-cadence").value,
+    cadence: +document.getElementById("n-count")?.value || 1,
     caption_template: document.getElementById("n-caption").value,
     hashtags: document.getElementById("n-hashtags").value.split(",").map(s => s.trim()).filter(Boolean),
-    preset_ids: presetIds,
+    preset_ids: checked("data-preset").map(c => +c.dataset.preset),
+    tracks: checked("data-track").map(c => c.dataset.track),
     subtitles: {enabled: document.getElementById("n-sub-enabled").checked,
                 preprompt: document.getElementById("n-sub-preprompt").value},
   };
   try {
     await api(`/api/niches/${id}`, {...j(body), method: "PATCH"});
     await refresh();
-    flash("niche-status", "enregistré");
-  } catch (e) { flash("niche-status", e.message, true); }
+    toast("niche enregistrée");
+  } catch (e) { toast(e.message, "err"); }
+}
+async function generateNiche(id) {
+  const count = Math.max(1, +document.getElementById("n-count").value || 1);
+  try {
+    const {job_id} = await api(`/api/niches/${id}/generate`, j({count}));
+    toast(`génération de ${count} variante(s) lancée`);
+    followJob(job_id, "niche-gen-log", "niche-gen-status");
+  } catch (e) { toast(e.message, "err"); }
+}
+async function setVideoStatus(id, status) {
+  try {
+    await api(`/api/videos/${id}/status`, j({status}));
+    await refresh();
+    toast(status === "approved" ? "vidéo validée" : "vidéo rejetée");
+  } catch (e) { toast(e.message, "err"); }
 }
 async function deleteNiche(id) {
   if (!await confirmModal("Supprimer cette niche ? Les fichiers (clips, liens) resteront sur le disque.")) return;

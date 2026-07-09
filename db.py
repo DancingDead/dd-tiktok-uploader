@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS niches (
   caption_template TEXT NOT NULL DEFAULT '{title}',
   hashtags TEXT NOT NULL DEFAULT '[]',
   preset_ids TEXT NOT NULL DEFAULT '[]',
+  tracks TEXT NOT NULL DEFAULT '[]',
   subtitles TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS videos (
@@ -55,7 +56,24 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# Colonnes ajoutées après la création initiale du schéma : ADD COLUMN si absentes
+# (CREATE TABLE IF NOT EXISTS ne met pas à jour une base existante).
+_ADDED_COLUMNS = {
+    "niches": {"tracks": "TEXT NOT NULL DEFAULT '[]'"},
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col, decl in columns.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+    conn.commit()
 
 
 def slugify(text: str) -> str:
@@ -111,11 +129,15 @@ def delete_preset(conn: sqlite3.Connection, preset_id: int) -> None:
     conn.commit()
 
 
-NICHE_JSON_FIELDS = {"hashtags": "[]", "preset_ids": "[]", "subtitles": "{}"}
+NICHE_JSON_FIELDS = {"hashtags": "[]", "preset_ids": "[]", "tracks": "[]", "subtitles": "{}"}
 
 
 def niche_clips_dir(data_root: Path, slug: str) -> Path:
     return data_root / "niches" / slug / "clips"
+
+
+def niche_videos_dir(data_root: Path, slug: str) -> Path:
+    return data_root / "niches" / slug / "videos"
 
 
 def niche_links_path(data_root: Path, slug: str) -> Path:
@@ -133,14 +155,15 @@ def create_niche(conn: sqlite3.Connection, data_root: Path, name: str, *,
                  owner: str = "", cadence: int = 1,
                  caption_template: str = "{title}",
                  hashtags: list | None = None, preset_ids: list | None = None,
-                 subtitles: dict | None = None) -> int:
+                 tracks: list | None = None, subtitles: dict | None = None) -> int:
     slug = slugify(name)
     cur = conn.execute(
         "INSERT INTO niches (name, slug, owner, cadence, caption_template,"
-        " hashtags, preset_ids, subtitles) VALUES (?,?,?,?,?,?,?,?)",
+        " hashtags, preset_ids, tracks, subtitles) VALUES (?,?,?,?,?,?,?,?,?)",
         (name, slug, owner, cadence, caption_template,
          json.dumps(hashtags or [], ensure_ascii=False),
          json.dumps(preset_ids or []),
+         json.dumps(tracks or [], ensure_ascii=False),
          json.dumps(subtitles or {}, ensure_ascii=False)))
     niche_clips_dir(data_root, slug).mkdir(parents=True, exist_ok=True)
     conn.commit()
@@ -159,7 +182,7 @@ def list_niches(conn: sqlite3.Connection) -> list[dict]:
 
 def update_niche(conn: sqlite3.Connection, niche_id: int, **fields) -> None:
     allowed = {"name", "owner", "cadence", "caption_template",
-               "hashtags", "preset_ids", "subtitles"}
+               "hashtags", "preset_ids", "tracks", "subtitles"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
