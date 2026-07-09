@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -619,11 +620,26 @@ def assign_caption_slots(edl: list[dict], min_dur: float) -> int:
     return slot + 1
 
 
+def _load_dotenv(path: Path | None = None) -> None:
+    """Charge .env dans os.environ (sans écraser l'existant) pour que
+    ANTHROPIC_API_KEY posée dans .env soit prise en compte sans export manuel."""
+    env_path = path or (Path(__file__).parent / ".env")
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+
+
 def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
     """Appelle Claude pour générer `count` punchlines. Sortie JSON structurée.
     Isolé pour être mocké dans les tests."""
     import anthropic
 
+    _load_dotenv()
     client = anthropic.Anthropic()
     schema = {
         "type": "object",

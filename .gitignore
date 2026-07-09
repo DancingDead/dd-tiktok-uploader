@@ -24,3 +24,4 @@ tiktok*.txt
 # Base de données plateforme et données locales
 platform.db
 data/
+out.mp4
