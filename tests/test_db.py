@@ -174,3 +174,14 @@ def test_video_status_check_constraint(conn, tmp_path):
         set_video_status(conn, vid, "bogus")
     set_video_status(conn, vid, "approved")
     assert list_videos(conn)[0]["status"] == "approved"
+
+
+def test_delete_video_removes_row(conn, tmp_path):
+    from db import delete_video
+    nid = create_niche(conn, tmp_path, "Del Vid")
+    vid = create_video(conn, niche_id=nid, track="tracks/x.wav", seed=1,
+                       file="data/niches/del-vid/videos/v.mp4",
+                       created_at="2026-07-09T12:00:00")
+    delete_video(conn, vid)
+    assert list_videos(conn, niche_id=nid) == []
+    delete_video(conn, vid)   # id inconnu : no-op, pas d'erreur

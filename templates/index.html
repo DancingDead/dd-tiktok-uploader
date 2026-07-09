@@ -587,6 +587,7 @@ function renderNicheDetail() {
         <button class="sec" style="padding:.3rem .55rem;font-size:.78rem" onclick="setVideoStatus(${v.id},'approved')">Valider</button>
         <button class="sec" style="padding:.3rem .55rem;font-size:.78rem" onclick="setVideoStatus(${v.id},'rejected')">Rejeter</button>
         <a class="sec" style="padding:.3rem .55rem;font-size:.78rem" href="/api/videos/${v.id}?dl=1" title="Télécharger">↓</a>
+        <button class="icon-btn" style="margin-left:auto;padding:.25rem" onclick="deleteVideo(${v.id})" title="Supprimer la vidéo">${SVG.trash}</button>
       </div></div>`;
   }).join("") + `</div>` : '<div class="empty">aucune vidéo — sélectionne des sons puis clique « Générer »</div>';
 
@@ -712,6 +713,14 @@ async function setVideoStatus(id, status) {
     await api(`/api/videos/${id}/status`, j({status}));
     await refresh();
     toast(status === "approved" ? "vidéo validée" : "vidéo rejetée");
+  } catch (e) { toast(e.message, "err"); }
+}
+async function deleteVideo(id) {
+  if (!await confirmModal("Supprimer définitivement cette vidéo ? Le fichier sera effacé du disque.")) return;
+  try {
+    await api(`/api/videos/${id}`, {method: "DELETE"});
+    await refresh();
+    toast("vidéo supprimée");
   } catch (e) { toast(e.message, "err"); }
 }
 async function deleteNiche(id) {

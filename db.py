@@ -240,6 +240,12 @@ def set_video_status(conn: sqlite3.Connection, video_id: int, status: str,
     conn.commit()
 
 
+def delete_video(conn: sqlite3.Connection, video_id: int) -> None:
+    """Retire la ligne vidéo (le fichier sur disque est géré par l'appelant)."""
+    conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    conn.commit()
+
+
 def effective_config(overrides: dict) -> dict:
     """DEFAULT_CONFIG ← settings.json ← preset (ordre de la spec)."""
     return merge_settings(load_settings(), overrides)

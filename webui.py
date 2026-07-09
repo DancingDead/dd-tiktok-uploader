@@ -264,6 +264,22 @@ def create_app(root: Path | None = None):
                          as_attachment=request.args.get("dl") == "1",
                          download_name=path.name)
 
+    @app.delete("/api/videos/<int:video_id>")
+    def delete_video_ep(video_id):
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT file FROM videos WHERE id = ?", (video_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "vidéo inconnue"}), 404
+            dbmod.delete_video(conn, video_id)
+        finally:
+            conn.close()
+        # efface le fichier sur disque, mais seulement sous data/ (garde anti-traversal)
+        path = (paths["data"].parent / row["file"]).resolve()
+        if path.is_file() and paths["data"].resolve() in path.parents:
+            path.unlink()
+        return jsonify({"ok": True})
+
     @app.post("/api/videos/<int:video_id>/status")
     def set_video_status_ep(video_id):
         status = (request.json or {}).get("status")

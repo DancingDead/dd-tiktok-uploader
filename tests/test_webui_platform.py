@@ -67,3 +67,24 @@ def test_preset_crud_via_api(client):
     assert client.get("/api/state").get_json()["presets"][0]["name"] == "strobo hard"
     client.delete(f"/api/presets/{pid}")
     assert client.get("/api/state").get_json()["presets"] == []
+
+
+def test_delete_video_removes_row_and_file(client, tmp_path):
+    from db import connect, create_niche, create_video, list_videos
+    conn = connect(tmp_path / "platform.db")
+    nid = create_niche(conn, tmp_path / "data", "Lib")
+    vfile = tmp_path / "data" / "niches" / "lib" / "videos" / "v.mp4"
+    vfile.parent.mkdir(parents=True, exist_ok=True)
+    vfile.write_bytes(b"fake mp4")
+    vid = create_video(conn, niche_id=nid, track="tracks/x.wav", seed=1,
+                       file="data/niches/lib/videos/v.mp4",
+                       created_at="2026-07-09T12:00:00")
+    conn.close()
+
+    assert client.delete(f"/api/videos/{vid}").status_code == 200
+    assert not vfile.exists()                 # fichier effacé du disque
+    conn = connect(tmp_path / "platform.db")
+    assert list_videos(conn) == []            # ligne supprimée en base
+    conn.close()
+
+    assert client.delete(f"/api/videos/{vid}").status_code == 404  # id inconnu
