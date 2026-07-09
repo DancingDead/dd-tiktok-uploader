@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS niches (
   hashtags TEXT NOT NULL DEFAULT '[]',
   preset_ids TEXT NOT NULL DEFAULT '[]',
   tracks TEXT NOT NULL DEFAULT '[]',
+  clips TEXT NOT NULL DEFAULT '[]',
   subtitles TEXT NOT NULL DEFAULT '{}'
 );
 CREATE TABLE IF NOT EXISTS videos (
@@ -63,7 +64,8 @@ def connect(path: Path) -> sqlite3.Connection:
 # Colonnes ajoutées après la création initiale du schéma : ADD COLUMN si absentes
 # (CREATE TABLE IF NOT EXISTS ne met pas à jour une base existante).
 _ADDED_COLUMNS = {
-    "niches": {"tracks": "TEXT NOT NULL DEFAULT '[]'"},
+    "niches": {"tracks": "TEXT NOT NULL DEFAULT '[]'",
+               "clips": "TEXT NOT NULL DEFAULT '[]'"},
 }
 
 
@@ -129,7 +131,8 @@ def delete_preset(conn: sqlite3.Connection, preset_id: int) -> None:
     conn.commit()
 
 
-NICHE_JSON_FIELDS = {"hashtags": "[]", "preset_ids": "[]", "tracks": "[]", "subtitles": "{}"}
+NICHE_JSON_FIELDS = {"hashtags": "[]", "preset_ids": "[]", "tracks": "[]",
+                     "clips": "[]", "subtitles": "{}"}
 
 
 def niche_clips_dir(data_root: Path, slug: str) -> Path:
@@ -155,15 +158,18 @@ def create_niche(conn: sqlite3.Connection, data_root: Path, name: str, *,
                  owner: str = "", cadence: int = 1,
                  caption_template: str = "{title}",
                  hashtags: list | None = None, preset_ids: list | None = None,
-                 tracks: list | None = None, subtitles: dict | None = None) -> int:
+                 tracks: list | None = None, clips: list | None = None,
+                 subtitles: dict | None = None) -> int:
     slug = slugify(name)
     cur = conn.execute(
         "INSERT INTO niches (name, slug, owner, cadence, caption_template,"
-        " hashtags, preset_ids, tracks, subtitles) VALUES (?,?,?,?,?,?,?,?,?)",
+        " hashtags, preset_ids, tracks, clips, subtitles)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
         (name, slug, owner, cadence, caption_template,
          json.dumps(hashtags or [], ensure_ascii=False),
          json.dumps(preset_ids or []),
          json.dumps(tracks or [], ensure_ascii=False),
+         json.dumps(clips or [], ensure_ascii=False),
          json.dumps(subtitles or {}, ensure_ascii=False)))
     niche_clips_dir(data_root, slug).mkdir(parents=True, exist_ok=True)
     conn.commit()
@@ -182,7 +188,7 @@ def list_niches(conn: sqlite3.Connection) -> list[dict]:
 
 def update_niche(conn: sqlite3.Connection, niche_id: int, **fields) -> None:
     allowed = {"name", "owner", "cadence", "caption_template",
-               "hashtags", "preset_ids", "tracks", "subtitles"}
+               "hashtags", "preset_ids", "tracks", "clips", "subtitles"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return

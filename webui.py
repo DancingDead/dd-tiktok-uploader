@@ -83,7 +83,9 @@ def create_app(root: Path | None = None):
     paths = {
         "db": root / "platform.db", "data": root / "data",
         "tracks": root / "tracks",
+        "clips": root / "clips",
         "links": root / "links.txt",
+        "clip_links": root / "clip_links.txt",
         "settings": root / "settings.json",
     }
     paths["data"].mkdir(exist_ok=True)
@@ -143,6 +145,16 @@ def create_app(root: Path | None = None):
             key=lambda t: t["name"],
         ) if tracks_dir.is_dir() else []
 
+        clips_dir = paths["clips"]
+        clips = sorted(
+            (
+                {"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 1)}
+                for p in clips_dir.glob("*")
+                if p.suffix.lower() in VIDEO_EXTS
+            ),
+            key=lambda c: c["name"],
+        ) if clips_dir.is_dir() else []
+
         settings = load_settings(paths["settings"])
         with _jobs_lock:
             jobs = {jid: dict(job) for jid, job in _jobs.items()}
@@ -158,13 +170,8 @@ def create_app(root: Path | None = None):
             conn.close()
 
         for niche in niches:
-            clips_dir = dbmod.niche_clips_dir(paths["data"], niche["slug"])
-            niche["clips"] = sorted(
-                ({"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 1)}
-                 for p in clips_dir.glob("*") if p.suffix.lower() in VIDEO_EXTS),
-                key=lambda c: c["name"]) if clips_dir.is_dir() else []
-            links = dbmod.niche_links_path(paths["data"], niche["slug"])
-            niche["links"] = links.read_text() if links.is_file() else ""
+            # niche["clips"] = sélection de chemins (déjà chargée depuis la base) ;
+            # le catalogue partagé est exposé au niveau racine ("clips").
             niche["videos"] = [
                 {"id": v["id"], "status": v["status"], "seed": v["seed"],
                  "track": Path(v["track"]).name, "caption": v["caption"],
@@ -178,7 +185,9 @@ def create_app(root: Path | None = None):
                 "niches": niches,
                 "presets": presets,
                 "links": links_path.read_text() if links_path.is_file() else "",
+                "clip_links": paths["clip_links"].read_text() if paths["clip_links"].is_file() else "",
                 "tracks": tracks,
+                "clips": clips,
                 "settings": {k: settings[k] for k in EDITABLE_SETTINGS},
                 "jobs": jobs,
             }
@@ -225,6 +234,33 @@ def create_app(root: Path | None = None):
         paths["tracks"].mkdir(exist_ok=True)
         file.save(paths["tracks"] / name)
         return jsonify({"ok": True, "name": name})
+
+    @app.post("/api/clips")
+    def upload_clip():
+        file = request.files["file"]
+        name = Path(file.filename).name  # pas de traversée de chemin
+        if Path(name).suffix.lower() not in VIDEO_EXTS:
+            return jsonify({"error": f"format non supporté : {name}"}), 400
+        paths["clips"].mkdir(exist_ok=True)
+        file.save(paths["clips"] / name)
+        return jsonify({"ok": True, "name": name})
+
+    @app.post("/api/clip-links")
+    def save_clip_links():
+        paths["clip_links"].write_text(request.json["text"])
+        return jsonify({"ok": True})
+
+    @app.post("/api/clips/download")
+    def download_clips():
+        paths["clips"].mkdir(exist_ok=True)
+        try:
+            job_id = start_job("download-clips",
+                               [sys.executable, "fetch_tracks.py",
+                                str(paths["clip_links"]), "--video",
+                                "--dest", str(paths["clips"])])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"job_id": job_id})
 
     @app.post("/api/settings")
     def save_settings():
@@ -346,45 +382,6 @@ def create_app(root: Path | None = None):
         finally:
             conn.close()
         return niche
-
-    @app.post("/api/niches/<int:niche_id>/clips")
-    def upload_niche_clip(niche_id):
-        niche = _niche_or_404(niche_id)
-        if niche is None:
-            return jsonify({"error": "niche inconnue"}), 404
-        file = request.files["file"]
-        name = Path(file.filename).name
-        if Path(name).suffix.lower() not in VIDEO_EXTS:
-            return jsonify({"error": f"format non supporté : {name}"}), 400
-        target = dbmod.niche_clips_dir(paths["data"], niche["slug"])
-        target.mkdir(parents=True, exist_ok=True)
-        file.save(target / name)
-        return jsonify({"ok": True, "name": name})
-
-    @app.post("/api/niches/<int:niche_id>/links")
-    def save_niche_links(niche_id):
-        niche = _niche_or_404(niche_id)
-        if niche is None:
-            return jsonify({"error": "niche inconnue"}), 404
-        links = dbmod.niche_links_path(paths["data"], niche["slug"])
-        links.parent.mkdir(parents=True, exist_ok=True)
-        links.write_text(request.json["text"])
-        return jsonify({"ok": True})
-
-    @app.post("/api/niches/<int:niche_id>/download")
-    def download_niche_clips(niche_id):
-        niche = _niche_or_404(niche_id)
-        if niche is None:
-            return jsonify({"error": "niche inconnue"}), 404
-        links = dbmod.niche_links_path(paths["data"], niche["slug"])
-        clips = dbmod.niche_clips_dir(paths["data"], niche["slug"])
-        try:
-            job_id = start_job(f"clips-{niche['slug']}",
-                               [sys.executable, "fetch_tracks.py", str(links),
-                                "--video", "--dest", str(clips)])
-        except RuntimeError as exc:
-            return jsonify({"error": str(exc)}), 409
-        return jsonify({"job_id": job_id})
 
     @app.post("/api/presets")
     def create_preset_ep():

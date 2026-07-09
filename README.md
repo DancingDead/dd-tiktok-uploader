@@ -83,11 +83,15 @@ Puis, dans l'interface, une **niche** (ex. « Naruto Édits », « Motivation
 Gym ») relie tout ce qu'il faut pour produire :
 
 - un **preset** de montage (le style),
-- une **banque de clips** propre (upload direct ou liens YouTube téléchargés
-  en vidéo ≤1080p) — dossier `data/niches/<slug>/clips/`,
+- une **sélection de clips** dans le catalogue partagé (`clips/`),
 - une **sélection de sons** dans le catalogue partagé (`tracks/`),
 - un **préprompt de punchlines** (les sous-titres générés par Claude),
 - une légende et des hashtags.
+
+Tout est **partagé et sélectionné** : les sons comme les clips vivent dans un
+catalogue commun du label (onglet **Catalogue**, sections Sons et Clips, où on
+les ajoute par upload ou lien YouTube) ; la niche ne fait que **piocher** dedans
+(ajout/retrait immédiats, « retirer » ne supprime pas le fichier du catalogue).
 
 Depuis la carte **Génération**, on lance à la demande (aucune heure à
 programmer) un **lot de N variantes** : chacune tire un son et une seed

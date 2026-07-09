@@ -34,25 +34,33 @@ def test_niche_crud_via_api(client, tmp_path):
     assert client.get("/api/state").get_json()["niches"] == []
 
 
-def test_niche_clip_upload_and_links(client, tmp_path):
-    nid = client.post("/api/niches", json={"name": "Gym"}).get_json()["id"]
-
-    upload = client.post(f"/api/niches/{nid}/clips", data={
+def test_shared_clip_catalog_and_niche_selection(client, tmp_path):
+    # upload d'un clip dans le catalogue partagé
+    upload = client.post("/api/clips", data={
         "file": (io.BytesIO(b"fake video"), "extrait.mp4")},
         content_type="multipart/form-data")
     assert upload.status_code == 200
-    assert (tmp_path / "data/niches/gym/clips/extrait.mp4").read_bytes() == b"fake video"
+    assert (tmp_path / "clips" / "extrait.mp4").read_bytes() == b"fake video"
 
-    bad = client.post(f"/api/niches/{nid}/clips", data={
+    bad = client.post("/api/clips", data={
         "file": (io.BytesIO(b"x"), "notes.txt")},
         content_type="multipart/form-data")
     assert bad.status_code == 400
 
-    client.post(f"/api/niches/{nid}/links", json={"text": "https://youtu.be/xyz\n"})
-    assert (tmp_path / "data/niches/gym/links.txt").read_text().startswith("https://")
+    # le clip apparaît dans le catalogue partagé (state["clips"]), pas dans une niche
     state = client.get("/api/state").get_json()
-    assert state["niches"][0]["links"].startswith("https://")
-    assert state["niches"][0]["clips"][0]["name"] == "extrait.mp4"
+    assert state["clips"][0]["name"] == "extrait.mp4"
+
+    # une niche sélectionne le clip (aucun import dans la niche)
+    nid = client.post("/api/niches", json={"name": "Gym"}).get_json()["id"]
+    client.patch(f"/api/niches/{nid}", json={"clips": ["clips/extrait.mp4"]})
+    state = client.get("/api/state").get_json()
+    assert state["niches"][0]["clips"] == ["clips/extrait.mp4"]
+
+    # liens YouTube du catalogue de clips
+    client.post("/api/clip-links", json={"text": "https://youtu.be/xyz\n"})
+    assert (tmp_path / "clip_links.txt").read_text().startswith("https://")
+    assert client.get("/api/state").get_json()["clip_links"].startswith("https://")
 
 
 def test_preset_crud_via_api(client):

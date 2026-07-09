@@ -58,6 +58,9 @@
   .head svg{width:22px;height:22px;color:var(--accent)}
   h2{font-size:1.15rem;font-weight:600;margin:0}
   .sub{color:var(--dim);font-size:.86rem;margin:.1rem 0 1.2rem}
+  .cat-sub{font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;color:var(--accent);
+           font-weight:600;margin:1.6rem 0 .7rem;padding-top:1.1rem;border-top:1px solid var(--line)}
+  .cat-sub:first-of-type{border-top:0;padding-top:0;margin-top:.4rem}
 
   /* --- Champs & boutons --- */
   textarea,input,select{background:var(--panel-2);border:1px solid var(--line);
@@ -246,8 +249,10 @@
 </section>
 
 <section id="tracks">
-  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><h2>Catalogue de sons</h2></div>
-  <p class="sub">Le catalogue musical partagé du label — les niches y piochent leurs morceaux. Ajoute des sons par upload ou par lien YouTube.</p>
+  <div class="head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><h2>Catalogue</h2></div>
+  <p class="sub">Les ressources partagées du label — les niches y piochent leurs sons et leurs clips. Ajoute-les par upload ou par lien YouTube.</p>
+
+  <h3 class="cat-sub">Sons</h3>
   <div class="row">
     <input type="file" id="track-file" accept=".wav,.mp3,.flac,.m4a,.ogg,.aiff">
     <button class="act" onclick="uploadTrack()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Uploader un fichier</button>
@@ -268,6 +273,28 @@
   <div id="dl-log" class="log" style="display:none"></div>
   <p class="sub" style="margin-top:1.1rem">Morceaux du catalogue :</p>
   <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="tracks-body"></tbody></table>
+
+  <h3 class="cat-sub">Clips</h3>
+  <div class="row">
+    <input type="file" id="clip-file" accept=".mp4,.mov,.m4v,.mkv,.webm,.avi">
+    <button class="act" onclick="uploadClip()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Uploader un fichier</button>
+    <span id="clip-status" class="muted"></span>
+  </div>
+  <p class="sub" style="margin-top:1.1rem">Ou depuis YouTube (vidéo ou playlist) — « Télécharger » récupère la vidéo ≤1080p dans <code>clips/</code> :</p>
+  <div class="row">
+    <input id="clip-link-input" placeholder="Colle un lien YouTube (vidéo ou playlist)…" style="flex:1"
+           onkeydown="if(event.key==='Enter')addClipLink()">
+    <button class="sec" onclick="addClipLink()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Ajouter</button>
+  </div>
+  <div id="clip-links-list"></div>
+  <div class="row">
+    <button class="act" onclick="downloadClips()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Télécharger les clips</button>
+    <button class="ghost" onclick="toggleRawClipLinks()">Éditer en texte</button>
+  </div>
+  <textarea id="clip-links" style="display:none;margin-top:.6rem" oninput="onRawClipEdit()"></textarea>
+  <div id="clip-dl-log" class="log" style="display:none"></div>
+  <p class="sub" style="margin-top:1.1rem">Clips du catalogue :</p>
+  <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="clips-body"></tbody></table>
 </section>
 
 <section id="reglages">
@@ -420,7 +447,10 @@ async function refresh() {
   document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
     `<tr><td>${esc(t.name)}</td><td class=muted>${esc(t.size_mb)} Mo</td></tr>`).join("")
     || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
-  renderLinks(); renderSettings(); renderNiches(); renderPresets();
+  document.getElementById("clips-body").innerHTML = STATE.clips.map(c =>
+    `<tr><td>${esc(c.name)}</td><td class=muted>${esc(c.size_mb)} Mo</td></tr>`).join("")
+    || "<tr><td colspan=2 class=muted>aucun clip</td></tr>";
+  renderLinks(); renderClipLinks(); renderSettings(); renderNiches(); renderPresets();
 }
 
 
@@ -489,6 +519,80 @@ async function download() {
   await saveLinksArr();
   try { const {job_id} = await api("/api/download", j({})); followJob(job_id, "dl-log", "links-status"); }
   catch (e) { toast(e.message, "err"); }
+}
+
+/* --- Clips du catalogue (liens YouTube en cartes, calqué sur les sons) --- */
+let CLIP_LINKS = [];
+function renderClipLinks() {
+  CLIP_LINKS = parseLinkText(STATE.clip_links);
+  document.getElementById("clip-links").value = CLIP_LINKS.join("\n");
+  const list = document.getElementById("clip-links-list");
+  if (!CLIP_LINKS.length) {
+    list.innerHTML = '<div class="empty">Aucun lien pour l\'instant — colle une URL YouTube ci-dessus.</div>';
+    return;
+  }
+  list.innerHTML = CLIP_LINKS.map((u, i) => `
+    <div class="link-card" data-ci="${i}">
+      <img class="thumb" alt="" style="visibility:hidden">
+      <div class="lk-body"><div class="lk-title muted">chargement du titre…</div><div class="lk-url">${esc(u)}</div></div>
+      <button class="icon-btn" title="Retirer" onclick="removeClipLink(${i})">${SVG.trash}</button>
+    </div>`).join("");
+  CLIP_LINKS.forEach(enrichClipLink);
+}
+async function enrichClipLink(url, i) {
+  let info = {};
+  try { info = await (await fetch("/api/link-info?url=" + encodeURIComponent(url))).json(); } catch (e) {}
+  const card = document.querySelector(`.link-card[data-ci="${i}"]`);
+  if (!card) return;
+  const title = card.querySelector(".lk-title");
+  title.textContent = info.title || "titre indisponible (playlist ou vidéo privée)";
+  title.classList.toggle("muted", !info.title);
+  if (info.thumbnail) { const img = card.querySelector(".thumb"); img.src = info.thumbnail; img.style.visibility = "visible"; }
+}
+function saveClipLinksArr() {
+  STATE.clip_links = CLIP_LINKS.join("\n");
+  document.getElementById("clip-links").value = STATE.clip_links;
+  return api("/api/clip-links", j({text: STATE.clip_links}));
+}
+async function addClipLink() {
+  const inp = document.getElementById("clip-link-input");
+  const u = inp.value.trim();
+  if (!u) return;
+  if (!YT_RE.test(u)) return toast("ce n'est pas un lien YouTube valide", "err");
+  if (CLIP_LINKS.includes(u)) { inp.value = ""; return toast("ce lien est déjà dans la liste", "err"); }
+  CLIP_LINKS.push(u); inp.value = "";
+  try { await saveClipLinksArr(); renderClipLinks(); toast("lien ajouté"); }
+  catch (e) { toast(e.message, "err"); }
+}
+async function removeClipLink(i) {
+  CLIP_LINKS.splice(i, 1);
+  try { await saveClipLinksArr(); renderClipLinks(); toast("lien retiré"); }
+  catch (e) { toast(e.message, "err"); }
+}
+function toggleRawClipLinks() {
+  const t = document.getElementById("clip-links");
+  t.style.display = t.style.display === "none" ? "block" : "none";
+  if (t.style.display === "block") t.focus();
+}
+function onRawClipEdit() {
+  STATE.clip_links = document.getElementById("clip-links").value;
+  renderClipLinks();
+  saveClipLinksArr();
+}
+async function downloadClips() {
+  await saveClipLinksArr();
+  try { const {job_id} = await api("/api/clips/download", j({})); followJob(job_id, "clip-dl-log", "clips-status"); }
+  catch (e) { toast(e.message, "err"); }
+}
+async function uploadClip() {
+  const input = document.getElementById("clip-file");
+  if (!input.files.length) return flash("clip-status", "choisis un fichier", true);
+  const form = new FormData();
+  form.append("file", input.files[0]);
+  try {
+    await api("/api/clips", {method: "POST", body: form});
+    flash("clip-status", "uploadé"); refresh();
+  } catch (e) { flash("clip-status", e.message, true); }
 }
 
 /* --- Jobs --- */
@@ -609,19 +713,9 @@ function renderNicheDetail() {
     </div>
 
     <div class="card">
-      <b>Banque de clips — ${n.clips.length} fichier${n.clips.length > 1 ? "s" : ""}</b>
-      <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody>
-        ${n.clips.map(c => `<tr><td>${esc(c.name)}</td><td class=muted>${esc(c.size_mb)} Mo</td></tr>`).join("")
-          || "<tr><td colspan=2 class=muted>aucun clip — uploade ou télécharge ci-dessous</td></tr>"}
-      </tbody></table>
-      <div class="row" style="margin-top:.8rem">
-        <input type="file" id="niche-clip-file" accept=".mp4,.mov,.m4v,.mkv,.webm,.avi">
-        <button class="sec" onclick="uploadNicheClip(${n.id})">Uploader un clip</button>
-      </div>
-      <p class="muted" style="margin:.9rem 0 .3rem">Ou colle des liens YouTube (un par ligne) — téléchargés en vidéo ≤1080p :</p>
-      <textarea id="niche-links" style="min-height:70px">${esc(n.links || "")}</textarea>
-      <div class="row"><button class="act" onclick="downloadNicheClips(${n.id})">Télécharger les clips</button></div>
-      <div id="niche-dl-log" class="log" style="display:none"></div>
+      <b>Clips de la niche</b>
+      <p class="muted" style="margin:-.3rem 0 .5rem">Les extraits vidéo utilisés pour le montage. Retrait et ajout sont immédiats ; « retirer » ne supprime pas le fichier du catalogue partagé.</p>
+      <div id="niche-clips">${clipsMarkup(n)}</div>
     </div>
 
     <div class="card">
@@ -680,6 +774,49 @@ async function removeNicheSound(btn) {
     n.tracks = tracks; renderNicheSounds(); toast("son retiré de la niche");
   } catch (e) { toast(e.message, "err"); }
 }
+function clipsMarkup(n) {
+  const inNiche = n.clips || [];
+  const owned = inNiche.length ? inNiche.map(cp =>
+    `<div class="sound-row"><span class="sound-name">${esc(cp.replace(/^clips\//, ""))}</span>` +
+    `<button class="icon-btn" title="Retirer de la niche" data-clip="${esc(cp)}" onclick="removeNicheClip(this)">${SVG.trash}</button></div>`
+  ).join("") : '<div class="empty" style="padding:.7rem">aucun clip — ajoute-en depuis le catalogue ci-dessous</div>';
+  const catalog = STATE.clips.filter(c => !inNiche.includes("clips/" + c.name));
+  if (!STATE.clips.length)
+    return owned + '<div class="muted" style="padding:.5rem .1rem 0">catalogue vide — ajoute des clips via l\'onglet Catalogue</div>';
+  if (!catalog.length) return owned;
+  const add = catalog.map(c =>
+    `<div class="sound-row"><span class="sound-name muted">${esc(c.name)}</span>` +
+    `<button class="icon-btn add" title="Ajouter à la niche" data-clip="clips/${esc(c.name)}" onclick="addNicheClip(this)">${SVG.plus}</button></div>`
+  ).join("");
+  return owned + '<div style="margin:.7rem 0 .2rem"><b style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--dim)">Ajouter depuis le catalogue</b></div>' + add;
+}
+function renderNicheClips() {
+  const box = document.getElementById("niche-clips");
+  const n = STATE.niches.find(x => x.id === selectedNicheId);
+  if (box && n) box.innerHTML = clipsMarkup(n);
+}
+async function addNicheClip(btn) {
+  const n = STATE.niches.find(x => x.id === selectedNicheId);
+  if (!n) return;
+  const clip = btn.dataset.clip;
+  const clips = (n.clips || []).slice();
+  if (clips.includes(clip)) return;
+  clips.push(clip);
+  try {
+    await api(`/api/niches/${n.id}`, {...j({clips}), method: "PATCH"});
+    n.clips = clips; renderNicheClips(); toast("clip ajouté à la niche");
+  } catch (e) { toast(e.message, "err"); }
+}
+async function removeNicheClip(btn) {
+  const n = STATE.niches.find(x => x.id === selectedNicheId);
+  if (!n) return;
+  const clip = btn.dataset.clip;
+  const clips = (n.clips || []).filter(c => c !== clip);
+  try {
+    await api(`/api/niches/${n.id}`, {...j({clips}), method: "PATCH"});
+    n.clips = clips; renderNicheClips(); toast("clip retiré de la niche");
+  } catch (e) { toast(e.message, "err"); }
+}
 async function saveNiche(id) {
   const checked = sel => [...document.querySelectorAll(`#niche-detail [${sel}]`)].filter(c => c.checked);
   const body = {
@@ -726,25 +863,6 @@ async function deleteNiche(id) {
   await refresh();
   toast("niche supprimée");
 }
-async function uploadNicheClip(id) {
-  const input = document.getElementById("niche-clip-file");
-  if (!input.files.length) return flash("niche-clip-status", "choisis un fichier", true);
-  const form = new FormData();
-  form.append("file", input.files[0]);
-  try {
-    await api(`/api/niches/${id}/clips`, {method: "POST", body: form});
-    await refresh();
-    flash("niche-clip-status", "uploadé");
-  } catch (e) { flash("niche-clip-status", e.message, true); }
-}
-async function downloadNicheClips(id) {
-  try {
-    await api(`/api/niches/${id}/links`, j({text: document.getElementById("niche-links").value}));
-    const {job_id} = await api(`/api/niches/${id}/download`, j({}));
-    followJob(job_id, "niche-dl-log", "niche-links-status");
-  } catch (e) { flash("niche-links-status", e.message, true); }
-}
-
 /* --- Presets --- */
 let selectedPresetId = null; // null = nouveau preset en cours d'édition
 

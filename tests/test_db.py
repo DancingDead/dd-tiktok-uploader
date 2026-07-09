@@ -128,6 +128,37 @@ def test_niche_tracks_default_empty(conn, tmp_path):
     assert get_niche(conn, nid)["tracks"] == []
 
 
+def test_niche_clips_selection_roundtrip(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Clip Sel",
+                       clips=["clips/a.mp4", "clips/b.mp4"])
+    assert get_niche(conn, nid)["clips"] == ["clips/a.mp4", "clips/b.mp4"]
+    update_niche(conn, nid, clips=["clips/c.mp4"])
+    assert get_niche(conn, nid)["clips"] == ["clips/c.mp4"]
+
+
+def test_niche_clips_default_empty(conn, tmp_path):
+    nid = create_niche(conn, tmp_path, "Vide Clips")
+    assert get_niche(conn, nid)["clips"] == []
+
+
+def test_connect_migrates_missing_niche_clips_column(tmp_path):
+    import sqlite3
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript("""CREATE TABLE niches (id INTEGER PRIMARY KEY, name TEXT,
+        slug TEXT UNIQUE, owner TEXT DEFAULT '', cadence INTEGER DEFAULT 1,
+        caption_template TEXT DEFAULT '{title}', hashtags TEXT DEFAULT '[]',
+        preset_ids TEXT DEFAULT '[]', tracks TEXT DEFAULT '[]',
+        subtitles TEXT DEFAULT '{}');""")
+    old.execute("INSERT INTO niches (name, slug) VALUES ('X', 'x')")
+    old.commit(); old.close()
+    c = connect(path)
+    cols = {r["name"] for r in c.execute("PRAGMA table_info(niches)")}
+    assert "clips" in cols
+    assert c.execute("SELECT clips FROM niches WHERE slug='x'").fetchone()["clips"] == "[]"
+    c.close()
+
+
 def test_niche_slug_collision_rejected(conn, tmp_path):
     create_niche(conn, tmp_path, "Gym")
     import sqlite3 as sq

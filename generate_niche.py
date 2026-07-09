@@ -52,9 +52,15 @@ def main() -> None:
         sys.exit(f"niche #{niche_id} introuvable")
     if not niche["tracks"]:
         sys.exit("cette niche n'a aucun morceau sélectionné")
+    if not niche["clips"]:
+        sys.exit("cette niche n'a aucun clip sélectionné")
 
-    clips = load_clips(dbmod.niche_clips_dir(root / "data", niche["slug"]))
-    print(f"Scan de {len(clips)} clip(s)…", flush=True)
+    # Clips sélectionnés dans le catalogue partagé (root/clips), scannés une fois.
+    selected = {Path(c).name for c in niche["clips"]}
+    clips = [c for c in load_clips(root / "clips") if c["path"].name in selected]
+    if not clips:
+        sys.exit("aucun clip sélectionné n'est présent dans le catalogue partagé")
+    print(f"Scan de {len(clips)} clip(s) sélectionné(s)…", flush=True)
     scan_clips(clips, cache_dir=root / "data" / "cache" / "scan")
 
     preset_by_id = {p["id"]: p for p in dbmod.list_presets(conn)}
