@@ -4,6 +4,7 @@ numpy>=2.4
 yt-dlp>=2026.6.9
 opencv-python-headless>=4.10,<5
 anthropic>=0.40           # génération des punchlines incrustées (subtitles)
+waitress>=3.0             # serveur WSGI de production (Windows-friendly)
 
 # Tests
 pytest>=8.0

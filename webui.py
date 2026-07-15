@@ -87,6 +87,7 @@ def create_app(root: Path | None = None):
         "links": root / "links.txt",
         "clip_links": root / "clip_links.txt",
         "settings": root / "settings.json",
+        "dist": root / "frontend" / "dist",  # build React (mono-serveur en prod)
     }
     paths["data"].mkdir(exist_ok=True)
     secret_file = paths["data"] / "secret_key"
@@ -125,9 +126,26 @@ def create_app(root: Path | None = None):
         session.pop("member", None)
         return jsonify({"ok": True})
 
-    @app.get("/")
-    def index():
-        return render_template("index.html")
+    def serve_spa(path=""):
+        """Sert le build React (frontend/dist) en prod : le fichier demandé s'il
+        existe, sinon index.html (SPA). Retombe sur l'ancienne UI Jinja si le
+        build est absent (pratique en dev sans `npm run build`). Les routes
+        /api/* enregistrées ont priorité sur ce catch-all."""
+        from flask import abort, send_from_directory
+
+        dist = paths["dist"]
+        if path and not path.startswith("api"):
+            candidate = (dist / path)
+            if candidate.is_file():
+                return send_from_directory(dist, path)
+        if path.startswith("api"):
+            abort(404)
+        if (dist / "index.html").is_file():
+            return send_from_directory(dist, "index.html")
+        return render_template("index.html")  # fallback dev (ancienne UI vanilla)
+
+    app.add_url_rule("/", "index", serve_spa)
+    app.add_url_rule("/<path:path>", "spa", serve_spa)
 
     VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 
