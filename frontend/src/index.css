@@ -1,0 +1,79 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Identité Dancing Dead : noir OLED + accent rouge #ff1e46, typo Fira. */
+:root {
+  --radius: 0.625rem;
+
+  --background: #0a0a0a;
+  --foreground: #f4f2f5;
+
+  --card: #121114;
+  --card-foreground: #f4f2f5;
+  --popover: #16151a;
+  --popover-foreground: #f4f2f5;
+
+  --primary: #ff1e46;
+  --primary-foreground: #ffffff;
+
+  --secondary: #1c1b20;
+  --secondary-foreground: #f4f2f5;
+
+  --muted: #1c1b20;
+  --muted-foreground: #8b8592;
+
+  --accent: #26242b;
+  --accent-foreground: #f4f2f5;
+
+  --destructive: #ff1e46;
+  --destructive-foreground: #ffffff;
+
+  --border: #2a282f;
+  --input: #2a282f;
+  --ring: #ff1e46;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: 0.01em;
+  }
+}
