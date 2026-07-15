@@ -13,8 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { ConfirmDialog } from "./ConfirmDialog"
-import { JobLog } from "./JobLog"
+import { confirm } from "@/components/confirm"
+import { JobLog } from "@/components/JobLog"
 
 export type SectionConfig = {
   accept: string
@@ -55,7 +55,6 @@ export function AssetSection({
   const fileRef = useRef<HTMLInputElement>(null)
   const [newLink, setNewLink] = useState("")
   const [jobId, setJobId] = useState<string | null>(null)
-  const [target, setTarget] = useState<string | null>(null)
   const links = parseLinks(linksText)
 
   const guard = async (fn: () => Promise<unknown>, ok: string) => {
@@ -102,11 +101,12 @@ export function AssetSection({
     [refresh]
   )
 
-  const confirmDelete = async () => {
-    if (!target) return
-    const name = target
-    setTarget(null)
-    await guard(() => onDelete(name), "supprimé")
+  const askDelete = async (name: string) => {
+    const ok = await confirm({
+      title: "Supprimer du catalogue ?",
+      description: `« ${name} » sera effacé du disque et retiré des niches qui l'utilisent.`,
+    })
+    if (ok) await guard(() => onDelete(name), "supprimé")
   }
 
   return (
@@ -187,7 +187,7 @@ export function AssetSection({
                     variant="ghost"
                     size="icon"
                     title="Supprimer du catalogue"
-                    onClick={() => setTarget(a.name)}
+                    onClick={() => askDelete(a.name)}
                   >
                     <Trash2 />
                   </Button>
@@ -197,14 +197,6 @@ export function AssetSection({
           )}
         </TableBody>
       </Table>
-
-      <ConfirmDialog
-        open={target !== null}
-        title="Supprimer du catalogue ?"
-        description={`« ${target} » sera effacé du disque et retiré des niches qui l'utilisent.`}
-        onConfirm={confirmDelete}
-        onCancel={() => setTarget(null)}
-      />
     </div>
   )
 }

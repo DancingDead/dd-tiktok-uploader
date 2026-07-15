@@ -1,6 +1,7 @@
 import type { AppState } from "@/lib/api"
 import { api } from "@/lib/api"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PageHeader } from "@/components/PageHeader"
 import { AssetSection } from "./AssetSection"
 
 type Props = {
@@ -11,6 +12,11 @@ type Props = {
 // Ressources partagées du label : les niches y piochent sons et clips.
 export function Catalogue({ state, refresh }: Props) {
   return (
+    <>
+    <PageHeader
+      title="Catalogue"
+      subtitle="Les ressources partagées du label — les niches y piochent leurs sons et leurs clips."
+    />
     <Tabs defaultValue="sons" className="w-full">
       <TabsList>
         <TabsTrigger value="sons">Sons</TabsTrigger>
@@ -49,5 +55,6 @@ export function Catalogue({ state, refresh }: Props) {
         />
       </TabsContent>
     </Tabs>
+    </>
   )
 }

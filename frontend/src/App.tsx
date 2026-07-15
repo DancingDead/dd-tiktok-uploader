@@ -1,13 +1,27 @@
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
-import { LogOut } from "lucide-react"
+import { Blocks, Film, LogOut, type LucideIcon, Settings2, SlidersHorizontal } from "lucide-react"
 
 import { ApiError, api, type AppState } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Toaster } from "@/components/ui/sonner"
+import { ConfirmHost } from "@/components/confirm"
 import { Catalogue } from "@/features/catalogue/Catalogue"
+import { NichesTab } from "@/features/niches/NichesTab"
+import { PresetsTab } from "@/features/presets/PresetsTab"
+import { SettingsTab } from "@/features/settings/SettingsTab"
+
+type TabKey = "niches" | "presets" | "catalogue" | "reglages"
+
+const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
+  { key: "niches", label: "Niches", icon: Blocks },
+  { key: "presets", label: "Presets", icon: SlidersHorizontal },
+  { key: "catalogue", label: "Catalogue", icon: Film },
+  { key: "reglages", label: "Réglages", icon: Settings2 },
+]
 
 export default function App() {
   const [state, setState] = useState<AppState | null>(null)
@@ -30,58 +44,71 @@ export default function App() {
     refresh()
   }, [refresh])
 
-  if (!ready) return null
-
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Toaster position="bottom-right" />
-      {needLogin || !state ? (
+      <ConfirmHost />
+      {!ready ? null : needLogin || !state ? (
         <Login onDone={refresh} />
       ) : (
-        <Shell state={state} refresh={refresh} onLogout={refresh} />
+        <Shell state={state} refresh={refresh} />
       )}
     </div>
   )
 }
 
-function Shell({
-  state,
-  refresh,
-  onLogout,
-}: {
-  state: AppState
-  refresh: () => Promise<void>
-  onLogout: () => Promise<void>
-}) {
+function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
+  const [tab, setTab] = useState<TabKey>("niches")
+
   const logout = async () => {
     await api.logout()
-    await onLogout()
+    await refresh()
   }
+
   return (
-    <div className="mx-auto max-w-4xl px-6 py-10">
-      <header className="mb-8 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="inline-block size-2 rounded-full bg-primary" />
-            <span className="text-xs font-semibold tracking-[0.22em] uppercase">
-              Dancing Dead
-            </span>
-          </div>
-          <h1 className="mt-4 text-2xl font-semibold">Catalogue</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Les ressources partagées du label — les niches y piochent leurs sons et
-            leurs clips.{" "}
-            <span className="text-xs opacity-60">· PoC React/shadcn</span>
-          </p>
+    <div className="flex min-h-screen">
+      <nav className="flex w-56 shrink-0 flex-col gap-1 border-r bg-card/40 p-4">
+        <div className="mb-4 flex items-center gap-2 px-2">
+          <span className="inline-block size-2 rounded-full bg-primary" />
+          <span className="text-xs font-semibold tracking-[0.22em] uppercase">
+            Dancing Dead
+          </span>
         </div>
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <span>{state.member}</span>
-          <Button variant="ghost" size="icon" title="Déconnexion" onClick={logout}>
-            <LogOut />
-          </Button>
+        <div className="mb-3 flex items-center justify-between px-2 text-xs text-muted-foreground">
+          <span className="truncate">{state.member}</span>
+          <button
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            title="Déconnexion"
+            onClick={logout}
+          >
+            <LogOut className="size-4" />
+          </button>
         </div>
-      </header>
-      <Catalogue state={state} refresh={refresh} />
+        {TABS.map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={cn(
+              "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors",
+              tab === key
+                ? "bg-primary/10 font-medium text-foreground"
+                : "text-muted-foreground hover:bg-accent hover:text-foreground"
+            )}
+          >
+            <Icon className="size-4" />
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      <main className="flex-1 overflow-x-hidden px-8 py-10">
+        <div className="mx-auto max-w-4xl">
+          {tab === "niches" && <NichesTab state={state} refresh={refresh} />}
+          {tab === "presets" && <PresetsTab state={state} refresh={refresh} />}
+          {tab === "catalogue" && <Catalogue state={state} refresh={refresh} />}
+          {tab === "reglages" && <SettingsTab state={state} refresh={refresh} />}
+        </div>
+      </main>
     </div>
   )
 }
