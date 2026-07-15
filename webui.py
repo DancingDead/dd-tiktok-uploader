@@ -245,6 +245,40 @@ def create_app(root: Path | None = None):
         file.save(paths["clips"] / name)
         return jsonify({"ok": True, "name": name})
 
+    def _delete_asset(dir_key, prefix, exts, name):
+        """Efface un fichier du catalogue partagé (tracks/ ou clips/) et retire
+        sa référence des niches qui le sélectionnaient. Garde anti-traversal :
+        on ne touche qu'un fichier directement sous le dossier catalogue."""
+        safe = Path(name).name  # neutralise toute traversée de chemin
+        if Path(safe).suffix.lower() not in exts:
+            return jsonify({"error": f"format non supporté : {safe}"}), 400
+        base = paths[dir_key].resolve()
+        target = (base / safe).resolve()
+        if target.parent != base:
+            return jsonify({"error": "chemin invalide"}), 400
+        if not target.is_file():
+            return jsonify({"error": "fichier introuvable"}), 404
+        target.unlink()
+        ref = prefix + safe
+        field = "tracks" if prefix == "tracks/" else "clips"
+        conn = get_conn()
+        try:
+            for niche in dbmod.list_niches(conn):
+                if ref in niche[field]:
+                    dbmod.update_niche(conn, niche["id"],
+                                       **{field: [p for p in niche[field] if p != ref]})
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.delete("/api/tracks/<path:name>")
+    def delete_track_ep(name):
+        return _delete_asset("tracks", "tracks/", AUDIO_EXTENSIONS, name)
+
+    @app.delete("/api/clips/<path:name>")
+    def delete_clip_ep(name):
+        return _delete_asset("clips", "clips/", VIDEO_EXTS, name)
+
     @app.post("/api/clip-links")
     def save_clip_links():
         paths["clip_links"].write_text(request.json["text"])

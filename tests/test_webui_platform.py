@@ -63,6 +63,38 @@ def test_shared_clip_catalog_and_niche_selection(client, tmp_path):
     assert client.get("/api/state").get_json()["clip_links"].startswith("https://")
 
 
+def test_delete_catalog_asset_removes_file_and_niche_selection(client, tmp_path):
+    # deux clips dans le catalogue partagé
+    for fname in ("a.mp4", "b.mp4"):
+        client.post("/api/clips", data={"file": (io.BytesIO(b"v"), fname)},
+                    content_type="multipart/form-data")
+    # une niche sélectionne les deux
+    nid = client.post("/api/niches", json={"name": "Gym"}).get_json()["id"]
+    client.patch(f"/api/niches/{nid}", json={"clips": ["clips/a.mp4", "clips/b.mp4"]})
+
+    # suppression de a.mp4 : fichier effacé + retiré de la sélection de la niche
+    assert client.delete("/api/clips/a.mp4").status_code == 200
+    assert not (tmp_path / "clips" / "a.mp4").exists()
+    assert (tmp_path / "clips" / "b.mp4").exists()
+    state = client.get("/api/state").get_json()
+    assert [c["name"] for c in state["clips"]] == ["b.mp4"]
+    assert state["niches"][0]["clips"] == ["clips/b.mp4"]
+
+    # id inconnu → 404, format non supporté → 400, traversée neutralisée → 404
+    assert client.delete("/api/clips/a.mp4").status_code == 404
+    assert client.delete("/api/clips/notes.txt").status_code == 400
+    assert client.delete("/api/clips/..%2f..%2fsecret.mp4").status_code == 404
+
+
+def test_delete_track_removes_file(client, tmp_path):
+    client.post("/api/tracks", data={"file": (io.BytesIO(b"a"), "song.mp3")},
+                content_type="multipart/form-data")
+    assert (tmp_path / "tracks" / "song.mp3").exists()
+    assert client.delete("/api/tracks/song.mp3").status_code == 200
+    assert not (tmp_path / "tracks" / "song.mp3").exists()
+    assert client.get("/api/state").get_json()["tracks"] == []
+
+
 def test_preset_crud_via_api(client):
     created = client.post("/api/presets", json={
         "name": "strobo", "overrides": {"cut_every": 1}})

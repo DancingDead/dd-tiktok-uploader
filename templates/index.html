@@ -273,7 +273,7 @@
   <textarea id="links" style="display:none;margin-top:.6rem" oninput="onRawEdit()"></textarea>
   <div id="dl-log" class="log" style="display:none"></div>
   <p class="sub" style="margin-top:1.1rem">Morceaux du catalogue :</p>
-  <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="tracks-body"></tbody></table>
+  <table><thead><tr><th>Fichier</th><th>Taille</th><th></th></tr></thead><tbody id="tracks-body"></tbody></table>
 
   <h3 class="cat-sub">Clips</h3>
   <div class="row">
@@ -295,7 +295,7 @@
   <textarea id="clip-links" style="display:none;margin-top:.6rem" oninput="onRawClipEdit()"></textarea>
   <div id="clip-dl-log" class="log" style="display:none"></div>
   <p class="sub" style="margin-top:1.1rem">Clips du catalogue :</p>
-  <table><thead><tr><th>Fichier</th><th>Taille</th></tr></thead><tbody id="clips-body"></tbody></table>
+  <table><thead><tr><th>Fichier</th><th>Taille</th><th></th></tr></thead><tbody id="clips-body"></tbody></table>
 </section>
 
 <section id="reglages">
@@ -446,11 +446,13 @@ async function refresh() {
   STATE = data;
   document.getElementById("nav-member").textContent = STATE.member;
   document.getElementById("tracks-body").innerHTML = STATE.tracks.map(t =>
-    `<tr><td>${esc(t.name)}</td><td class=muted>${esc(t.size_mb)} Mo</td></tr>`).join("")
-    || "<tr><td colspan=2 class=muted>aucune track</td></tr>";
+    `<tr><td>${esc(t.name)}</td><td class=muted>${esc(t.size_mb)} Mo</td>` +
+    `<td style="text-align:right"><button class="icon-btn" title="Supprimer du catalogue" data-name="${esc(t.name)}" onclick="deleteTrack(this)">${SVG.trash}</button></td></tr>`).join("")
+    || "<tr><td colspan=3 class=muted>aucune track</td></tr>";
   document.getElementById("clips-body").innerHTML = STATE.clips.map(c =>
-    `<tr><td>${esc(c.name)}</td><td class=muted>${esc(c.size_mb)} Mo</td></tr>`).join("")
-    || "<tr><td colspan=2 class=muted>aucun clip</td></tr>";
+    `<tr><td>${esc(c.name)}</td><td class=muted>${esc(c.size_mb)} Mo</td>` +
+    `<td style="text-align:right"><button class="icon-btn" title="Supprimer du catalogue" data-name="${esc(c.name)}" onclick="deleteClip(this)">${SVG.trash}</button></td></tr>`).join("")
+    || "<tr><td colspan=3 class=muted>aucun clip</td></tr>";
   renderLinks(); renderClipLinks(); renderSettings(); renderNiches(); renderPresets();
 }
 
@@ -594,6 +596,22 @@ async function uploadClip() {
     await api("/api/clips", {method: "POST", body: form});
     flash("clip-status", "uploadé"); refresh();
   } catch (e) { flash("clip-status", e.message, true); }
+}
+async function deleteTrack(btn) {
+  const name = btn.dataset.name;
+  if (!await confirmModal(`Supprimer « ${name} » du catalogue ? Le fichier sera effacé du disque et retiré des niches qui l'utilisent.`)) return;
+  try {
+    await api(`/api/tracks/${encodeURIComponent(name)}`, {method: "DELETE"});
+    await refresh(); toast("son supprimé");
+  } catch (e) { toast(e.message, "err"); }
+}
+async function deleteClip(btn) {
+  const name = btn.dataset.name;
+  if (!await confirmModal(`Supprimer « ${name} » du catalogue ? Le fichier sera effacé du disque et retiré des niches qui l'utilisent.`)) return;
+  try {
+    await api(`/api/clips/${encodeURIComponent(name)}`, {method: "DELETE"});
+    await refresh(); toast("clip supprimé");
+  } catch (e) { toast(e.message, "err"); }
 }
 
 /* --- Jobs --- */
