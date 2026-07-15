@@ -25,3 +25,7 @@ tiktok*.txt
 platform.db
 data/
 out.mp4
+
+# Front PoC (React/Vite) — dépendances et build
+frontend/node_modules/
+frontend/dist/
