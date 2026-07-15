@@ -1,9 +1,12 @@
 import { toast } from "sonner"
-import { Download, Trash2 } from "lucide-react"
+import { Check, Clapperboard, Download, Trash2, X } from "lucide-react"
 
 import { api, type Video } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { IconButton } from "@/components/IconButton"
 import { confirm } from "@/components/confirm"
 
 const STATUS_LABEL: Record<Video["status"], string> = {
@@ -64,9 +67,15 @@ export function VideoLibrary({
 
   if (videos.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        aucune vidéo — sélectionne des sons puis clique « Générer »
-      </p>
+      <Empty className="border border-dashed">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Clapperboard />
+          </EmptyMedia>
+          <EmptyTitle>Aucune vidéo</EmptyTitle>
+          <EmptyDescription>Sélectionne des sons puis clique « Générer ».</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     )
   }
 
@@ -111,28 +120,31 @@ export function VideoLibrary({
                 variant="secondary"
                 onClick={() => setStatus(v.id, "approved", "vidéo validée")}
               >
-                Valider
+                <Check /> Valider
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
+              <IconButton
+                tip="Rejeter"
                 onClick={() => setStatus(v.id, "rejected", "vidéo rejetée")}
               >
-                Rejeter
-              </Button>
-              <Button asChild size="icon" variant="ghost" title="Télécharger">
-                <a href={api.videoUrl(v.id, true)}>
-                  <Download />
-                </a>
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                title="Supprimer la vidéo"
+                <X />
+              </IconButton>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button asChild size="icon" variant="ghost">
+                    <a href={api.videoUrl(v.id, true)}>
+                      <Download />
+                    </a>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Télécharger</TooltipContent>
+              </Tooltip>
+              <IconButton
+                tip="Supprimer la vidéo"
+                className="ml-auto text-muted-foreground"
                 onClick={() => remove(v.id)}
               >
                 <Trash2 />
-              </Button>
+              </IconButton>
             </div>
           </div>
         )

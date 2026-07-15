@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { confirm } from "@/components/confirm"
+import { IconButton } from "@/components/IconButton"
 import { JobLog } from "@/components/JobLog"
 import { SelectionCard } from "./SelectionCard"
 import { VideoLibrary } from "./VideoLibrary"
@@ -92,9 +93,9 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
             <Badge variant="secondary">{niche.slug}</Badge>
           </CardTitle>
           <CardAction>
-            <Button variant="ghost" size="icon" title="Supprimer la niche" onClick={remove}>
+            <IconButton tip="Supprimer la niche" className="text-muted-foreground" onClick={remove}>
               <Trash2 />
-            </Button>
+            </IconButton>
           </CardAction>
         </CardHeader>
         <CardContent className="space-y-4">

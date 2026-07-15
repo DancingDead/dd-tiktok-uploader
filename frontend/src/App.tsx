@@ -7,6 +7,17 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Skeleton } from "@/components/ui/skeleton"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Toaster } from "@/components/ui/sonner"
 import { ConfirmHost } from "@/components/confirm"
 import { Catalogue } from "@/features/catalogue/Catalogue"
@@ -45,14 +56,27 @@ export default function App() {
   }, [refresh])
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <Toaster position="bottom-right" />
-      <ConfirmHost />
-      {!ready ? null : needLogin || !state ? (
-        <Login onDone={refresh} />
-      ) : (
-        <Shell state={state} refresh={refresh} />
-      )}
+    <TooltipProvider delayDuration={300}>
+      <div className="min-h-screen bg-background text-foreground">
+        <Toaster position="bottom-right" />
+        <ConfirmHost />
+        {!ready ? (
+          <LoadingScreen />
+        ) : needLogin || !state ? (
+          <Login onDone={refresh} />
+        ) : (
+          <Shell state={state} refresh={refresh} />
+        )}
+      </div>
+    </TooltipProvider>
+  )
+}
+
+function Brand() {
+  return (
+    <div className="flex items-center gap-2 px-2">
+      <span className="inline-block size-2 rounded-full bg-primary" />
+      <span className="text-xs font-semibold tracking-[0.22em] uppercase">Dancing Dead</span>
     </div>
   )
 }
@@ -65,25 +89,35 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
     await refresh()
   }
 
+  const initials = state.member.slice(0, 2).toUpperCase()
+
   return (
     <div className="flex min-h-screen">
       <nav className="sticky top-0 flex h-screen w-56 shrink-0 flex-col gap-1 self-start overflow-y-auto border-r bg-card/40 p-4">
-        <div className="mb-4 flex items-center gap-2 px-2">
-          <span className="inline-block size-2 rounded-full bg-primary" />
-          <span className="text-xs font-semibold tracking-[0.22em] uppercase">
-            Dancing Dead
-          </span>
+        <div className="mb-4">
+          <Brand />
         </div>
-        <div className="mb-3 flex items-center justify-between px-2 text-xs text-muted-foreground">
-          <span className="truncate">{state.member}</span>
-          <button
-            className="text-muted-foreground transition-colors hover:text-foreground"
-            title="Déconnexion"
-            onClick={logout}
-          >
-            <LogOut className="size-4" />
-          </button>
-        </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="mb-3 flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent">
+              <Avatar className="size-7">
+                <AvatarFallback className="bg-primary/15 text-xs text-foreground">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+              <span className="truncate text-sm">{state.member}</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuLabel>{state.member}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={logout}>
+              <LogOut /> Déconnexion
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
@@ -107,6 +141,30 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
           {tab === "presets" && <PresetsTab state={state} refresh={refresh} />}
           {tab === "catalogue" && <Catalogue state={state} refresh={refresh} />}
           {tab === "reglages" && <SettingsTab state={state} refresh={refresh} />}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+function LoadingScreen() {
+  return (
+    <div className="flex min-h-screen">
+      <nav className="flex w-56 shrink-0 flex-col gap-2 border-r bg-card/40 p-4">
+        <Brand />
+        <Skeleton className="mt-4 h-8 w-full" />
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Skeleton key={i} className="h-9 w-full" />
+        ))}
+      </nav>
+      <main className="flex-1 px-8 py-10">
+        <div className="mx-auto max-w-4xl space-y-6">
+          <Skeleton className="h-8 w-48" />
+          <Skeleton className="h-4 w-96" />
+          <div className="grid grid-cols-2 gap-3">
+            <Skeleton className="h-28" />
+            <Skeleton className="h-28" />
+          </div>
         </div>
       </main>
     </div>

@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Plus } from "lucide-react"
 import type { AppState } from "@/lib/api"
 import { PageHeader } from "@/components/PageHeader"
 import { Button } from "@/components/ui/button"
@@ -43,7 +44,7 @@ export function PresetsTab({ state, refresh }: Props) {
             className="w-full"
             onClick={() => setSelectedId(null)}
           >
-            Nouveau
+            <Plus /> Nouveau
           </Button>
         </div>
 

@@ -2,8 +2,8 @@ import { toast } from "sonner"
 import { Plus, Trash2 } from "lucide-react"
 
 import type { Asset } from "@/lib/api"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { IconButton } from "@/components/IconButton"
 
 type Props = {
   title: string
@@ -71,14 +71,13 @@ export function SelectionCard({
                 className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm"
               >
                 <span className="flex-1 truncate">{basename(path)}</span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Retirer de la niche"
+                <IconButton
+                  tip="Retirer de la niche"
+                  className="size-7 text-muted-foreground"
                   onClick={() => remove(path)}
                 >
                   <Trash2 />
-                </Button>
+                </IconButton>
               </li>
             ))}
           </ul>
@@ -100,14 +99,13 @@ export function SelectionCard({
                   className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm"
                 >
                   <span className="flex-1 truncate text-muted-foreground">{a.name}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="Ajouter à la niche"
+                  <IconButton
+                    tip="Ajouter à la niche"
+                    className="size-7 text-primary"
                     onClick={() => add(a.name)}
                   >
                     <Plus />
-                  </Button>
+                  </IconButton>
                 </li>
               ))}
             </ul>
