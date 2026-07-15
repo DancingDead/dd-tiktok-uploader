@@ -1,32 +1,45 @@
-# React + TypeScript + Vite
+# Front PoC — React/shadcn (onglet Catalogue)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Preuve de concept d'une refonte de l'interface avec **Vite + React + TypeScript +
+Tailwind + shadcn/ui**, isolée du reste du projet. Elle ne réécrit que l'onglet
+**Catalogue** et consomme les APIs JSON de Flask (`webui.py`) via un proxy Vite.
 
-Currently, two official plugins are available:
+Le backend Flask n'est pas modifié.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Lancer en dev
 
-## React Compiler
+Deux process en parallèle :
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+# 1) le backend Flask (à la racine du projet)
+uv run python webui.py            # http://127.0.0.1:8765
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+# 2) le front (dans frontend/)
+cd frontend
+npm install                       # première fois seulement
+npm run dev                       # http://localhost:5173
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+On ouvre **http://localhost:5173** : tout `/api/*` est proxifié vers le Flask
+local (le cookie de session passe par le proxy, donc le login fonctionne).
+
+Pour cibler un Flask sur un autre port :
+
+```bash
+VITE_API_TARGET=http://127.0.0.1:8790 npm run dev
+```
+
+## Périmètre
+
+- Login + onglet Catalogue (sections **Sons** et **Clips**).
+- Chaque section : upload de fichier, ajout/retrait de liens YouTube,
+  téléchargement avec suivi de job, table des assets avec suppression confirmée.
+- Hors périmètre : Niches, Presets, Réglages (voir la spec du design).
+
+## Structure
+
+- `src/lib/api.ts` — client fetch + types de l'état.
+- `src/features/catalogue/` — `Catalogue`, `AssetSection` (générique Sons/Clips),
+  `JobLog`, `ConfirmDialog`.
+- `src/components/ui/` — composants shadcn/ui (éditables).
+- `src/index.css` — thème Dancing Dead (noir OLED, accent `#ff1e46`, Fira).
