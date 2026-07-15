@@ -5,7 +5,7 @@ import { Play, Trash2 } from "lucide-react"
 import { api, type AppState, type Niche } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -86,14 +86,16 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
     <div className="mt-8 space-y-6">
       {/* Carte A — Réglages */}
       <Card>
-        <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
+        <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {niche.name}
             <Badge variant="secondary">{niche.slug}</Badge>
           </CardTitle>
-          <Button variant="ghost" size="icon" title="Supprimer la niche" onClick={remove}>
-            <Trash2 />
-          </Button>
+          <CardAction>
+            <Button variant="ghost" size="icon" title="Supprimer la niche" onClick={remove}>
+              <Trash2 />
+            </Button>
+          </CardAction>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-1">

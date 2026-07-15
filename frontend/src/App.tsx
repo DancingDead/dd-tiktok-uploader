@@ -67,7 +67,7 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
 
   return (
     <div className="flex min-h-screen">
-      <nav className="flex w-56 shrink-0 flex-col gap-1 border-r bg-card/40 p-4">
+      <nav className="sticky top-0 flex h-screen w-56 shrink-0 flex-col gap-1 self-start overflow-y-auto border-r bg-card/40 p-4">
         <div className="mb-4 flex items-center gap-2 px-2">
           <span className="inline-block size-2 rounded-full bg-primary" />
           <span className="text-xs font-semibold tracking-[0.22em] uppercase">
