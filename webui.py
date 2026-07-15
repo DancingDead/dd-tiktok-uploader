@@ -326,7 +326,9 @@ def create_app(root: Path | None = None):
         if niche is None:
             return jsonify({"error": "niche inconnue"}), 404
         if not niche["tracks"]:
-            return jsonify({"error": "aucun morceau sélectionné pour cette niche"}), 400
+            return jsonify({"error": "aucun son sélectionné — ajoute au moins un morceau dans « Sons de la niche »"}), 400
+        if not niche["clips"]:
+            return jsonify({"error": "aucun clip sélectionné — ajoute au moins un extrait dans « Clips de la niche »"}), 400
         count = max(1, int((request.json or {}).get("count", niche["cadence"] or 1)))
         try:
             job_id = start_job(f"gen-{niche['slug']}",

@@ -95,6 +95,32 @@ def test_delete_track_removes_file(client, tmp_path):
     assert client.get("/api/state").get_json()["tracks"] == []
 
 
+def test_generate_requires_son_then_clip(client, tmp_path):
+    # upload d'un son et d'un clip dans le catalogue
+    client.post("/api/tracks", data={"file": (io.BytesIO(b"a"), "s.mp3")},
+                content_type="multipart/form-data")
+    client.post("/api/clips", data={"file": (io.BytesIO(b"v"), "c.mp4")},
+                content_type="multipart/form-data")
+    nid = client.post("/api/niches", json={"name": "N"}).get_json()["id"]
+
+    # aucun son → message qui parle de « son » (pas juste « morceau »)
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 400
+    assert "son" in r.get_json()["error"].lower()
+
+    # un clip mais toujours aucun son → même garde (le clip ne suffit pas)
+    client.patch(f"/api/niches/{nid}", json={"clips": ["clips/c.mp4"]})
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 400
+    assert "son" in r.get_json()["error"].lower()
+
+    # un son mais aucun clip → garde sur les clips
+    client.patch(f"/api/niches/{nid}", json={"tracks": ["tracks/s.mp3"], "clips": []})
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 400
+    assert "clip" in r.get_json()["error"].lower()
+
+
 def test_preset_crud_via_api(client):
     created = client.post("/api/presets", json={
         "name": "strobo", "overrides": {"cut_every": 1}})

@@ -73,6 +73,12 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
     }
   }
 
+  const missing = [
+    niche.tracks.length === 0 && "un son",
+    niche.clips.length === 0 && "un clip",
+  ].filter(Boolean) as string[]
+  const canGenerate = missing.length === 0
+
   const generate = async () => {
     try {
       const { job_id } = await api.generateNiche(niche.id, count)
@@ -182,7 +188,7 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
       {/* Carte C — Clips */}
       <SelectionCard
         title="Clips de la niche"
-        description="La génération tire un de ces morceaux au hasard par variante. Retrait et ajout sont immédiats ; « retirer » ne supprime pas le fichier du catalogue partagé."
+        description="Les extraits vidéo assemblés pour le montage. Retrait et ajout sont immédiats ; « retirer » ne supprime pas le fichier du catalogue partagé."
         prefix="clips/"
         selected={niche.clips}
         catalogue={state.clips}
@@ -212,13 +218,19 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
               style={{ width: "70px" }}
             />
             <span className="text-sm text-muted-foreground">variante(s)</span>
-            <Button onClick={generate}>
+            <Button onClick={generate} disabled={!canGenerate}>
               <Play /> Générer
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Chaque variante = un morceau + une seed différents → montage et punchlines distincts.
-          </p>
+          {canGenerate ? (
+            <p className="text-xs text-muted-foreground">
+              Chaque variante = un morceau + une seed différents → montage et punchlines distincts.
+            </p>
+          ) : (
+            <p className="text-xs text-primary">
+              Pour générer, sélectionne au moins {missing.join(" et ")} ci-dessus.
+            </p>
+          )}
           <JobLog jobId={jobId} onDone={() => refresh()} />
 
           <div className="space-y-3">
