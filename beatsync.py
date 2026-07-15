@@ -634,9 +634,25 @@ def _load_dotenv(path: Path | None = None) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
-def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
-    """Appelle Claude pour générer `count` punchlines. Sortie JSON structurée.
-    Isolé pour être mocké dans les tests."""
+# Consigne partagée par tous les backends LLM.
+_PUNCHLINE_SYSTEM = (
+    "Tu écris des punchlines courtes et percutantes incrustées sur des edits "
+    "vidéo verticaux. Chaque punchline fait 2 à 6 mots, sans hashtag, sans emoji, "
+    "sans ponctuation finale, et forme une progression cohérente d'une à l'autre.")
+
+
+def _punchline_user_prompt(preprompt: str, count: int, seed: int) -> str:
+    return (f"Génère exactement {count} punchlines distinctes.\n"
+            f"Style / consigne : {preprompt}\nVariation n°{seed}.")
+
+
+def _llm_backend() -> str:
+    """Backend LLM courant : LM Studio (local, coût nul) par défaut."""
+    return os.environ.get("LLM_BACKEND", "lmstudio").strip().lower()
+
+
+def _call_anthropic(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+    """Génère `count` punchlines via l'API Anthropic (Claude). Sortie JSON structurée."""
     import anthropic
 
     _load_dotenv()
@@ -650,16 +666,71 @@ def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
     resp = client.messages.create(
         model=model,
         max_tokens=1024,
-        system=("Tu écris des punchlines courtes et percutantes incrustées sur des edits "
-                "vidéo verticaux. Chaque punchline fait 2 à 6 mots, sans hashtag, sans emoji, "
-                "sans ponctuation finale, et forme une progression cohérente d'une à l'autre."),
-        messages=[{"role": "user", "content":
-                   f"Génère exactement {count} punchlines distinctes.\n"
-                   f"Style / consigne : {preprompt}\nVariation n°{seed}."}],
+        system=_PUNCHLINE_SYSTEM,
+        messages=[{"role": "user", "content": _punchline_user_prompt(preprompt, count, seed)}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )
     text = next(b.text for b in resp.content if b.type == "text")
     return [str(p) for p in json.loads(text)["punchlines"]]
+
+
+def _call_lmstudio(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+    """Génère `count` punchlines via un serveur local compatible OpenAI (LM Studio) →
+    coût nul. Endpoint et modèle configurables par LMSTUDIO_BASE_URL / LMSTUDIO_MODEL.
+    `seed` est transmis au serveur pour la reproductibilité. Le `model` Claude n'est
+    pas pertinent ici (le serveur utilise le modèle chargé)."""
+    import urllib.request
+
+    _load_dotenv()
+    base = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+    lm_model = os.environ.get("LMSTUDIO_MODEL", "local-model")
+    body = {
+        "model": lm_model,
+        "messages": [
+            {"role": "system", "content": _PUNCHLINE_SYSTEM
+             + ' Réponds UNIQUEMENT en JSON : {"punchlines": ["...", "..."]}.'},
+            {"role": "user", "content": _punchline_user_prompt(preprompt, count, seed)},
+        ],
+        "temperature": 0.8,
+        "seed": seed,
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(
+        base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        data = json.loads(resp.read())
+    text = data["choices"][0]["message"]["content"]
+    return [str(p) for p in json.loads(text)["punchlines"]]
+
+
+# Nom de fonction par backend (résolu via globals() au moment de l'appel pour
+# rester monkeypatchable dans les tests).
+_LLM_BACKENDS = {"anthropic": "_call_anthropic", "lmstudio": "_call_lmstudio"}
+
+
+def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+    """Génère `count` punchlines via le backend choisi par LLM_BACKEND (défaut
+    `lmstudio` = local, coût nul). Si le primaire échoue et que LLM_FALLBACK nomme
+    un autre backend (ex. `anthropic`), il est essayé en repli. Isolé pour être
+    mocké dans les tests."""
+    primary = _llm_backend()
+    order = [primary]
+    fallback = os.environ.get("LLM_FALLBACK", "").strip().lower()
+    if fallback and fallback != primary:
+        order.append(fallback)
+    last_exc: Exception | None = None
+    for name in order:
+        fnname = _LLM_BACKENDS.get(name)
+        if fnname is None:
+            continue
+        try:
+            return globals()[fnname](preprompt, count, seed, model)
+        except Exception as exc:  # on tente le repli, sinon on remonte l'erreur
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"backend LLM inconnu : {primary!r}")
 
 
 def generate_punchlines(preprompt: str, count: int, seed: int,
@@ -672,7 +743,8 @@ def generate_punchlines(preprompt: str, count: int, seed: int,
         return []
     cache_path = None
     if cache_dir is not None:
-        key = hashlib.md5(f"{model}|{preprompt}|{count}|{seed}".encode()).hexdigest()
+        key = hashlib.md5(
+            f"{_llm_backend()}|{model}|{preprompt}|{count}|{seed}".encode()).hexdigest()
         cache_path = cache_dir / f"{key}.json"
         if cache_path.is_file():
             try:
@@ -892,7 +964,8 @@ def main() -> None:
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
     parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,
-                        help='génère des punchlines incrustées via Claude (ex. "punchlines motivation gym, français, 5 mots max"). Requiert ANTHROPIC_API_KEY.')
+                        help='génère des punchlines incrustées via le LLM (ex. "punchlines motivation gym, français, 5 mots max"). '
+                             'Backend choisi par LLM_BACKEND : lmstudio (défaut, serveur local compatible OpenAI, coût nul) ou anthropic (requiert ANTHROPIC_API_KEY).')
     args = parser.parse_args()
 
     if not Path(args.track).is_file():

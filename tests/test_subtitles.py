@@ -89,6 +89,61 @@ def test_generate_noop_without_preprompt_or_count():
     assert generate_punchlines("x", 0, seed=1) == []
 
 
+# --- Backends LLM : LM Studio (compatible OpenAI) + dispatch/fallback --------
+
+
+def test_call_lmstudio_parses_openai_response(monkeypatch):
+    import io
+    import json
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data)
+        payload = {"choices": [{"message": {"content":
+                   json.dumps({"punchlines": ["monte le son", "encore plus fort"]})}}]}
+        return io.BytesIO(json.dumps(payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setenv("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1")
+    monkeypatch.setenv("LMSTUDIO_MODEL", "qwen2.5-7b")
+
+    out = beatsync._call_lmstudio("motivation gym", 2, seed=7, model="claude-opus-4-8")
+    assert out == ["monte le son", "encore plus fort"]
+    assert captured["url"] == "http://127.0.0.1:1234/v1/chat/completions"
+    assert captured["body"]["model"] == "qwen2.5-7b"
+    assert captured["body"]["seed"] == 7  # seed transmis pour reproductibilité
+
+
+def test_call_llm_defaults_to_lmstudio(monkeypatch):
+    monkeypatch.delenv("LLM_BACKEND", raising=False)
+    monkeypatch.delenv("LLM_FALLBACK", raising=False)
+    monkeypatch.setattr(beatsync, "_call_lmstudio", lambda *a: ["local"])
+    monkeypatch.setattr(beatsync, "_call_anthropic", lambda *a: ["cloud"])
+    assert beatsync._call_llm("x", 1, 1, "m") == ["local"]
+
+
+def test_call_llm_falls_back_to_anthropic(monkeypatch):
+    def boom(*a):
+        raise RuntimeError("LM Studio éteint")
+    monkeypatch.setenv("LLM_BACKEND", "lmstudio")
+    monkeypatch.setenv("LLM_FALLBACK", "anthropic")
+    monkeypatch.setattr(beatsync, "_call_lmstudio", boom)
+    monkeypatch.setattr(beatsync, "_call_anthropic", lambda *a: ["cloud"])
+    assert beatsync._call_llm("x", 1, 1, "m") == ["cloud"]
+
+
+def test_call_llm_no_fallback_reraises(monkeypatch):
+    def boom(*a):
+        raise RuntimeError("down")
+    monkeypatch.setenv("LLM_BACKEND", "lmstudio")
+    monkeypatch.delenv("LLM_FALLBACK", raising=False)
+    monkeypatch.setattr(beatsync, "_call_lmstudio", boom)
+    with pytest.raises(RuntimeError):
+        beatsync._call_llm("x", 1, 1, "m")
+
+
 # --- Intégration EDL --------------------------------------------------------
 
 
