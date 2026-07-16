@@ -71,8 +71,8 @@ pré-remplissage :
 
 ```json
 {
-  "cut_mode": "energy",
-  "energy_intervals": [8, 4, 2],
+  "cut_mode": "fixed",
+  "cut_every": 4,
   "strobe_beats": 0,
   "effects": {"zoom": false, "flash": false, "shake": false, "speed": false},
   "accents": {"rgb": false, "glitch": false},
@@ -83,6 +83,12 @@ pré-remplissage :
 Les modèles vivent côté front (constante TypeScript) : un preset créé depuis
 un modèle est un preset ordinaire (overrides JSON), modifiable avant et après
 enregistrement.
+
+Note (2026-07-16) : le modèle Doux utilise `cut_mode: "fixed"` + `cut_every: 4`
+plutôt que `energy_intervals` — l'éditeur de presets reconstruit les overrides
+à l'enregistrement à partir de ses champs, et perdrait silencieusement une clé
+qu'il n'affiche pas. Rythme calme et régulier, même effet recherché, zéro champ
+UI en plus.
 
 ## 3. Cas limites moteur à garantir (tests dans ce lot)
 
