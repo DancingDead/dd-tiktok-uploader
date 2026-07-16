@@ -43,6 +43,7 @@ export type Overrides = {
   cut_every?: number
   buildup?: number
   strobe_beats?: number
+  subtitles?: { font?: string }
 }
 
 export type Preset = { id: number; name: string; overrides: Overrides }

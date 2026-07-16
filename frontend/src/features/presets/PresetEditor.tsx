@@ -15,8 +15,19 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+// Polices embarquées (assets/fonts/) — noms logiques côté moteur.
+const CAPTION_FONTS = [
+  { value: "impact", label: "Impact (edit)" },
+  { value: "classique", label: "Classique (TikTok)" },
+  { value: "sobre", label: "Sobre" },
+  { value: "condensee", label: "Condensée (sport)" },
+  { value: "douce", label: "Douce (arrondie)" },
+  { value: "elegante", label: "Élégante (fine)" },
+] as const
+
 type Props = {
   preset: Preset | null
+  template?: Overrides // pré-remplissage à la création (modèles Doux/Énergique)
   onSaved: (id: number) => void
   onDeleted: () => void
   refresh: () => Promise<void>
@@ -75,8 +86,8 @@ function NumberField({
   )
 }
 
-export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
-  const o = preset?.overrides ?? {}
+export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: Props) {
+  const o = preset?.overrides ?? template ?? {}
   const [name, setName] = useState(preset?.name ?? "")
   const [zoom, setZoom] = useState(o.effects?.zoom ?? false)
   const [flash, setFlash] = useState(o.effects?.flash ?? false)
@@ -91,6 +102,7 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
   const [cutEvery, setCutEvery] = useState(o.cut_every ?? 2)
   const [buildup, setBuildup] = useState(o.buildup ?? 10)
   const [strobeBeats, setStrobeBeats] = useState(o.strobe_beats ?? 16)
+  const [font, setFont] = useState(o.subtitles?.font ?? "impact")
   const [busy, setBusy] = useState(false)
 
   const isNew = preset === null
@@ -110,6 +122,7 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
       cut_every: cutEvery,
       buildup,
       strobe_beats: strobeBeats,
+      subtitles: { font },
     }
     setBusy(true)
     try {
@@ -212,6 +225,29 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
             min={0}
             max={1}
           />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Punchlines</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-1.5">
+            <Label>Police</Label>
+            <Select value={font} onValueChange={setFont}>
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CAPTION_FONTS.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardContent>
       </Card>
 
