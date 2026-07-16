@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
         "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
         "min_dur": 1.4,                 # durée min. d'affichage d'une punchline (lisibilité)
         "model": "claude-opus-4-8",     # modèle de génération
+        "font": "impact",               # police embarquée : impact|classique|sobre|condensee|douce|elegante
     },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
@@ -598,6 +599,27 @@ def _caption_font() -> str | None:
     return None
 
 
+FONTS_DIR = Path(__file__).parent / "assets" / "fonts"
+
+_FONT_FILES = {  # nom logique -> fichier embarqué (licences OFL)
+    "impact": "Anton-Regular.ttf",
+    "classique": "Montserrat-ExtraBold.ttf",
+    "sobre": "OpenSans-Bold.ttf",
+    "condensee": "BebasNeue-Regular.ttf",
+    "douce": "Baloo2-Bold.ttf",
+    "elegante": "CormorantGaramond-SemiBold.ttf",
+}
+
+
+def resolve_caption_font(name: str) -> str | None:
+    """Chemin de la police d'un nom logique ; nom inconnu = impact ;
+    fichier absent = repli sur les polices système (_caption_font)."""
+    path = FONTS_DIR / _FONT_FILES.get(name, _FONT_FILES["impact"])
+    if path.is_file():
+        return str(path)
+    return _caption_font()
+
+
 def _drawtext_escape(text: str) -> str:
     """Échappe le texte pour l'option drawtext de FFmpeg (argument non shell)."""
     out = text.replace("\\", "\\\\")
@@ -850,7 +872,7 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
     # Punchline incrustée (après les accents pour rester nette), bas-centrée
     cap = entry.get("caption")
-    font = _caption_font()
+    font = resolve_caption_font(config.get("subtitles", {}).get("font", "impact"))
     if cap and font:
         post.append(
             f"drawtext=fontfile={font}:text={_drawtext_escape(cap)}"
