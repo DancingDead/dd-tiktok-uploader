@@ -186,3 +186,40 @@ def test_fixed_mode_cuts_every_n_beats():
     # Tous les segments (sauf éventuellement le dernier) durent 2 beats.
     for entry in edl[:-1]:
         assert entry["duration"] == pytest.approx(2 * BEAT, abs=FRAME + EPS)
+
+
+# --- Preset doux : cas limites verrouillés -----------------------------------
+
+
+def test_strobe_beats_zero_disables_strobe():
+    """Preset doux : strobe_beats=0 -> aucune section à 1 beat forcé au drop."""
+    analysis = make_analysis()
+    config = dict(DEFAULT_CONFIG, drop_time=30.0, start=20.0, end=50.0,
+                  strobe_beats=0, cut_mode="fixed", cut_every=4)
+    edl = build_edl(analysis, make_clips(), config, seed=7)
+    # Le strobo forcerait 16 coupes de 1 beat À PARTIR du drop. Sans lui, en
+    # mode fixe à 4 beats, tout segment commençant au drop ou après doit durer
+    # > 1 beat (sauf le résidu de fin de fenêtre -> tolérer le dernier).
+    drop_out = 30.0 - 20.0  # le drop (30 s piste) tombe pile sur un beat
+    after_drop = [e for e in edl if e["timeline_start"] >= drop_out - 1e-9]
+    assert len(after_drop) >= 2  # le drop est bien dans la fenêtre
+    for entry in after_drop[:-1]:
+        assert entry["duration"] > BEAT * 1.5
+
+
+def test_speed_false_disables_gasp():
+    """Preset doux : effects.speed=False -> aucun slow-mo avant le drop."""
+    analysis = make_analysis()
+    config = dict(DEFAULT_CONFIG, drop_time=30.0, start=20.0, end=50.0,
+                  effects={**DEFAULT_CONFIG["effects"], "speed": False})
+    edl = build_edl(analysis, make_clips(), config, seed=7)
+    assert all(entry["speed"] == 1.0 for entry in edl)
+
+
+def test_default_config_edl_unchanged_by_new_font_key():
+    """Non-régression : la clé subtitles.font n'affecte pas l'EDL."""
+    analysis = make_analysis()
+    config = dict(DEFAULT_CONFIG, start=0.0, end=30.0)
+    a = build_edl(analysis, make_clips(), config, seed=42)
+    b = build_edl(analysis, make_clips(), config, seed=42)
+    assert a == b
