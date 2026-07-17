@@ -632,6 +632,15 @@ def _drawtext_escape(text: str) -> str:
     return out
 
 
+def _drawtext_fontfile(path: str) -> str:
+    """Chemin de police échappé pour le filtergraph FFmpeg. Sous Windows, les
+    antislashs et le deux-points du lecteur (`C:\\...`) cassent le parseur, qui
+    applique DEUX niveaux d'unescape : le `:` doit donc être précédé de **deux**
+    antislashs (`C\\\\:/...`), un seul ne suffit pas. On passe aussi en slashs.
+    No-op sur les chemins POSIX (ni `\\` ni `:`)."""
+    return path.replace("\\", "/").replace(":", "\\\\:")
+
+
 def assign_caption_slots(edl: list[dict], min_dur: float) -> int:
     """Regroupe les segments en créneaux de sous-titre : une punchline reste
     affichée ≥ `min_dur` (lisibilité) puis change à la coupe suivante. Annote
@@ -933,7 +942,7 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     font = resolve_caption_font(config.get("subtitles", {}).get("font", "impact"))
     if cap and font:
         post.append(
-            f"drawtext=fontfile={font}:text={_drawtext_escape(cap)}"
+            f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
             ":fontsize=64:fontcolor=white:borderw=5:bordercolor=black@0.9"
             ":x=(w-text_w)/2:y=h*0.70"
         )

@@ -7,6 +7,7 @@ Local uniquement (127.0.0.1) : manipule fichiers et secrets du projet.
 """
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -59,8 +60,13 @@ _jobs_lock = threading.Lock()
 
 
 def _run_job(job_id: str, argv: list[str]) -> None:
+    # Mode UTF-8 forcé pour le sous-process : sans ça, sur Windows le job plante
+    # en cp1252 dès qu'un log contient un caractère hors Latin-1 (ex. la flèche
+    # « → » de beatsync). On fixe aussi le décodage du flux côté parent.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     process = subprocess.Popen(
-        argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", env=env,
     )
     for line in process.stdout:
         with _jobs_lock:

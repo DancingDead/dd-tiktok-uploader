@@ -14,6 +14,12 @@ set "FFDIR="
 for /d %%D in ("%FFROOT%\ffmpeg-*-full_build") do set "FFDIR=%%D\bin"
 set "PATH=%UVDIR%;%FFDIR%;%PATH%"
 
+REM --- Mode UTF-8 : evite les crashs d'encodage (cp1252) sur les logs
+REM contenant des accents / fleches (ex. "fenetre 1.0->2.0s"), y compris
+REM dans les sous-process de generation. ---
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+
 set HOST=0.0.0.0
 set PORT=8765
 uv run python serve.py
