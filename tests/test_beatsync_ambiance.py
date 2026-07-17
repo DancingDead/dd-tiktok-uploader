@@ -4,7 +4,10 @@ coercion glitch, slow-mo global. Logique pure, aucun média requis."""
 import numpy as np
 from pathlib import Path
 
-from beatsync import DEFAULT_CONFIG, build_edl, color_grade_filter, grain_filter, glitch_amount
+from beatsync import (
+    DEFAULT_CONFIG, build_edl, color_grade_filter, grain_filter, glitch_amount,
+    _segment_filters,
+)
 
 
 def test_default_config_has_ambiance_keys():
@@ -119,6 +122,28 @@ def test_glitch_proportion_scales_with_amount():
     # toujours vrai => glitch sur tous les segments intenses éligibles du
     # drop (tous, hormis le tout premier : drop_seg_count > 0).
     assert glitch_full == drop_segments - 1
+
+
+def _segment_entry():
+    return {"clip": "/fake/clip0.mp4", "clip_in": 0.0, "duration": 1.0,
+            "speed": 1.0, "effects": [], "layout": "crop", "focus_x": 0.5,
+            "clip_w": 1920, "clip_h": 1080}
+
+
+def test_segment_filters_inject_color_and_grain():
+    config = {**DEFAULT_CONFIG, "color_grade": "froid", "grain": 0.8}
+    args = _segment_filters(_segment_entry(), config)
+    joined = " ".join(args)
+    assert "eq=gamma_b=1.06" in joined       # étalonnage froid
+    assert "noise=alls=" in joined           # grain
+    assert "rgbashift" in joined             # dérive VHS (grain 0.8)
+
+
+def test_segment_filters_neutral_config_has_no_grade_or_grain():
+    config = {**DEFAULT_CONFIG, "color_grade": "neutre", "grain": 0.0}
+    joined = " ".join(_segment_filters(_segment_entry(), config))
+    assert "eq=gamma" not in joined
+    assert "noise=alls=" not in joined
 
 
 def test_clip_speed_propagates_to_all_segments():

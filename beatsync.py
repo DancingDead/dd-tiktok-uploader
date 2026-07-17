@@ -905,6 +905,12 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post.append("rgbashift=rh=-14:gv=10:bh=14:edge=smear:enable='lt(n,2)'")
     elif "rgb" in effects:
         post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
+    grade = color_grade_filter(config.get("color_grade", "neutre"))
+    if grade:
+        post.append(grade)
+    grain = grain_filter(config.get("grain", 0.0))
+    if grain:
+        post.append(grain)
     # Punchline incrustée (après les accents pour rester nette), bas-centrée
     cap = entry.get("caption")
     font = resolve_caption_font(config.get("subtitles", {}).get("font", "impact"))
