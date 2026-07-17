@@ -28,15 +28,27 @@ EDITABLE_SETTINGS = [
     "buildup", "strobe_beats", "cut_mode", "cut_every",
 ]
 # Clés d'overrides de preset qui doivent être numériques (défense XSS : jamais de HTML stocké)
-NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats")
+NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
+                         "grain", "clip_speed")
+ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
 
 
 def coerce_overrides(overrides: dict) -> dict:
-    """Force les clés numériques connues en nombres ; ValueError/TypeError sinon."""
+    """Force les clés numériques connues en nombres, coerce l'intensité de glitch
+    et valide color_grade. ValueError/TypeError si non convertible/inconnu."""
     coerced = dict(overrides)
     for key in NUMERIC_OVERRIDE_KEYS:
         if key in coerced and not isinstance(coerced[key], (int, float)):
             coerced[key] = float(coerced[key])
+    if "color_grade" in coerced and coerced["color_grade"] not in ALLOWED_COLOR_GRADES:
+        raise ValueError(f"color_grade inconnu : {coerced['color_grade']!r}")
+    accents = coerced.get("accents")
+    if isinstance(accents, dict) and "glitch" in accents \
+            and not isinstance(accents["glitch"], bool) \
+            and not isinstance(accents["glitch"], (int, float)):
+        accents = dict(accents)
+        accents["glitch"] = float(accents["glitch"])
+        coerced["accents"] = accents
     return coerced
 
 

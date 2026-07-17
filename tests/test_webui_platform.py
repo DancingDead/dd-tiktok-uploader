@@ -3,7 +3,7 @@ import io
 import pytest
 
 from db import add_member, connect
-from webui import create_app
+from webui import coerce_overrides, create_app
 
 
 @pytest.fixture
@@ -173,3 +173,28 @@ def test_delete_video_removes_row_and_file(client, tmp_path):
     conn.close()
 
     assert client.delete(f"/api/videos/{vid}").status_code == 404  # id inconnu
+
+
+def test_coerce_overrides_numeric_ambiance_keys():
+    out = coerce_overrides({"grain": "0.5", "clip_speed": "0.85"})
+    assert out["grain"] == 0.5
+    assert out["clip_speed"] == 0.85
+
+
+def test_coerce_overrides_glitch_number_in_accents():
+    out = coerce_overrides({"accents": {"rgb": True, "glitch": "0.35"}})
+    assert out["accents"]["glitch"] == 0.35
+
+
+def test_coerce_overrides_glitch_bool_preserved():
+    out = coerce_overrides({"accents": {"glitch": True}})
+    assert out["accents"]["glitch"] is True  # bool inchangé, coercé plus tard côté moteur
+
+
+def test_coerce_overrides_rejects_unknown_color_grade():
+    with pytest.raises(ValueError):
+        coerce_overrides({"color_grade": "arc-en-ciel"})
+
+
+def test_coerce_overrides_accepts_known_color_grade():
+    assert coerce_overrides({"color_grade": "froid"})["color_grade"] == "froid"
