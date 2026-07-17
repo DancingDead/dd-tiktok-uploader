@@ -848,6 +848,17 @@ def color_grade_filter(grade: str) -> str:
     }.get(grade, "")
 
 
+def grain_filter(amount: float) -> str:
+    """Fragment FFmpeg de grain/VHS pour un segment. '' si amount <= 0.
+    Bruit temporel proportionnel ; dérive chroma permanente au-delà de 0.6 (VHS)."""
+    if amount <= 0:
+        return ""
+    frag = f"noise=alls={round(amount * 24)}:allf=t"
+    if amount >= 0.6:
+        frag += ",rgbashift=rh=2:bh=-2"
+    return frag
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
