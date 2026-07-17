@@ -94,7 +94,7 @@ export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: 
   const [shake, setShake] = useState(o.effects?.shake ?? false)
   const [speed, setSpeed] = useState(o.effects?.speed ?? false)
   const [rgb, setRgb] = useState(o.accents?.rgb ?? false)
-  const [glitch, setGlitch] = useState(o.accents?.glitch ?? false)
+  const [glitch, setGlitch] = useState((o.accents?.glitch as boolean) ?? false)
   const [delogo, setDelogo] = useState(o.delogo ?? false)
   const [chrono, setChrono] = useState(o.chrono ?? false)
   const [minPresence, setMinPresence] = useState(o.min_presence ?? 0)

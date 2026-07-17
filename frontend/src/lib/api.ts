@@ -35,7 +35,7 @@ export type Niche = {
 
 export type Overrides = {
   effects?: { zoom?: boolean; flash?: boolean; shake?: boolean; speed?: boolean }
-  accents?: { rgb?: boolean; glitch?: boolean }
+  accents?: { rgb?: boolean; glitch?: boolean | number }
   delogo?: boolean
   chrono?: boolean
   min_presence?: number
@@ -43,6 +43,9 @@ export type Overrides = {
   cut_every?: number
   buildup?: number
   strobe_beats?: number
+  color_grade?: string
+  grain?: number
+  clip_speed?: number
   subtitles?: { font?: string }
 }
 
