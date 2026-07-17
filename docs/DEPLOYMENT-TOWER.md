@@ -181,13 +181,18 @@ Invoke-RestMethod http://localhost:1234/v1/models                # LM Studio
 
 **Ajouter un membre :** `uv run python db.py add-member <prenom>` (effet immédiat).
 
-**Mettre à jour le code :**
+**Mettre à jour le code** (PowerShell **admin** pour le redémarrage) :
 ```powershell
 git pull
 uv sync
 cd frontend; npm install; npm run build; cd ..
-Stop-ScheduledTask DD-Usine;  Start-ScheduledTask DD-Usine
+powershell -ExecutionPolicy Bypass -File deploy\restart-usine.ps1
 ```
+> ⚠️ `Stop-ScheduledTask DD-Usine` seul **ne suffit pas** : le process serveur
+> survit (ré-parenté) et garde le port 8765, donc l'ancien code continue de
+> tourner. Utiliser **`deploy/restart-usine.ps1`** qui tue explicitement tous
+> les serveurs `serve.py` avant de relancer la tâche.
+>
 > En cas de conflit sur `deploy/*.bat` ou `beatsync.py`, garder la version locale (adaptée à la tour).
 
 **Relancer LM Studio à la main :** `powershell -File deploy\watchdog-lmstudio.ps1`
