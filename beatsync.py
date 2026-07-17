@@ -719,7 +719,21 @@ def _call_lmstudio(preprompt: str, count: int, seed: int, model: str) -> list[st
         ],
         "temperature": 0.8,
         "seed": seed,
-        "response_format": {"type": "json_object"},
+        # LM Studio >= 0.4 exige json_schema (l'ancien json_object renvoie 400).
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "punchlines",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "punchlines": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["punchlines"],
+                },
+            },
+        },
     }
     req = urllib.request.Request(
         base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
