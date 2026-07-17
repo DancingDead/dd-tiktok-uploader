@@ -1,0 +1,269 @@
+# Runbook — déploiement de l'usine à vidéos sur la tour Windows
+
+Cible : **tour Windows 10/11 dans les bureaux Dancing Dead**, dashboard en ligne
+sur **https://app.dancingdeadrecords.com** (Cloudflare Tunnel + Cloudflare
+Access), accès admin **SSH via Tailscale**. Tout démarre seul au boot, sans
+session ouverte. On repart de zéro : la tour devient la **seule** source des
+données (base, sons, clips, vidéos produites) → penser sauvegardes (§9).
+
+Architecture :
+
+```
+  Équipe (n'importe où)                 Toi (admin, n'importe où)
+        │                                       │
+  https://app.dancingdeadrecords.com      ssh dd@<ip-tailscale>
+        │  ↓ Cloudflare Access (email)          │  ↓ chiffré Tailscale
+        ▼                                        ▼
+  ┌──────────────────── Tour Windows (bureaux DD) ─────────────────────┐
+  │  cloudflared (tunnel sortant TLS) ─► Waitress → webui Flask :8765   │
+  │  tailscale (réseau privé + SSH)                                     │
+  │  user "dd" : repo + uv + ffmpeg + données (platform.db,tracks,clips)│
+  └────────────────────────────────────────────────────────────────────┘
+```
+
+> La webui reste sur **127.0.0.1** : elle n'est jamais exposée au réseau local.
+> Seul `cloudflared`, sur la même machine, s'y connecte et fait sortir le
+> trafic par le tunnel. Rien à ouvrir sur la box des bureaux.
+
+---
+
+## 0. Prérequis (à préparer AVANT d'aller à la tour)
+
+- [ ] Accès admin à la tour.
+- [ ] Le domaine **dancingdeadrecords.com** géré chez **Cloudflare** (plan
+      gratuit suffit). Si le domaine est encore chez un autre registrar :
+      ajouter le site dans Cloudflare → changer les *nameservers* chez le
+      registrar pour ceux fournis par Cloudflare. Propagation ~quelques heures.
+      **À lancer plusieurs heures avant** le reste.
+- [ ] Un compte Cloudflare Zero Trust (gratuit) pour Access.
+- [ ] Un compte Tailscale (gratuit) — celui du label.
+- [ ] Ta clé SSH publique du Mac sous la main (`~/.ssh/id_ed25519.pub` ; sinon
+      `ssh-keygen -t ed25519` sur le Mac).
+- [ ] L'URL du repo git : `https://github.com/DancingDead/dd-tiktok-uploader.git`.
+
+---
+
+## 1. Compte Windows `dd`
+
+- [ ] Paramètres → Comptes → Autres utilisateurs → Ajouter un compte.
+- [ ] « Je ne dispose pas des informations de connexion » → « Ajouter un
+      utilisateur sans compte Microsoft » → nom **`dd`**, mot de passe fort
+      (le noter dans le gestionnaire de mots de passe du label).
+- [ ] Le passer **Administrateur** le temps de l'installation.
+- [ ] **Se connecter à la session `dd`** et faire toute la suite depuis elle.
+
+---
+
+## 2. Dépendances système (PowerShell dans la session `dd`)
+
+Ouvrir **PowerShell en administrateur**. Le script `deploy/install.ps1`
+automatise les §2 à §6 ; on peut aussi tout faire à la main :
+
+```powershell
+winget install --id Git.Git --scope machine
+winget install --id astral-sh.uv
+winget install --id Gyan.FFmpeg --scope machine     # ffmpeg + ffprobe pour tous
+winget install --id Cloudflare.cloudflared
+winget install --id tailscale.tailscale
+# NSSM : via winget si dispo, sinon https://nssm.cc/download (dézipper, mettre
+# nssm.exe dans un dossier du PATH, ex. C:\Tools\nssm\)
+winget install --id NSSM.NSSM
+```
+
+- [ ] **Rouvrir un terminal** puis vérifier le PATH :
+      `git --version`, `uv --version`, `ffmpeg -version`, `ffprobe -version`,
+      `cloudflared --version`, `tailscale version`, `nssm` (affiche l'aide).
+
+> ⚠️ FFmpeg **doit** être installé en `--scope machine` : un service Windows ne
+> voit pas le PATH par-utilisateur. Si `ffprobe` n'est pas trouvé par le
+> service plus tard, c'est presque toujours ça.
+
+---
+
+## 3. Récupérer le projet (on repart de zéro)
+
+```powershell
+cd C:\Users\dd
+git clone https://github.com/DancingDead/dd-tiktok-uploader.git dd-tiktok-uploader
+cd dd-tiktok-uploader
+uv sync
+uv run pytest        # tout vert = environnement bon
+```
+
+- [ ] Tests verts.
+- [ ] Créer les membres de l'équipe (un par personne) :
+      `uv run python db.py add-member <nom>` (il demandera un mot de passe).
+- [ ] Lancer une fois la webui en local pour vérifier :
+      `uv run python webui.py` → ouvrir http://127.0.0.1:8765, se connecter,
+      puis Ctrl+C. (Uploader sons/clips se fera ensuite via l'UI en ligne.)
+
+---
+
+## 4. Serveur de production (Waitress)
+
+Le rendu public passe par **Waitress** (pas le serveur Flask de dev), via
+`serve.py`. Test manuel avant de le passer en service :
+
+```powershell
+$env:DD_BEHIND_HTTPS_PROXY = "1"
+uv run python serve.py           # doit afficher "webui (Waitress) → http://127.0.0.1:8765"
+```
+
+- [ ] Ctrl+C pour arrêter. On l'installera en service au §6.
+
+---
+
+## 5. Réseau : Tailscale + tunnel Cloudflare
+
+### 5a. Tailscale (accès admin SSH + réseau privé)
+
+```powershell
+tailscale up
+```
+
+- [ ] Suivre le lien d'authentification, connecter la tour au tailnet du label.
+- [ ] Noter l'IP `100.x.x.x` (ou le nom MagicDNS) de la tour :
+      `tailscale ip -4`.
+- [ ] Sur ton **Mac** : installer Tailscale et `tailscale up` avec le même
+      compte → les deux machines se voient.
+
+### 5b. Cloudflare Tunnel (dashboard public)
+
+```powershell
+cloudflared tunnel login                       # ouvre le navigateur, choisir le domaine
+cloudflared tunnel create dd-app               # crée le tunnel + un credentials .json
+cloudflared tunnel route dns dd-app app.dancingdeadrecords.com
+```
+
+- [ ] Créer le fichier de config du tunnel. Copier
+      `deploy/cloudflared-config.example.yml` vers
+      `C:\Users\dd\.cloudflared\config.yml` et y renseigner l'`<ID-du-tunnel>`
+      (visible dans le nom du credentials .json créé, dossier
+      `C:\Users\dd\.cloudflared\`). Contenu attendu :
+
+      ```yaml
+      tunnel: <ID-du-tunnel>
+      credentials-file: C:\Users\dd\.cloudflared\<ID-du-tunnel>.json
+      ingress:
+        - hostname: app.dancingdeadrecords.com
+          service: http://localhost:8765
+        - service: http_status:404
+      ```
+
+- [ ] Test à chaud (avec la webui Waitress qui tourne dans un autre terminal) :
+      `cloudflared tunnel run dd-app` → ouvrir https://app.dancingdeadrecords.com.
+
+### 5c. Cloudflare Access (barrière email avant le login appli)
+
+Dans **Cloudflare Zero Trust** (dashboard web) :
+
+- [ ] Access → Applications → Add an application → **Self-hosted**.
+- [ ] Domaine applicatif : `app.dancingdeadrecords.com`.
+- [ ] Policy : *Allow* → règle sur les **emails** autorisés de l'équipe
+      (ou tout le domaine `@dancingdeadrecords.com`).
+- [ ] Méthode d'authentification : One-time PIN par email (aucun setup) ou
+      Google si vous utilisez Google Workspace.
+- [ ] Vérifier : ouvrir l'URL en navigation privée → Cloudflare demande
+      l'email/PIN AVANT d'atteindre le login de l'appli.
+
+---
+
+## 6. Tout démarrer au boot (3 services Windows, sans session)
+
+Un service Windows démarre **au boot, sans session ouverte**, et se relance
+seul. On en a trois. `deploy/install.ps1 -ServicesOnly` fait tout ; sinon à la
+main :
+
+### 6a. Tailscale — service installé par défaut à l'install. Vérifier :
+```powershell
+Get-Service Tailscale        # Status Running, StartType Automatic
+```
+
+### 6b. cloudflared — service natif :
+```powershell
+cloudflared service install
+Get-Service cloudflared
+```
+
+### 6c. webui / Waitress — via NSSM (chemins ABSOLUS, sinon échec au boot) :
+```powershell
+$repo = "C:\Users\dd\dd-tiktok-uploader"
+$uv   = (Get-Command uv).Source          # chemin absolu de uv.exe
+$ff   = Split-Path (Get-Command ffmpeg).Source   # dossier de ffmpeg/ffprobe
+
+nssm install dd-webui "$uv" "run python serve.py"
+nssm set dd-webui AppDirectory "$repo"
+nssm set dd-webui AppEnvironmentExtra "DD_BEHIND_HTTPS_PROXY=1" "PATH=$ff;%PATH%"
+nssm set dd-webui Start SERVICE_AUTO_START
+nssm set dd-webui AppStdout "$repo\data\webui.log"
+nssm set dd-webui AppStderr "$repo\data\webui.log"
+nssm start dd-webui
+```
+
+- [ ] **Compte du service** : par défaut il tourne en LocalSystem. Pour qu'il
+      tourne sous `dd` (fichiers appartenant à `dd`) : `nssm edit dd-webui` →
+      onglet **Log on** → *This account* → `.\dd` + mot de passe. Sinon
+      LocalSystem convient pour une tour dédiée.
+- [ ] Vérifier : `Get-Service dd-webui` = Running, et
+      https://app.dancingdeadrecords.com répond.
+
+---
+
+## 7. Accès SSH admin (OpenSSH via Tailscale)
+
+```powershell
+# Serveur SSH natif Windows
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+```
+
+- [ ] Autoriser ta **clé publique** : créer
+      `C:\Users\dd\.ssh\authorized_keys` et y coller le contenu de ton
+      `id_ed25519.pub`. (Pour un compte admin, Windows lit aussi
+      `C:\ProgramData\ssh\administrators_authorized_keys` — y mettre la clé si
+      `dd` est admin.)
+- [ ] Depuis le **Mac** : `ssh dd@<ip-tailscale>` doit passer **sans mot de
+      passe**. (SSH ne transite que par le réseau Tailscale, pas par la box.)
+
+---
+
+## 8. Validation « ça démarre vraiment tout seul »
+
+La seule preuve qui compte :
+
+- [ ] **Redémarrer la tour.** Ne PAS ouvrir de session.
+- [ ] Depuis un autre appareil : https://app.dancingdeadrecords.com répond
+      (Access + login OK).
+- [ ] Depuis le Mac : `ssh dd@<ip-tailscale>` passe.
+- [ ] `Get-Service Tailscale, cloudflared, dd-webui, sshd` → tous *Running*.
+
+---
+
+## 9. Sauvegardes (la tour est la seule copie)
+
+Données critiques, toutes sous `C:\Users\dd\dd-tiktok-uploader\` :
+`platform.db`, `tracks\`, `clips\`, `data\` (dont les vidéos produites).
+
+- [ ] Mettre en place une copie régulière (disque externe ou cloud). Piste
+      simple : tâche planifiée quotidienne qui `robocopy` ces dossiers vers un
+      disque externe, + éventuellement un envoi cloud. (Peut être scriptée
+      séparément — demander à Claude.)
+
+---
+
+## 10. Mémo — update / fix à distance
+
+Depuis le Mac, une fois tout en place :
+
+```bash
+ssh dd@<ip-tailscale>
+cd dd-tiktok-uploader
+git pull
+uv sync                     # si dépendances changées
+nssm restart dd-webui       # relance la webui
+Get-Content data\webui.log -Tail 40   # lire les logs si besoin
+```
+
+Le tunnel Cloudflare et Tailscale se reconnectent seuls : un simple
+`git pull` + `nssm restart dd-webui` suffit pour la plupart des mises à jour.

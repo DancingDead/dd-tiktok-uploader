@@ -7,6 +7,7 @@ Local uniquement (127.0.0.1) : manipule fichiers et secrets du projet.
 """
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -97,6 +98,20 @@ def create_app(root: Path | None = None):
     app = Flask(__name__)
     app.secret_key = secret_file.read_text()
     app.config["PATHS"] = paths
+
+    # Durcissement du cookie de session (inoffensif en local, utile partout).
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    # En production derrière le tunnel Cloudflare (HTTPS terminé par Cloudflare,
+    # http en local vers Waitress) : faire confiance à X-Forwarded-Proto pour
+    # que Flask se sache en https, et n'émettre le cookie que sur https.
+    # Gardé derrière une variable d'env car en dev local (http) SESSION_COOKIE
+    # _SECURE empêcherait le cookie de partir → login cassé.
+    if os.environ.get("DD_BEHIND_HTTPS_PROXY") == "1":
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+        app.config["SESSION_COOKIE_SECURE"] = True
 
     def get_conn():
         return dbmod.connect(paths["db"])

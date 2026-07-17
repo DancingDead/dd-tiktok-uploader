@@ -1,0 +1,13 @@
+# Config du tunnel Cloudflare — à copier vers C:\Users\dd\.cloudflared\config.yml
+# Remplacer <ID-du-tunnel> par l'ID affiché après `cloudflared tunnel create dd-app`
+# (c'est aussi le nom du fichier de credentials .json généré dans ce dossier).
+
+tunnel: <ID-du-tunnel>
+credentials-file: C:\Users\dd\.cloudflared\<ID-du-tunnel>.json
+
+ingress:
+  # Le dashboard public → la webui Waitress en local sur la tour.
+  - hostname: app.dancingdeadrecords.com
+    service: http://localhost:8765
+  # Tout le reste renvoie 404 (règle catch-all obligatoire).
+  - service: http_status:404
