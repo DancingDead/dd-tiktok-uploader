@@ -245,10 +245,25 @@ La seule preuve qui compte :
 Données critiques, toutes sous `C:\Users\dd\dd-tiktok-uploader\` :
 `platform.db`, `tracks\`, `clips\`, `data\` (dont les vidéos produites).
 
-- [ ] Mettre en place une copie régulière (disque externe ou cloud). Piste
-      simple : tâche planifiée quotidienne qui `robocopy` ces dossiers vers un
-      disque externe, + éventuellement un envoi cloud. (Peut être scriptée
-      séparément — demander à Claude.)
+Script fourni : **`deploy/backup.ps1`** (snapshot à chaud de la base +
+copie non destructive des médias vers un disque externe).
+
+- [ ] Brancher un disque externe (ex. lettre `E:`).
+- [ ] Test manuel :
+      `powershell -ExecutionPolicy Bypass -File deploy\backup.ps1 -Dest E:\dd-backup`
+      → vérifier `E:\dd-backup\db-snapshots\` (snapshot daté) et
+      `E:\dd-backup\current\` (tracks/clips/data).
+- [ ] Automatiser (tâche quotidienne à 03:00, tourne sans session ouverte) :
+      `powershell -ExecutionPolicy Bypass -File deploy\backup.ps1 -Dest E:\dd-backup -Register`
+- [ ] Vérifier la tâche : `Get-ScheduledTask dd-backup`. La lancer une fois
+      à la main : `Start-ScheduledTask dd-backup`, puis relire `E:\dd-backup\backup.log`.
+
+> La sauvegarde ne **supprime jamais** côté disque externe (robocopy `/E /XO`)
+> : un fichier effacé par erreur sur la tour reste récupérable. Les snapshots
+> de base sont datés et purgés après `-KeepDays` jours (défaut 30). Si le
+> disque est débranché, la tâche sort proprement sans erreur.
+> Destination réseau/cloud (lecteur mappé) : éditer la tâche pour la faire
+> tourner sous le compte `dd` (SYSTEM ne voit pas les lecteurs mappés).
 
 ---
 
