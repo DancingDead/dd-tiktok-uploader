@@ -5,9 +5,10 @@
 .DESCRIPTION
     Accélérateur du RUNBOOK.md. Automatise ce qui est automatisable :
     dépendances (winget), clone + uv sync, OpenSSH Server, et l'enregistrement
-    des services Windows (webui via NSSM, cloudflared). Les étapes qui exigent
-    une authentification interactive ou le dashboard Cloudflare ne sont PAS
-    automatisées : le script s'arrête et t'indique la commande exacte à lancer.
+    du service Windows de la webui (Waitress via NSSM). Les étapes qui exigent
+    une authentification interactive (tailscale up, activation Funnel) ne sont
+    PAS automatisées : le script s'arrête et t'indique la commande exacte.
+    La mise en ligne se fait via Tailscale Funnel (pas de Cloudflare, pas de DNS).
 
     À lancer depuis un PowerShell ADMINISTRATEUR, dans la session `dd`.
 
@@ -22,10 +23,10 @@
 
 .PARAMETER Stage
     all (défaut) | deps | project | ssh | services
-        deps     : winget (git, uv, ffmpeg, cloudflared, tailscale, nssm)
+        deps     : winget (git, uv, ffmpeg, tailscale, nssm)
         project  : git clone/pull + uv sync + pytest
         ssh      : OpenSSH Server
-        services : cloudflared + webui (NSSM). Suppose le tunnel déjà créé.
+        services : service webui (NSSM). Funnel = étape interactive (§6 RUNBOOK).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File deploy\install.ps1
@@ -64,7 +65,6 @@ function Stage-Deps {
     Winget-Install "Git.Git"            @("--scope", "machine")
     Winget-Install "astral-sh.uv"
     Winget-Install "Gyan.FFmpeg"        @("--scope", "machine")
-    Winget-Install "Cloudflare.cloudflared"
     Winget-Install "tailscale.tailscale"
     Winget-Install "NSSM.NSSM"
     Write-Host "Si NSSM n'est pas trouvé plus bas, installe-le à la main depuis https://nssm.cc/download" -ForegroundColor DarkYellow
@@ -99,13 +99,7 @@ function Stage-Ssh {
 }
 
 function Stage-Services {
-    Write-Host "`n== Services (cloudflared + webui via NSSM) ==" -ForegroundColor Yellow
-
-    # cloudflared : suppose que `cloudflared tunnel create dd-app` et le
-    # config.yml ont déjà été faits (cf. RUNBOOK §5b, étapes interactives).
-    Write-Host "→ cloudflared service install" -ForegroundColor Cyan
-    cloudflared service install
-    Get-Service cloudflared | Format-Table -AutoSize
+    Write-Host "`n== Service webui via NSSM ==" -ForegroundColor Yellow
 
     # webui via NSSM, chemins ABSOLUS (un service ne voit pas le PATH user).
     $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
@@ -149,12 +143,12 @@ switch ($Stage) {
         Stage-Project
         Stage-Ssh
         Write-Host "`n=== ÉTAPES INTERACTIVES RESTANTES (voir RUNBOOK) ===" -ForegroundColor Green
-        Write-Host "1) tailscale up            (§5a — connecte la tour au tailnet)"
-        Write-Host "2) cloudflared tunnel login / create dd-app / route dns   (§5b)"
-        Write-Host "3) config.yml du tunnel    (deploy\cloudflared-config.example.yml)"
-        Write-Host "4) Cloudflare Access        (§5c — dashboard Zero Trust)"
-        Write-Host "Puis :  deploy\install.ps1 -Stage services"
-        Write-Host "Enfin : redémarrer la tour et valider (§8)."
+        Write-Host "1) tailscale up            (§5 — connecte la tour au tailnet)"
+        Write-Host "2) Admin console Tailscale : activer MagicDNS + HTTPS Certificates (§5)"
+        Write-Host "3) tailscale funnel --bg 8765   (§6 — publie le dashboard, autorise Funnel si demandé)"
+        Write-Host "   puis  tailscale funnel status   (récupère l'URL *.ts.net à partager)"
+        Write-Host "Puis :  deploy\install.ps1 -Stage services   (service webui)"
+        Write-Host "Enfin : redémarrer la tour et valider (§9)."
     }
 }
 Write-Host "`nTerminé (stage: $Stage)." -ForegroundColor Green

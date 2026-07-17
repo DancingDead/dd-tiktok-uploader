@@ -1,45 +1,51 @@
 # Runbook — déploiement de l'usine à vidéos sur la tour Windows
 
-Cible : **tour Windows 10/11 dans les bureaux Dancing Dead**, dashboard en ligne
-sur **https://app.dancingdeadrecords.com** (Cloudflare Tunnel + Cloudflare
-Access), accès admin **SSH via Tailscale**. Tout démarre seul au boot, sans
-session ouverte. On repart de zéro : la tour devient la **seule** source des
-données (base, sons, clips, vidéos produites) → penser sauvegardes (§9).
+Cible : **tour Windows 10/11 dans les bureaux Dancing Dead**. Le dashboard sort
+en ligne via **Tailscale Funnel** (URL `https://<machine>.<tailnet>.ts.net`),
+accessible par toute l'équipe **sans rien installer**. Accès admin **SSH via
+Tailscale**. Tout démarre seul au boot, sans session ouverte.
+
+> **Aucun changement DNS.** Le domaine `dancingdeadrecords.com` (OVH), le site
+> (o2switch), les emails `@dancingdeadrecords.com` (OVH) et la boutique Shopify
+> **ne sont pas touchés**. On n'utilise ni Cloudflare, ni les nameservers.
+
+On repart de zéro : la tour devient la **seule** source des données (base, sons,
+clips, vidéos produites) → penser sauvegardes (§10).
 
 Architecture :
 
 ```
   Équipe (n'importe où)                 Toi (admin, n'importe où)
         │                                       │
-  https://app.dancingdeadrecords.com      ssh dd@<ip-tailscale>
-        │  ↓ Cloudflare Access (email)          │  ↓ chiffré Tailscale
+  https://<machine>.<tailnet>.ts.net      ssh dd@<ip-tailscale>
+        │  ↓ Tailscale Funnel (HTTPS)           │  ↓ chiffré Tailscale
         ▼                                        ▼
   ┌──────────────────── Tour Windows (bureaux DD) ─────────────────────┐
-  │  cloudflared (tunnel sortant TLS) ─► Waitress → webui Flask :8765   │
-  │  tailscale (réseau privé + SSH)                                     │
+  │  tailscaled (Funnel HTTPS + réseau privé + SSH)                     │
+  │        └► Waitress → webui Flask 127.0.0.1:8765                     │
   │  user "dd" : repo + uv + ffmpeg + données (platform.db,tracks,clips)│
   └────────────────────────────────────────────────────────────────────┘
 ```
 
-> La webui reste sur **127.0.0.1** : elle n'est jamais exposée au réseau local.
-> Seul `cloudflared`, sur la même machine, s'y connecte et fait sortir le
-> trafic par le tunnel. Rien à ouvrir sur la box des bureaux.
+> La webui reste sur **127.0.0.1** : jamais exposée directement au réseau. C'est
+> `tailscaled` (Funnel) qui termine le HTTPS et relaie vers elle en local.
+> Rien à ouvrir sur la box des bureaux.
+>
+> ⚠️ **Funnel = URL publique sur Internet.** La seule barrière est le **login
+> membre** de l'appli (mots de passe hachés). C'est acceptable pour un dashboard
+> d'équipe ; si tu veux plus fermé, voir la variante « tailnet privé » en §6.
 
 ---
 
-## 0. Prérequis (à préparer AVANT d'aller à la tour)
+## 0. Prérequis
 
 - [ ] Accès admin à la tour.
-- [ ] Le domaine **dancingdeadrecords.com** géré chez **Cloudflare** (plan
-      gratuit suffit). Si le domaine est encore chez un autre registrar :
-      ajouter le site dans Cloudflare → changer les *nameservers* chez le
-      registrar pour ceux fournis par Cloudflare. Propagation ~quelques heures.
-      **À lancer plusieurs heures avant** le reste.
-- [ ] Un compte Cloudflare Zero Trust (gratuit) pour Access.
-- [ ] Un compte Tailscale (gratuit) — celui du label.
-- [ ] Ta clé SSH publique du Mac sous la main (`~/.ssh/id_ed25519.pub` ; sinon
+- [ ] Un compte **Tailscale** (gratuit) — celui du label.
+- [ ] Ta clé SSH publique du Mac (`~/.ssh/id_ed25519.pub` ; sinon
       `ssh-keygen -t ed25519` sur le Mac).
 - [ ] L'URL du repo git : `https://github.com/DancingDead/dd-tiktok-uploader.git`.
+
+*(Aucune démarche DNS / domaine / Cloudflare : rien à préparer à l'avance.)*
 
 ---
 
@@ -57,13 +63,12 @@ Architecture :
 ## 2. Dépendances système (PowerShell dans la session `dd`)
 
 Ouvrir **PowerShell en administrateur**. Le script `deploy/install.ps1`
-automatise les §2 à §6 ; on peut aussi tout faire à la main :
+automatise les §2 à §8 ; on peut aussi tout faire à la main :
 
 ```powershell
 winget install --id Git.Git --scope machine
 winget install --id astral-sh.uv
 winget install --id Gyan.FFmpeg --scope machine     # ffmpeg + ffprobe pour tous
-winget install --id Cloudflare.cloudflared
 winget install --id tailscale.tailscale
 # NSSM : via winget si dispo, sinon https://nssm.cc/download (dézipper, mettre
 # nssm.exe dans un dossier du PATH, ex. C:\Tools\nssm\)
@@ -72,7 +77,7 @@ winget install --id NSSM.NSSM
 
 - [ ] **Rouvrir un terminal** puis vérifier le PATH :
       `git --version`, `uv --version`, `ffmpeg -version`, `ffprobe -version`,
-      `cloudflared --version`, `tailscale version`, `nssm` (affiche l'aide).
+      `tailscale version`, `nssm` (affiche l'aide).
 
 > ⚠️ FFmpeg **doit** être installé en `--scope machine` : un service Windows ne
 > voit pas le PATH par-utilisateur. Si `ffprobe` n'est pas trouvé par le
@@ -86,6 +91,7 @@ winget install --id NSSM.NSSM
 cd C:\Users\dd
 git clone https://github.com/DancingDead/dd-tiktok-uploader.git dd-tiktok-uploader
 cd dd-tiktok-uploader
+git checkout feat/deploy-prod    # contient serve.py + deploy/ (tant que non mergé)
 uv sync
 uv run pytest        # tout vert = environnement bon
 ```
@@ -109,83 +115,62 @@ $env:DD_BEHIND_HTTPS_PROXY = "1"
 uv run python serve.py           # doit afficher "webui (Waitress) → http://127.0.0.1:8765"
 ```
 
-- [ ] Ctrl+C pour arrêter. On l'installera en service au §6.
+- [ ] Ctrl+C pour arrêter. On l'installera en service au §7.
 
 ---
 
-## 5. Réseau : Tailscale + tunnel Cloudflare
-
-### 5a. Tailscale (accès admin SSH + réseau privé)
+## 5. Tailscale (réseau privé : SSH admin + Funnel)
 
 ```powershell
 tailscale up
 ```
 
 - [ ] Suivre le lien d'authentification, connecter la tour au tailnet du label.
-- [ ] Noter l'IP `100.x.x.x` (ou le nom MagicDNS) de la tour :
-      `tailscale ip -4`.
-- [ ] Sur ton **Mac** : installer Tailscale et `tailscale up` avec le même
-      compte → les deux machines se voient.
-
-### 5b. Cloudflare Tunnel (dashboard public)
-
-```powershell
-cloudflared tunnel login                       # ouvre le navigateur, choisir le domaine
-cloudflared tunnel create dd-app               # crée le tunnel + un credentials .json
-cloudflared tunnel route dns dd-app app.dancingdeadrecords.com
-```
-
-- [ ] Créer le fichier de config du tunnel. Copier
-      `deploy/cloudflared-config.example.yml` vers
-      `C:\Users\dd\.cloudflared\config.yml` et y renseigner l'`<ID-du-tunnel>`
-      (visible dans le nom du credentials .json créé, dossier
-      `C:\Users\dd\.cloudflared\`). Contenu attendu :
-
-      ```yaml
-      tunnel: <ID-du-tunnel>
-      credentials-file: C:\Users\dd\.cloudflared\<ID-du-tunnel>.json
-      ingress:
-        - hostname: app.dancingdeadrecords.com
-          service: http://localhost:8765
-        - service: http_status:404
-      ```
-
-- [ ] Test à chaud (avec la webui Waitress qui tourne dans un autre terminal) :
-      `cloudflared tunnel run dd-app` → ouvrir https://app.dancingdeadrecords.com.
-
-### 5c. Cloudflare Access (barrière email avant le login appli)
-
-Dans **Cloudflare Zero Trust** (dashboard web) :
-
-- [ ] Access → Applications → Add an application → **Self-hosted**.
-- [ ] Domaine applicatif : `app.dancingdeadrecords.com`.
-- [ ] Policy : *Allow* → règle sur les **emails** autorisés de l'équipe
-      (ou tout le domaine `@dancingdeadrecords.com`).
-- [ ] Méthode d'authentification : One-time PIN par email (aucun setup) ou
-      Google si vous utilisez Google Workspace.
-- [ ] Vérifier : ouvrir l'URL en navigation privée → Cloudflare demande
-      l'email/PIN AVANT d'atteindre le login de l'appli.
+- [ ] Noter l'IP `100.x.x.x` (ou le nom MagicDNS) de la tour : `tailscale ip -4`.
+- [ ] Sur ton **Mac** : installer Tailscale et `tailscale up` (même compte) →
+      les deux machines se voient.
+- [ ] **Activer HTTPS pour le tailnet** (requis par Funnel) : admin console
+      Tailscale → **DNS** → activer **MagicDNS** puis **HTTPS Certificates**.
 
 ---
 
-## 6. Tout démarrer au boot (3 services Windows, sans session)
+## 6. Publier le dashboard via Funnel
+
+Funnel expose la webui locale sur une URL publique HTTPS `*.ts.net`.
+
+```powershell
+tailscale funnel --bg 8765       # proxie https://<machine>.<tailnet>.ts.net → localhost:8765
+tailscale funnel status          # affiche l'URL publique à partager à l'équipe
+```
+
+- [ ] Au **premier** `tailscale funnel`, Tailscale peut afficher un lien pour
+      **autoriser Funnel** sur ce nœud dans l'admin console → cliquer, accepter,
+      relancer la commande.
+- [ ] Avec la webui qui tourne (§4 ou service §7), ouvrir l'URL `*.ts.net`
+      depuis un autre appareil → le login du dashboard s'affiche. ✅
+- [ ] `--bg` rend le Funnel **persistant** : il est ré-appliqué automatiquement
+      au boot par le service Tailscale (pas de service en plus à créer).
+- [ ] Partager l'URL `*.ts.net` + leur compte membre à l'équipe.
+
+> **Variante « tailnet privé »** (plus fermé, si tu ne veux PAS d'URL publique) :
+> ne pas lancer Funnel. À la place, chaque membre installe Tailscale et rejoint
+> le tailnet ; ils accèdent à `http://<machine>.<tailnet>.ts.net:8765` (ou via
+> `tailscale serve` en HTTPS interne). Plus sûr, mais install requise pour tous.
+
+---
+
+## 7. Tout démarrer au boot (services Windows, sans session)
 
 Un service Windows démarre **au boot, sans session ouverte**, et se relance
-seul. On en a trois. `deploy/install.ps1 -ServicesOnly` fait tout ; sinon à la
-main :
+seul. `deploy/install.ps1 -Stage services` fait le webui ; sinon à la main :
 
-### 6a. Tailscale — service installé par défaut à l'install. Vérifier :
+### 7a. Tailscale — service installé par défaut à l'install. Vérifier :
 ```powershell
 Get-Service Tailscale        # Status Running, StartType Automatic
 ```
+Le Funnel configuré en §6 (`--bg`) est ré-appliqué par ce service au boot.
 
-### 6b. cloudflared — service natif :
-```powershell
-cloudflared service install
-Get-Service cloudflared
-```
-
-### 6c. webui / Waitress — via NSSM (chemins ABSOLUS, sinon échec au boot) :
+### 7b. webui / Waitress — via NSSM (chemins ABSOLUS, sinon échec au boot) :
 ```powershell
 $repo = "C:\Users\dd\dd-tiktok-uploader"
 $uv   = (Get-Command uv).Source          # chemin absolu de uv.exe
@@ -204,12 +189,11 @@ nssm start dd-webui
       tourne sous `dd` (fichiers appartenant à `dd`) : `nssm edit dd-webui` →
       onglet **Log on** → *This account* → `.\dd` + mot de passe. Sinon
       LocalSystem convient pour une tour dédiée.
-- [ ] Vérifier : `Get-Service dd-webui` = Running, et
-      https://app.dancingdeadrecords.com répond.
+- [ ] Vérifier : `Get-Service dd-webui` = Running, et l'URL `*.ts.net` répond.
 
 ---
 
-## 7. Accès SSH admin (OpenSSH via Tailscale)
+## 8. Accès SSH admin (OpenSSH via Tailscale)
 
 ```powershell
 # Serveur SSH natif Windows
@@ -228,19 +212,19 @@ Start-Service sshd
 
 ---
 
-## 8. Validation « ça démarre vraiment tout seul »
+## 9. Validation « ça démarre vraiment tout seul »
 
 La seule preuve qui compte :
 
 - [ ] **Redémarrer la tour.** Ne PAS ouvrir de session.
-- [ ] Depuis un autre appareil : https://app.dancingdeadrecords.com répond
-      (Access + login OK).
+- [ ] Depuis un autre appareil : l'URL `*.ts.net` répond (Funnel + login OK).
 - [ ] Depuis le Mac : `ssh dd@<ip-tailscale>` passe.
-- [ ] `Get-Service Tailscale, cloudflared, dd-webui, sshd` → tous *Running*.
+- [ ] `Get-Service Tailscale, dd-webui, sshd` → tous *Running*.
+- [ ] `tailscale funnel status` → montre toujours le mapping vers `localhost:8765`.
 
 ---
 
-## 9. Sauvegardes (la tour est la seule copie)
+## 10. Sauvegardes (la tour est la seule copie)
 
 Données critiques, toutes sous `C:\Users\dd\dd-tiktok-uploader\` :
 `platform.db`, `tracks\`, `clips\`, `data\` (dont les vidéos produites).
@@ -267,7 +251,7 @@ copie non destructive des médias vers un disque externe).
 
 ---
 
-## 10. Mémo — update / fix à distance
+## 11. Mémo — update / fix à distance
 
 Depuis le Mac, une fois tout en place :
 
@@ -280,5 +264,5 @@ nssm restart dd-webui       # relance la webui
 Get-Content data\webui.log -Tail 40   # lire les logs si besoin
 ```
 
-Le tunnel Cloudflare et Tailscale se reconnectent seuls : un simple
-`git pull` + `nssm restart dd-webui` suffit pour la plupart des mises à jour.
+Tailscale (et donc le Funnel) se reconnecte seul : un simple `git pull` +
+`nssm restart dd-webui` suffit pour la plupart des mises à jour.

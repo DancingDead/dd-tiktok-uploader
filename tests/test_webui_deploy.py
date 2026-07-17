@@ -1,7 +1,7 @@
 """Tests de la config de déploiement production de webui.
 
-Derrière le tunnel Cloudflare (HTTPS terminé par Cloudflare, trafic http en
-local vers cloudflared → Waitress), il faut :
+Derrière un proxy HTTPS (Tailscale Funnel : TLS terminé par tailscaled, trafic
+http en local vers Waitress), il faut :
 - faire confiance à X-Forwarded-Proto (ProxyFix) pour que Flask sache qu'on
   est en https (cookies sécurisés, redirections correctes) ;
 - marquer le cookie de session Secure pour qu'il ne parte jamais en clair.
