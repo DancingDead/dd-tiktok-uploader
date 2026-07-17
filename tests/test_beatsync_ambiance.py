@@ -46,6 +46,21 @@ def test_grain_high_adds_chroma_bleed():
     assert "rgbashift" in frag  # dérive VHS au-delà de 0.6
 
 
+def test_grain_above_one_is_clamped_to_one():
+    assert grain_filter(5.0) == grain_filter(1.0)
+    assert "alls=24" in grain_filter(1.0)  # round(1.0 * 24) = 24, borne haute
+
+
+def test_grain_below_zero_is_empty():
+    assert grain_filter(-3.0) == ""
+
+
+def test_grain_frontier_0_59_vs_0_6():
+    # Minor de la revue : la frontière VHS doit basculer exactement à 0.6.
+    assert "rgbashift" not in grain_filter(0.59)
+    assert "rgbashift" in grain_filter(0.6)
+
+
 def test_glitch_amount_bool_and_missing():
     assert glitch_amount({"glitch": True}) == 0.6
     assert glitch_amount({"glitch": False}) == 0.0
@@ -157,3 +172,53 @@ def test_clip_speed_propagates_to_all_segments():
     edl = build_edl(_analysis(), _clips(), config, seed=1)
     assert edl, "EDL non vide"
     assert all(abs(entry["speed"] - 0.85) < 1e-9 for entry in edl)
+
+
+def test_clip_speed_too_high_is_clamped_to_1_5():
+    config = {
+        **DEFAULT_CONFIG,
+        "clip_speed": 9.0,
+        "start": 0.0,
+        "end": _DURATION,
+        "drop_time": None,
+    }
+    edl = build_edl(_analysis(), _clips(), config, seed=1)
+    assert edl, "EDL non vide"
+    assert all(abs(entry["speed"] - 1.5) < 1e-9 for entry in edl)
+
+
+def test_clip_speed_negative_is_clamped_to_0_5():
+    config = {
+        **DEFAULT_CONFIG,
+        "clip_speed": -1.0,
+        "start": 0.0,
+        "end": _DURATION,
+        "drop_time": None,
+    }
+    edl = build_edl(_analysis(), _clips(), config, seed=1)
+    assert edl, "EDL non vide"
+    assert all(abs(entry["speed"] - 0.5) < 1e-9 for entry in edl)
+
+
+def test_gasp_speed_ignores_clip_speed_clamp():
+    # Interaction gasp x clip_speed (Minor de la revue) : le gasp pré-drop
+    # écrase toujours speed=0.5, quelle que soit la valeur (clampée) de
+    # clip_speed. drop_time=50 tombe dans la zone d'énergie forte de
+    # _analysis(), ce qui déclenche buildup -> drop avec strobe_beats.
+    config = {
+        **DEFAULT_CONFIG,
+        "clip_speed": 0.9,
+        "start": 0.0,
+        "end": _DURATION,
+        "drop_time": 50.0,
+        "buildup": 5.0,
+    }
+    edl = build_edl(_analysis(), _clips(), config, seed=1)
+    buildup_segments = [e for e in edl if e.get("section") == "buildup"]
+    assert buildup_segments, "fixture invalide : pas de segment buildup"
+    gasp = buildup_segments[-1]  # dernier segment avant l'impact du drop
+    assert abs(gasp["speed"] - 0.5) < 1e-9
+    # les autres segments buildup, eux, portent bien le clip_speed clampé (0.9)
+    other_buildups = buildup_segments[:-1]
+    if other_buildups:
+        assert all(abs(e["speed"] - 0.9) < 1e-9 for e in other_buildups)

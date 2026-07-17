@@ -480,7 +480,8 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             section = "buildup" if seg_start < drop_out - 1e-9 else "drop"
 
         # Gasp : slow-mo x0.5 sur le dernier segment avant l'impact du drop.
-        speed = config.get("clip_speed", 1.0)
+        # Défensif : clampe l'entrée à [0.5, 1.5] (l'UI n'impose pas de borne).
+        speed = max(0.5, min(1.5, config.get("clip_speed", 1.0)))
         if effects_cfg.get("speed") and drop_out is not None and section == "buildup" \
                 and abs(seg_end - drop_out) < 1e-9:
             speed = 0.5
@@ -850,7 +851,9 @@ def color_grade_filter(grade: str) -> str:
 
 def grain_filter(amount: float) -> str:
     """Fragment FFmpeg de grain/VHS pour un segment. '' si amount <= 0.
-    Bruit temporel proportionnel ; dérive chroma permanente au-delà de 0.6 (VHS)."""
+    Bruit temporel proportionnel ; dérive chroma permanente au-delà de 0.6 (VHS).
+    Défensif : clampe l'entrée à [0.0, 1.0] (l'UI n'impose pas de borne)."""
+    amount = max(0.0, min(1.0, amount))
     if amount <= 0:
         return ""
     frag = f"noise=alls={round(amount * 24)}:allf=t"
