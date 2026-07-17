@@ -35,6 +35,9 @@ DEFAULT_CONFIG = {
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
+    "color_grade": "neutre",            # ambiance couleur : neutre|chaud|froid|delave
+    "grain": 0.0,                       # texture film/VHS, 0.0–1.0
+    "clip_speed": 1.0,                  # slow-mo global par segment, 0.5–1.5
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
         "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
