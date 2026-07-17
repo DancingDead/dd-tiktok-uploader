@@ -480,7 +480,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             section = "buildup" if seg_start < drop_out - 1e-9 else "drop"
 
         # Gasp : slow-mo x0.5 sur le dernier segment avant l'impact du drop.
-        speed = 1.0
+        speed = config.get("clip_speed", 1.0)
         if effects_cfg.get("speed") and drop_out is not None and section == "buildup" \
                 and abs(seg_end - drop_out) < 1e-9:
             speed = 0.5
