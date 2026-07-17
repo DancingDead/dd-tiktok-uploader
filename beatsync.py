@@ -859,6 +859,18 @@ def grain_filter(amount: float) -> str:
     return frag
 
 
+def glitch_amount(accents: dict) -> float:
+    """Intensité de glitch 0.0–1.0 depuis accents['glitch'].
+    Compat : bool True→0.6, False/absent→0.0 ; nombre clampé."""
+    value = accents.get("glitch", False)
+    if isinstance(value, bool):
+        return 0.6 if value else 0.0
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond

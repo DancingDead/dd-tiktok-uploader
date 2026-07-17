@@ -1,7 +1,7 @@
 """Tests des leviers d'ambiance : config par défaut, filtres couleur/grain,
 coercion glitch, slow-mo global. Logique pure, aucun média requis."""
 
-from beatsync import DEFAULT_CONFIG, color_grade_filter, grain_filter
+from beatsync import DEFAULT_CONFIG, color_grade_filter, grain_filter, glitch_amount
 
 
 def test_default_config_has_ambiance_keys():
@@ -38,3 +38,15 @@ def test_grain_high_adds_chroma_bleed():
     frag = grain_filter(0.8)
     assert frag.startswith("noise=alls=")
     assert "rgbashift" in frag  # dérive VHS au-delà de 0.6
+
+
+def test_glitch_amount_bool_and_missing():
+    assert glitch_amount({"glitch": True}) == 0.6
+    assert glitch_amount({"glitch": False}) == 0.0
+    assert glitch_amount({}) == 0.0
+
+
+def test_glitch_amount_number_is_clamped():
+    assert glitch_amount({"glitch": 0.35}) == 0.35
+    assert glitch_amount({"glitch": 2.0}) == 1.0
+    assert glitch_amount({"glitch": -1.0}) == 0.0
