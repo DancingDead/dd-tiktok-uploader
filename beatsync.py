@@ -846,11 +846,13 @@ def generate_video(track_path, clips: list[dict], config: dict, seed: int,
 
     captions = []
     if (cfg.get("subtitles") or {}).get("enabled"):
-        log("  génération des punchlines (Claude)…")
+        _llm_names = {"lmstudio": "LM Studio local", "anthropic": "Claude"}
+        _backend = _llm_backend()
+        log(f"  génération des punchlines ({_llm_names.get(_backend, _backend)})…")
         apply_subtitles(edl, cfg, seed=seed, cache_dir=subtitles_cache_dir)
         captions = sorted({e["caption"] for e in edl if e.get("caption")})
         log(f"  {len(captions)} punchline(s)" if captions
-            else "  aucune punchline (pas de clé API ? rendu sans texte)")
+            else "  aucune punchline (LLM indisponible ? rendu sans texte)")
 
     render(edl, Path(track_path), Path(output_path), cfg)
     return {"segments": len(edl), "window": (cfg["start"], cfg["end"]), "captions": captions}

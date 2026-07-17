@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { api } from "@/lib/api"
 
 type Props = {
@@ -10,6 +10,7 @@ type Props = {
 // followJob() dans l'app actuelle.
 export function JobLog({ jobId, onDone }: Props) {
   const [log, setLog] = useState<string[]>([])
+  const preRef = useRef<HTMLPreElement>(null)
 
   useEffect(() => {
     if (!jobId) return
@@ -36,9 +37,20 @@ export function JobLog({ jobId, onDone }: Props) {
     // onDone est stable (useCallback côté parent)
   }, [jobId, onDone])
 
+  // Auto-scroll vers le bas à chaque nouvelle ligne (le dernier log reste visible).
+  useEffect(() => {
+    const el = preRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [log])
+
   if (!jobId) return null
+  // Hauteur FIXE (h-48) + scroll : la div ne « saute » plus quand on passe de
+  // « démarrage… » aux logs, ni quand ils s'allongent.
   return (
-    <pre className="mt-2 max-h-48 overflow-auto rounded-md border bg-black/40 p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground">
+    <pre
+      ref={preRef}
+      className="mt-2 h-48 overflow-auto rounded-md border bg-black/40 p-3 font-mono text-xs whitespace-pre-wrap text-muted-foreground"
+    >
       {log.join("\n") || "démarrage…"}
     </pre>
   )
