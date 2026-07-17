@@ -839,6 +839,15 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n{result.stderr}")
 
 
+def color_grade_filter(grade: str) -> str:
+    """Fragment FFmpeg d'étalonnage couleur pour un segment. '' si neutre/inconnu."""
+    return {
+        "chaud": "eq=gamma_r=1.06:gamma_b=0.94:saturation=1.05",
+        "froid": "eq=gamma_b=1.06:gamma_r=0.94:saturation=0.98",
+        "delave": "eq=saturation=0.72:contrast=0.94:brightness=0.03",
+    }.get(grade, "")
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
