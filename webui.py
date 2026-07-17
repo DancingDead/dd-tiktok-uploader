@@ -331,8 +331,12 @@ def create_app(root: Path | None = None):
             return jsonify({"error": "aucun clip sélectionné — ajoute au moins un extrait dans « Clips de la niche »"}), 400
         count = max(1, int((request.json or {}).get("count", niche["cadence"] or 1)))
         try:
+            # On passe explicitement le root de l'instance : sans ça, le job de
+            # fond ouvre ROOT/platform.db (via cwd=ROOT) et croit la niche vide
+            # quand create_app est injecté avec un autre root (tests, multi-instances).
             job_id = start_job(f"gen-{niche['slug']}",
-                               [sys.executable, "generate_niche.py", str(niche_id), str(count)])
+                               [sys.executable, "generate_niche.py", str(niche_id),
+                                str(count), str(paths["data"].parent)])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         return jsonify({"job_id": job_id})

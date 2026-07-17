@@ -6,8 +6,9 @@ import pytest
 from db import (add_member, connect, create_niche, create_preset,
                 create_video, delete_niche, delete_preset, effective_config,
                 get_niche, list_members, list_niches, list_presets,
-                list_videos, niche_clips_dir, niche_links_path, set_video_status,
-                slugify, update_niche, update_preset, verify_member)
+                list_videos, niche_clips_dir, niche_links_path, set_password,
+                set_video_status, slugify, update_niche, update_preset,
+                verify_member)
 
 
 @pytest.fixture
@@ -67,6 +68,25 @@ def test_member_password_is_hashed(conn):
     add_member(conn, "theo", "s3cret")
     stored = conn.execute("SELECT password_hash FROM members").fetchone()[0]
     assert "s3cret" not in stored
+
+
+def test_set_password_replaces_password(conn):
+    add_member(conn, "theo", "ancien")
+    set_password(conn, "theo", "nouveau")
+    assert verify_member(conn, "theo", "nouveau") is True
+    assert verify_member(conn, "theo", "ancien") is False
+
+
+def test_set_password_unknown_member_raises(conn):
+    with pytest.raises(KeyError):
+        set_password(conn, "inconnu", "peu-importe")
+
+
+def test_set_password_is_hashed(conn):
+    add_member(conn, "theo", "ancien")
+    set_password(conn, "theo", "nouveau")
+    stored = conn.execute("SELECT password_hash FROM members").fetchone()[0]
+    assert "nouveau" not in stored
 
 
 def test_preset_crud(conn):

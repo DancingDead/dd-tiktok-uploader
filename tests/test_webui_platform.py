@@ -95,6 +95,25 @@ def test_delete_track_removes_file(client, tmp_path):
     assert client.get("/api/state").get_json()["tracks"] == []
 
 
+def test_generate_passes_root_to_job(client, tmp_path, monkeypatch):
+    import webui
+    captured = {}
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: (captured.update(argv=argv) or "job1"))
+    client.post("/api/tracks", data={"file": (io.BytesIO(b"a"), "s.mp3")},
+                content_type="multipart/form-data")
+    client.post("/api/clips", data={"file": (io.BytesIO(b"v"), "c.mp4")},
+                content_type="multipart/form-data")
+    nid = client.post("/api/niches", json={"name": "N"}).get_json()["id"]
+    client.patch(f"/api/niches/{nid}", json={"tracks": ["tracks/s.mp3"], "clips": ["clips/c.mp4"]})
+
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 200
+    # generate_niche.py doit recevoir le root de l'instance (sinon il ouvre la
+    # mauvaise base et croit la niche vide) : argv = [py, script, id, count, root]
+    assert captured["argv"][-1] == str(tmp_path)
+
+
 def test_generate_requires_son_then_clip(client, tmp_path):
     # upload d'un son et d'un clip dans le catalogue
     client.post("/api/tracks", data={"file": (io.BytesIO(b"a"), "s.mp3")},
