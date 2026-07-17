@@ -6,23 +6,51 @@ import { Button } from "@/components/ui/button"
 import { PresetEditor } from "./PresetEditor"
 
 // Modèles d'ambiance : pré-remplissent l'éditeur à la création.
-const PRESET_TEMPLATES: Record<"doux" | "energique", Overrides> = {
-  energique: {
-    cut_mode: "energy",
-    strobe_beats: 16,
-    effects: { zoom: true, flash: true, shake: true, speed: true },
-    accents: { rgb: true, glitch: true },
-    subtitles: { font: "impact" },
-  },
+const PRESET_TEMPLATES: Record<string, Overrides> = {
   doux: {
-    cut_mode: "fixed",
-    cut_every: 4,
-    strobe_beats: 0,
+    cut_mode: "fixed", cut_every: 4, strobe_beats: 0,
     effects: { zoom: false, flash: false, shake: false, speed: false },
-    accents: { rgb: false, glitch: false },
+    accents: { rgb: false, glitch: 0 },
+    color_grade: "chaud", grain: 0.1, clip_speed: 0.9,
     subtitles: { font: "douce" },
   },
+  chill: {
+    cut_mode: "energy", strobe_beats: 0,
+    effects: { zoom: true, flash: false, shake: false, speed: false },
+    accents: { rgb: false, glitch: 0 },
+    color_grade: "delave", grain: 0.2, clip_speed: 0.85,
+    subtitles: { font: "elegante" },
+  },
+  energique: {
+    cut_mode: "energy", strobe_beats: 16,
+    effects: { zoom: true, flash: true, shake: true, speed: true },
+    accents: { rgb: true, glitch: 0.35 },
+    color_grade: "froid", grain: 0, clip_speed: 1.0,
+    subtitles: { font: "impact" },
+  },
+  cinematique: {
+    cut_mode: "energy", strobe_beats: 0,
+    effects: { zoom: true, flash: false, shake: false, speed: true },
+    accents: { rgb: false, glitch: 0 },
+    color_grade: "froid", grain: 0.1, clip_speed: 0.9,
+    subtitles: { font: "elegante" },
+  },
+  retro: {
+    cut_mode: "fixed", cut_every: 2, strobe_beats: 0,
+    effects: { zoom: false, flash: false, shake: false, speed: false },
+    accents: { rgb: true, glitch: 0.7 },
+    color_grade: "delave", grain: 0.8, clip_speed: 1.0,
+    subtitles: { font: "sobre" },
+  },
 }
+
+const TEMPLATE_BUTTONS: { key: keyof typeof PRESET_TEMPLATES; label: string }[] = [
+  { key: "doux", label: "Doux" },
+  { key: "chill", label: "Chill / Lo-fi" },
+  { key: "energique", label: "Énergique / Phonk" },
+  { key: "cinematique", label: "Cinématique" },
+  { key: "retro", label: "Rétro / VHS" },
+]
 
 type Props = { state: AppState; refresh: () => Promise<void> }
 
@@ -70,26 +98,19 @@ export function PresetsTab({ state, refresh }: Props) {
             <Plus /> Nouveau
           </Button>
           <p className="mt-2 text-xs text-muted-foreground">Partir d'un modèle :</p>
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={() => {
-              setSelectedId(null)
-              setTemplate(PRESET_TEMPLATES.doux)
-            }}
-          >
-            Doux
-          </Button>
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={() => {
-              setSelectedId(null)
-              setTemplate(PRESET_TEMPLATES.energique)
-            }}
-          >
-            Énergique
-          </Button>
+          {TEMPLATE_BUTTONS.map((t) => (
+            <Button
+              key={t.key}
+              variant="outline"
+              className="w-full"
+              onClick={() => {
+                setSelectedId(null)
+                setTemplate(PRESET_TEMPLATES[t.key])
+              }}
+            >
+              {t.label}
+            </Button>
+          ))}
         </div>
 
         <PresetEditor
