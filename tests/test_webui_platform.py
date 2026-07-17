@@ -3,7 +3,7 @@ import io
 import pytest
 
 from db import add_member, connect
-from webui import create_app
+from webui import coerce_overrides, create_app
 
 
 @pytest.fixture
@@ -95,6 +95,51 @@ def test_delete_track_removes_file(client, tmp_path):
     assert client.get("/api/state").get_json()["tracks"] == []
 
 
+def test_generate_passes_root_to_job(client, tmp_path, monkeypatch):
+    import webui
+    captured = {}
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: (captured.update(argv=argv) or "job1"))
+    client.post("/api/tracks", data={"file": (io.BytesIO(b"a"), "s.mp3")},
+                content_type="multipart/form-data")
+    client.post("/api/clips", data={"file": (io.BytesIO(b"v"), "c.mp4")},
+                content_type="multipart/form-data")
+    nid = client.post("/api/niches", json={"name": "N"}).get_json()["id"]
+    client.patch(f"/api/niches/{nid}", json={"tracks": ["tracks/s.mp3"], "clips": ["clips/c.mp4"]})
+
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 200
+    # generate_niche.py doit recevoir le root de l'instance (sinon il ouvre la
+    # mauvaise base et croit la niche vide) : argv = [py, script, id, count, root]
+    assert captured["argv"][-1] == str(tmp_path)
+
+
+def test_generate_requires_son_then_clip(client, tmp_path):
+    # upload d'un son et d'un clip dans le catalogue
+    client.post("/api/tracks", data={"file": (io.BytesIO(b"a"), "s.mp3")},
+                content_type="multipart/form-data")
+    client.post("/api/clips", data={"file": (io.BytesIO(b"v"), "c.mp4")},
+                content_type="multipart/form-data")
+    nid = client.post("/api/niches", json={"name": "N"}).get_json()["id"]
+
+    # aucun son → message qui parle de « son » (pas juste « morceau »)
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 400
+    assert "son" in r.get_json()["error"].lower()
+
+    # un clip mais toujours aucun son → même garde (le clip ne suffit pas)
+    client.patch(f"/api/niches/{nid}", json={"clips": ["clips/c.mp4"]})
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 400
+    assert "son" in r.get_json()["error"].lower()
+
+    # un son mais aucun clip → garde sur les clips
+    client.patch(f"/api/niches/{nid}", json={"tracks": ["tracks/s.mp3"], "clips": []})
+    r = client.post(f"/api/niches/{nid}/generate", json={"count": 1})
+    assert r.status_code == 400
+    assert "clip" in r.get_json()["error"].lower()
+
+
 def test_preset_crud_via_api(client):
     created = client.post("/api/presets", json={
         "name": "strobo", "overrides": {"cut_every": 1}})
@@ -128,3 +173,28 @@ def test_delete_video_removes_row_and_file(client, tmp_path):
     conn.close()
 
     assert client.delete(f"/api/videos/{vid}").status_code == 404  # id inconnu
+
+
+def test_coerce_overrides_numeric_ambiance_keys():
+    out = coerce_overrides({"grain": "0.5", "clip_speed": "0.85"})
+    assert out["grain"] == 0.5
+    assert out["clip_speed"] == 0.85
+
+
+def test_coerce_overrides_glitch_number_in_accents():
+    out = coerce_overrides({"accents": {"rgb": True, "glitch": "0.35"}})
+    assert out["accents"]["glitch"] == 0.35
+
+
+def test_coerce_overrides_glitch_bool_preserved():
+    out = coerce_overrides({"accents": {"glitch": True}})
+    assert out["accents"]["glitch"] is True  # bool inchangé, coercé plus tard côté moteur
+
+
+def test_coerce_overrides_rejects_unknown_color_grade():
+    with pytest.raises(ValueError):
+        coerce_overrides({"color_grade": "arc-en-ciel"})
+
+
+def test_coerce_overrides_accepts_known_color_grade():
+    assert coerce_overrides({"color_grade": "froid"})["color_grade"] == "froid"

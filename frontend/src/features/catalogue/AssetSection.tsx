@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { confirm } from "@/components/confirm"
+import { IconButton } from "@/components/IconButton"
 import { JobLog } from "@/components/JobLog"
 
 export type SectionConfig = {
@@ -143,14 +144,13 @@ export function AssetSection({
                 <span className="flex-1 truncate font-mono text-xs text-muted-foreground">
                   {url}
                 </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  title="Retirer"
+                <IconButton
+                  tip="Retirer"
+                  className="size-7 text-muted-foreground"
                   onClick={() => removeLink(url)}
                 >
                   <Trash2 />
-                </Button>
+                </IconButton>
               </li>
             ))}
           </ul>
@@ -183,14 +183,13 @@ export function AssetSection({
                 <TableCell className="font-medium">{a.name}</TableCell>
                 <TableCell className="text-muted-foreground">{a.size_mb} Mo</TableCell>
                 <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    title="Supprimer du catalogue"
+                  <IconButton
+                    tip="Supprimer du catalogue"
+                    className="size-8 text-muted-foreground"
                     onClick={() => askDelete(a.name)}
                   >
                     <Trash2 />
-                  </Button>
+                  </IconButton>
                 </TableCell>
               </TableRow>
             ))

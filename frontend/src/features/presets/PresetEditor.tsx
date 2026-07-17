@@ -15,8 +15,26 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+// Polices embarquées (assets/fonts/) — noms logiques côté moteur.
+const CAPTION_FONTS = [
+  { value: "impact", label: "Impact (edit)" },
+  { value: "classique", label: "Classique (TikTok)" },
+  { value: "sobre", label: "Sobre" },
+  { value: "condensee", label: "Condensée (sport)" },
+  { value: "douce", label: "Douce (arrondie)" },
+  { value: "elegante", label: "Élégante (fine)" },
+] as const
+
+const COLOR_GRADES = [
+  { value: "neutre", label: "Neutre" },
+  { value: "chaud", label: "Chaud" },
+  { value: "froid", label: "Froid" },
+  { value: "delave", label: "Délavé" },
+] as const
+
 type Props = {
   preset: Preset | null
+  template?: Overrides // pré-remplissage à la création (modèles Doux/Énergique)
   onSaved: (id: number) => void
   onDeleted: () => void
   refresh: () => Promise<void>
@@ -75,15 +93,14 @@ function NumberField({
   )
 }
 
-export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
-  const o = preset?.overrides ?? {}
+export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: Props) {
+  const o = preset?.overrides ?? template ?? {}
   const [name, setName] = useState(preset?.name ?? "")
   const [zoom, setZoom] = useState(o.effects?.zoom ?? false)
   const [flash, setFlash] = useState(o.effects?.flash ?? false)
   const [shake, setShake] = useState(o.effects?.shake ?? false)
   const [speed, setSpeed] = useState(o.effects?.speed ?? false)
   const [rgb, setRgb] = useState(o.accents?.rgb ?? false)
-  const [glitch, setGlitch] = useState(o.accents?.glitch ?? false)
   const [delogo, setDelogo] = useState(o.delogo ?? false)
   const [chrono, setChrono] = useState(o.chrono ?? false)
   const [minPresence, setMinPresence] = useState(o.min_presence ?? 0)
@@ -91,6 +108,17 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
   const [cutEvery, setCutEvery] = useState(o.cut_every ?? 2)
   const [buildup, setBuildup] = useState(o.buildup ?? 10)
   const [strobeBeats, setStrobeBeats] = useState(o.strobe_beats ?? 16)
+  const [font, setFont] = useState(o.subtitles?.font ?? "impact")
+  const [colorGrade, setColorGrade] = useState(o.color_grade ?? "neutre")
+  const [grain, setGrain] = useState(o.grain ?? 0)
+  const [clipSpeed, setClipSpeed] = useState(o.clip_speed ?? 1)
+  const glitchInit =
+    typeof o.accents?.glitch === "number"
+      ? o.accents.glitch
+      : o.accents?.glitch
+        ? 0.6
+        : 0
+  const [glitch, setGlitch] = useState(glitchInit)
   const [busy, setBusy] = useState(false)
 
   const isNew = preset === null
@@ -110,6 +138,10 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
       cut_every: cutEvery,
       buildup,
       strobe_beats: strobeBeats,
+      color_grade: colorGrade,
+      grain,
+      clip_speed: clipSpeed,
+      subtitles: { font },
     }
     setBusy(true)
     try {
@@ -186,9 +218,15 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
           <Toggle checked={rgb} onChange={setRgb}>
             RGB split à l'impact
           </Toggle>
-          <Toggle checked={glitch} onChange={setGlitch}>
-            Micro-glitch
-          </Toggle>
+          <NumberField
+            id="glitch"
+            label="Intensité glitch"
+            value={glitch}
+            onChange={setGlitch}
+            step={0.05}
+            min={0}
+            max={1}
+          />
         </CardContent>
       </Card>
 
@@ -212,6 +250,62 @@ export function PresetEditor({ preset, onSaved, onDeleted, refresh }: Props) {
             min={0}
             max={1}
           />
+          <div className="grid gap-1.5">
+            <Label>Ambiance couleur</Label>
+            <Select value={colorGrade} onValueChange={setColorGrade}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {COLOR_GRADES.map((g) => (
+                  <SelectItem key={g.value} value={g.value}>
+                    {g.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <NumberField
+            id="grain"
+            label="Grain / VHS"
+            value={grain}
+            onChange={setGrain}
+            step={0.05}
+            min={0}
+            max={1}
+          />
+          <NumberField
+            id="clip-speed"
+            label="Vitesse clip (slow-mo)"
+            value={clipSpeed}
+            onChange={setClipSpeed}
+            step={0.05}
+            min={0.5}
+            max={1.5}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Punchlines</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-1.5">
+            <Label>Police</Label>
+            <Select value={font} onValueChange={setFont}>
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CAPTION_FONTS.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardContent>
       </Card>
 

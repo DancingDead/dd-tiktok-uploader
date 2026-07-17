@@ -35,11 +35,15 @@ DEFAULT_CONFIG = {
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
+    "color_grade": "neutre",            # ambiance couleur : neutre|chaud|froid|delave
+    "grain": 0.0,                       # texture film/VHS, 0.0–1.0
+    "clip_speed": 1.0,                  # slow-mo global par segment, 0.5–1.5
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
         "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
         "min_dur": 1.4,                 # durée min. d'affichage d'une punchline (lisibilité)
         "model": "claude-opus-4-8",     # modèle de génération
+        "font": "impact",               # police embarquée : impact|classique|sobre|condensee|douce|elegante
     },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
@@ -476,7 +480,8 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             section = "buildup" if seg_start < drop_out - 1e-9 else "drop"
 
         # Gasp : slow-mo x0.5 sur le dernier segment avant l'impact du drop.
-        speed = 1.0
+        # Défensif : clampe l'entrée à [0.5, 1.5] (l'UI n'impose pas de borne).
+        speed = max(0.5, min(1.5, config.get("clip_speed", 1.0)))
         if effects_cfg.get("speed") and drop_out is not None and section == "buildup" \
                 and abs(seg_end - drop_out) < 1e-9:
             speed = 0.5
@@ -494,8 +499,8 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 drop_seg_count == 0 or (tier == "intense" and rng.random() < 0.3)
             ):
                 effects.append("shake")
-            if accents.get("glitch") and drop_seg_count > 0 and tier == "intense" \
-                    and rng.random() < 0.25:
+            if drop_seg_count > 0 and tier == "intense" \
+                    and rng.random() < glitch_amount(accents):
                 effects.append("glitch")
             drop_seg_count += 1
         elif effects_cfg.get("shake") and tier == "intense" and rng.random() < 0.3:
@@ -596,6 +601,27 @@ def _caption_font() -> str | None:
         if Path(path).is_file():
             return path
     return None
+
+
+FONTS_DIR = Path(__file__).parent / "assets" / "fonts"
+
+_FONT_FILES = {  # nom logique -> fichier embarqué (licences OFL)
+    "impact": "Anton-Regular.ttf",
+    "classique": "Montserrat-ExtraBold.ttf",
+    "sobre": "OpenSans-Bold.ttf",
+    "condensee": "BebasNeue-Regular.ttf",
+    "douce": "Baloo2-Bold.ttf",
+    "elegante": "CormorantGaramond-SemiBold.ttf",
+}
+
+
+def resolve_caption_font(name: str) -> str | None:
+    """Chemin de la police d'un nom logique ; nom inconnu = impact ;
+    fichier absent = repli sur les polices système (_caption_font)."""
+    path = FONTS_DIR / _FONT_FILES.get(name, _FONT_FILES["impact"])
+    if path.is_file():
+        return str(path)
+    return _caption_font()
 
 
 def _drawtext_escape(text: str) -> str:
@@ -814,6 +840,40 @@ def _run_ffmpeg(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n{result.stderr}")
 
 
+def color_grade_filter(grade: str) -> str:
+    """Fragment FFmpeg d'étalonnage couleur pour un segment. '' si neutre/inconnu."""
+    return {
+        "chaud": "eq=gamma_r=1.06:gamma_b=0.94:saturation=1.05",
+        "froid": "eq=gamma_b=1.06:gamma_r=0.94:saturation=0.98",
+        "delave": "eq=saturation=0.72:contrast=0.94:brightness=0.03",
+    }.get(grade, "")
+
+
+def grain_filter(amount: float) -> str:
+    """Fragment FFmpeg de grain/VHS pour un segment. '' si amount <= 0.
+    Bruit temporel proportionnel ; dérive chroma permanente au-delà de 0.6 (VHS).
+    Défensif : clampe l'entrée à [0.0, 1.0] (l'UI n'impose pas de borne)."""
+    amount = max(0.0, min(1.0, amount))
+    if amount <= 0:
+        return ""
+    frag = f"noise=alls={round(amount * 24)}:allf=t"
+    if amount >= 0.6:
+        frag += ",rgbashift=rh=2:bh=-2"
+    return frag
+
+
+def glitch_amount(accents: dict) -> float:
+    """Intensité de glitch 0.0–1.0 depuis accents['glitch'].
+    Compat : bool True→0.6, False/absent→0.0 ; nombre clampé."""
+    value = accents.get("glitch", False)
+    if isinstance(value, bool):
+        return 0.6 if value else 0.0
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
@@ -848,9 +908,15 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post.append("rgbashift=rh=-14:gv=10:bh=14:edge=smear:enable='lt(n,2)'")
     elif "rgb" in effects:
         post.append("rgbashift=rh=8:bh=-8:edge=smear:enable='lt(n,3)'")
+    grade = color_grade_filter(config.get("color_grade", "neutre"))
+    if grade:
+        post.append(grade)
+    grain = grain_filter(config.get("grain", 0.0))
+    if grain:
+        post.append(grain)
     # Punchline incrustée (après les accents pour rester nette), bas-centrée
     cap = entry.get("caption")
-    font = _caption_font()
+    font = resolve_caption_font(config.get("subtitles", {}).get("font", "impact"))
     if cap and font:
         post.append(
             f"drawtext=fontfile={font}:text={_drawtext_escape(cap)}"

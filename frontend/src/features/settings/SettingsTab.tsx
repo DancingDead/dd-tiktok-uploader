@@ -104,7 +104,7 @@ export function SettingsTab({
             </label>
             <label className="flex items-center gap-3 text-sm">
               <Checkbox
-                checked={local.accents.glitch}
+                checked={!!local.accents.glitch}
                 onCheckedChange={(v) => setAccent("glitch", v === true)}
               />
               Micro-glitch

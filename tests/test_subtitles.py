@@ -6,7 +6,7 @@ import pytest
 
 import beatsync
 from beatsync import (apply_subtitles, assign_caption_slots, generate_punchlines,
-                      _segment_filters)
+                      resolve_caption_font, _segment_filters)
 
 DEFAULT = beatsync.DEFAULT_CONFIG
 
@@ -198,3 +198,40 @@ def test_caption_special_chars_escaped():
     # l'apostrophe et les deux-points ne doivent pas casser le filtre (échappés)
     assert "drawtext" in vf
     assert "\\:" in vf or "\\\\:" in vf
+
+
+# --- Polices embarquées ------------------------------------------------------
+
+
+def test_resolve_caption_font_known_names():
+    for name, filename in beatsync._FONT_FILES.items():
+        path = resolve_caption_font(name)
+        assert path is not None and path.endswith(filename)
+
+
+def test_resolve_caption_font_unknown_name_falls_back_to_impact():
+    assert resolve_caption_font("gothique") == resolve_caption_font("impact")
+
+
+def test_resolve_caption_font_missing_file_falls_back_to_system(monkeypatch, tmp_path):
+    monkeypatch.setattr(beatsync, "FONTS_DIR", tmp_path)  # dossier vide
+    assert resolve_caption_font("douce") == beatsync._caption_font()
+
+
+def test_default_config_has_font_key():
+    assert DEFAULT["subtitles"]["font"] == "impact"
+
+
+def test_merge_settings_accepts_subtitles_font():
+    from beatsync import merge_settings
+    merged = merge_settings(dict(DEFAULT), {"subtitles": {"font": "douce"}})
+    assert merged["subtitles"]["font"] == "douce"
+    assert merged["subtitles"]["enabled"] is False  # le reste est préservé
+
+
+def test_segment_filters_uses_configured_font():
+    entry = {"timeline_start": 0, "duration": 1.0, "effects": [], "layout": "crop",
+             "focus_x": 0.5, "speed": 1.0, "caption": "CHILL"}
+    config = dict(DEFAULT, subtitles={**DEFAULT["subtitles"], "font": "douce"})
+    vf = " ".join(_segment_filters(entry, config))
+    assert "Baloo2-Bold.ttf" in vf

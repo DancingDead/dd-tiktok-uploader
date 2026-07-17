@@ -94,6 +94,15 @@ def add_member(conn: sqlite3.Connection, name: str, password: str) -> int:
     return cur.lastrowid
 
 
+def set_password(conn: sqlite3.Connection, name: str, password: str) -> None:
+    cur = conn.execute(
+        "UPDATE members SET password_hash = ? WHERE name = ?",
+        (generate_password_hash(password), name))
+    if cur.rowcount == 0:
+        raise KeyError(f"membre inconnu : {name}")
+    conn.commit()
+
+
 def verify_member(conn: sqlite3.Connection, name: str, password: str) -> bool:
     row = conn.execute(
         "SELECT password_hash FROM members WHERE name = ?", (name,)).fetchone()
@@ -266,10 +275,17 @@ def main() -> None:
         password = getpass.getpass(f"mot de passe pour {sys.argv[2]} : ")
         add_member(conn, sys.argv[2], password)
         print(f"membre ajouté : {sys.argv[2]}")
+    elif command == "set-password" and len(sys.argv) == 3:
+        password = getpass.getpass(f"nouveau mot de passe pour {sys.argv[2]} : ")
+        try:
+            set_password(conn, sys.argv[2], password)
+        except KeyError as exc:
+            sys.exit(str(exc.args[0]))
+        print(f"mot de passe mis à jour : {sys.argv[2]}")
     elif command == "list-members":
         print("\n".join(list_members(conn)) or "aucun membre")
     else:
-        sys.exit("usage : python db.py add-member <name> | list-members")
+        sys.exit("usage : python db.py add-member <name> | set-password <name> | list-members")
 
 
 if __name__ == "__main__":

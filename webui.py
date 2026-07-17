@@ -28,15 +28,27 @@ EDITABLE_SETTINGS = [
     "buildup", "strobe_beats", "cut_mode", "cut_every",
 ]
 # Clés d'overrides de preset qui doivent être numériques (défense XSS : jamais de HTML stocké)
-NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats")
+NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
+                         "grain", "clip_speed")
+ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
 
 
 def coerce_overrides(overrides: dict) -> dict:
-    """Force les clés numériques connues en nombres ; ValueError/TypeError sinon."""
+    """Force les clés numériques connues en nombres, coerce l'intensité de glitch
+    et valide color_grade. ValueError/TypeError si non convertible/inconnu."""
     coerced = dict(overrides)
     for key in NUMERIC_OVERRIDE_KEYS:
         if key in coerced and not isinstance(coerced[key], (int, float)):
             coerced[key] = float(coerced[key])
+    if "color_grade" in coerced and coerced["color_grade"] not in ALLOWED_COLOR_GRADES:
+        raise ValueError(f"color_grade inconnu : {coerced['color_grade']!r}")
+    accents = coerced.get("accents")
+    if isinstance(accents, dict) and "glitch" in accents \
+            and not isinstance(accents["glitch"], bool) \
+            and not isinstance(accents["glitch"], (int, float)):
+        accents = dict(accents)
+        accents["glitch"] = float(accents["glitch"])
+        coerced["accents"] = accents
     return coerced
 
 
@@ -326,11 +338,17 @@ def create_app(root: Path | None = None):
         if niche is None:
             return jsonify({"error": "niche inconnue"}), 404
         if not niche["tracks"]:
-            return jsonify({"error": "aucun morceau sélectionné pour cette niche"}), 400
+            return jsonify({"error": "aucun son sélectionné — ajoute au moins un morceau dans « Sons de la niche »"}), 400
+        if not niche["clips"]:
+            return jsonify({"error": "aucun clip sélectionné — ajoute au moins un extrait dans « Clips de la niche »"}), 400
         count = max(1, int((request.json or {}).get("count", niche["cadence"] or 1)))
         try:
+            # On passe explicitement le root de l'instance : sans ça, le job de
+            # fond ouvre ROOT/platform.db (via cwd=ROOT) et croit la niche vide
+            # quand create_app est injecté avec un autre root (tests, multi-instances).
             job_id = start_job(f"gen-{niche['slug']}",
-                               [sys.executable, "generate_niche.py", str(niche_id), str(count)])
+                               [sys.executable, "generate_niche.py", str(niche_id),
+                                str(count), str(paths["data"].parent)])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         return jsonify({"job_id": job_id})
