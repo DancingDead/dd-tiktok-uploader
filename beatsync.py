@@ -498,8 +498,8 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 drop_seg_count == 0 or (tier == "intense" and rng.random() < 0.3)
             ):
                 effects.append("shake")
-            if accents.get("glitch") and drop_seg_count > 0 and tier == "intense" \
-                    and rng.random() < 0.25:
+            if drop_seg_count > 0 and tier == "intense" \
+                    and rng.random() < glitch_amount(accents):
                 effects.append("glitch")
             drop_seg_count += 1
         elif effects_cfg.get("shake") and tier == "intense" and rng.random() < 0.3:

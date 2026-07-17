@@ -95,6 +95,32 @@ def _clips():
     return [_clip("a.mp4", 45.0), _clip("b.mp4", 60.0), _clip("c.mp4", 90.0)]
 
 
+def _count_glitch(config, seed=1):
+    edl = build_edl(_analysis(), _clips(), config, seed=seed)
+    return sum(1 for e in edl if "glitch" in e.get("effects", []))
+
+
+def test_glitch_proportion_scales_with_amount():
+    # drop_time=50 tombe dans la seconde moitié du morceau (énergie 0.80-1.00
+    # dans _analysis()) : les beats de cette zone sont dans le quartile haut
+    # (percentile >= high_thr=0.75) => tier "intense" sur la section drop.
+    # strobe_beats=16 (défaut) force des coupes à 1 beat après le drop, donc
+    # plusieurs segments "intense" avec drop_seg_count > 0 y apparaissent.
+    base = {**DEFAULT_CONFIG, "start": 0.0, "end": _DURATION,
+            "drop_time": 50.0, "buildup": 5.0}
+    none = {**base, "accents": {"rgb": True, "glitch": 0.0}}
+    full = {**base, "accents": {"rgb": True, "glitch": 1.0}}
+    edl_full = build_edl(_analysis(), _clips(), full, seed=1)
+    drop_segments = sum(1 for e in edl_full if e.get("section") == "drop")
+    glitch_full = sum(1 for e in edl_full if "glitch" in e.get("effects", []))
+    assert drop_segments > 1, "fixture invalide : pas assez de segments dans le drop"
+    assert _count_glitch(none) == 0
+    # à amount=1.0, glitch_amount(accents) == 1.0 : rng.random() < 1.0 est
+    # toujours vrai => glitch sur tous les segments intenses éligibles du
+    # drop (tous, hormis le tout premier : drop_seg_count > 0).
+    assert glitch_full == drop_segments - 1
+
+
 def test_clip_speed_propagates_to_all_segments():
     config = {
         **DEFAULT_CONFIG,
