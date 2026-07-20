@@ -145,19 +145,31 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
             )}
           </div>
 
-          <div className="space-y-2">
+          {/* Section à part entière : sans séparation, la case « Punchlines »
+              se lisait comme un preset de plus dans la liste au-dessus. */}
+          <div className="space-y-2 border-t pt-4">
+            <Label>Punchlines</Label>
             <label className="flex items-center gap-3 text-sm">
               <Checkbox
                 checked={subsEnabled}
                 onCheckedChange={(v) => setSubsEnabled(v === true)}
               />
-              Punchlines incrustées (générées)
+              Incruster des punchlines générées
             </label>
-            <Textarea
-              value={preprompt}
-              onChange={(e) => setPreprompt(e.target.value)}
-              placeholder="pré-prompt des punchlines, ex. « motivation gym, français, percutant, 4 mots max »"
-            />
+            <div className="space-y-1">
+              <Label htmlFor="preprompt">Consigne de style</Label>
+              <Textarea
+                id="preprompt"
+                value={preprompt}
+                onChange={(e) => setPreprompt(e.target.value)}
+                placeholder="motivation gym, français, percutant, 4 mots max"
+              />
+              {/* L'exemple vit sous le champ, pas dans le placeholder : il doit
+                  rester lisible pendant la saisie. */}
+              <p className="text-xs text-muted-foreground">
+                Guide le ton des punchlines. Ex. « motivation gym, français, percutant, 4 mots max ».
+              </p>
+            </div>
           </div>
 
           <div className="flex justify-end">
@@ -231,7 +243,17 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
               Pour générer, sélectionne au moins {missing.join(" et ")} ci-dessus.
             </p>
           )}
-          <JobLog jobId={jobId} onDone={() => refresh()} />
+          <JobLog
+            jobId={jobId}
+            onDone={(status) => {
+              refresh()
+              if (status === "failed") {
+                toast.error("La génération a échoué — voir le journal ci-dessus")
+              } else {
+                toast.success("génération terminée")
+              }
+            }}
+          />
 
           <div className="space-y-3">
             <h3 className="text-sm font-semibold">
