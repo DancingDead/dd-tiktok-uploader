@@ -135,6 +135,9 @@ export const api = {
   generateNiche: (id: number, count: number) =>
     req<{ job_id: string }>(`/api/niches/${id}/generate`, json({ count })),
 
+  // Aperçu d'un asset du catalogue ("tracks/xxx.mp3" | "clips/xxx.mp4").
+  assetUrl: (ref: string) => "/api/" + ref.split("/").map(encodeURIComponent).join("/"),
+
   // Vidéos
   videoUrl: (id: number, download = false) => `/api/videos/${id}${download ? "?dl=1" : ""}`,
   setVideoStatus: (id: number, status: Video["status"]) =>
