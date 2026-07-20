@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { Play, Trash2 } from "lucide-react"
 
@@ -32,6 +32,39 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
   const [count, setCount] = useState(niche.cadence || 1)
   const [jobId, setJobId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+
+  // Modifications non enregistrées : la carte Réglages est en state local (≠ des
+  // cartes Sons/Clips qui persistent tout de suite). Sans repère, changer d'onglet
+  // ou recharger perdait la saisie en silence.
+  const dirty =
+    caption !== niche.caption_template ||
+    hashtagsInput !== niche.hashtags.join(", ") ||
+    presetIds.slice().sort().join(",") !== niche.preset_ids.slice().sort().join(",") ||
+    subsEnabled !== (niche.subtitles?.enabled ?? false) ||
+    preprompt !== (niche.subtitles?.preprompt ?? "") ||
+    count !== (niche.cadence || 1)
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [dirty])
+
+  // Signal « N nouvelles vidéos » : on mémorise le nombre au lancement, et quand
+  // la bibliothèque grossit après refresh on l'annonce (Update Indicator).
+  const genBaseline = useRef<number | null>(null)
+  useEffect(() => {
+    if (genBaseline.current === null) return
+    const added = niche.videos.length - genBaseline.current
+    if (added > 0) {
+      toast.success(`${added} nouvelle(s) vidéo(s) ajoutée(s) à la bibliothèque`)
+      genBaseline.current = null
+    }
+  }, [niche.videos.length])
 
   const togglePreset = (id: number, on: boolean) =>
     setPresetIds((ids) => (on ? [...new Set([...ids, id])] : ids.filter((x) => x !== id)))
@@ -81,10 +114,12 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
 
   const generate = async () => {
     try {
+      genBaseline.current = niche.videos.length
       const { job_id } = await api.generateNiche(niche.id, count)
       toast.success(`génération de ${count} variante(s) lancée`)
       setJobId(job_id)
     } catch (e) {
+      genBaseline.current = null
       toast.error((e as Error).message)
     }
   }
@@ -172,8 +207,11 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
             </div>
           </div>
 
-          <div className="flex justify-end">
-            <Button onClick={save} disabled={saving}>
+          <div className="flex items-center justify-end gap-3">
+            {dirty && (
+              <span className="text-xs text-muted-foreground">modifications non enregistrées</span>
+            )}
+            <Button variant="secondary" onClick={save} disabled={saving || !dirty}>
               Enregistrer la niche
             </Button>
           </div>
@@ -226,7 +264,11 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
               min={1}
               max={20}
               value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
+              onChange={(e) => {
+                // Clamp JS : min/max HTML ne bornent pas la saisie clavier (0, vide, 50…).
+                const n = Math.round(Number(e.target.value))
+                setCount(Number.isFinite(n) && n >= 1 ? Math.min(20, n) : 1)
+              }}
               style={{ width: "70px" }}
             />
             <span className="text-sm text-muted-foreground">variante(s)</span>
@@ -248,10 +290,11 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
             onDone={(status) => {
               refresh()
               if (status === "failed") {
+                genBaseline.current = null
                 toast.error("La génération a échoué — voir le journal ci-dessus")
-              } else {
-                toast.success("génération terminée")
               }
+              // Succès : le signal « N nouvelles vidéos » est émis par l'effet
+              // qui observe la bibliothèque une fois le refresh appliqué.
             }}
           />
 

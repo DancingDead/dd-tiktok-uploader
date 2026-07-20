@@ -231,3 +231,7 @@ def test_serve_catalog_asset_for_preview(client, tmp_path):
     assert client.get("/api/clips/absent.mp4").status_code == 404
     assert client.get("/api/tracks/notes.txt").status_code == 400
     assert client.get("/api/clips/..%2f..%2fsecret.mp4").status_code == 404
+
+
+def test_video_poster_unknown_returns_404(client):
+    assert client.get("/api/videos/99999/poster").status_code == 404

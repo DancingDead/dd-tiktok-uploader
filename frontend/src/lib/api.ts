@@ -140,6 +140,7 @@ export const api = {
 
   // Vidéos
   videoUrl: (id: number, download = false) => `/api/videos/${id}${download ? "?dl=1" : ""}`,
+  posterUrl: (id: number) => `/api/videos/${id}/poster`,
   setVideoStatus: (id: number, status: Video["status"]) =>
     req(`/api/videos/${id}/status`, json({ status })),
   deleteVideo: (id: number) => req(`/api/videos/${id}`, { method: "DELETE" }),

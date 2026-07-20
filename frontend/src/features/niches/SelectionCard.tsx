@@ -32,6 +32,7 @@ function AssetRow({
   actionTip,
   actionClass,
   onAction,
+  actionBusy,
   muted,
 }: {
   label: string
@@ -41,6 +42,7 @@ function AssetRow({
   actionTip: string
   actionClass: string
   onAction: () => void
+  actionBusy?: boolean
   muted?: boolean
 }) {
   const [open, setOpen] = useState(false)
@@ -56,7 +58,7 @@ function AssetRow({
         >
           <Play />
         </IconButton>
-        <IconButton tip={actionTip} className={actionClass} onClick={onAction}>
+        <IconButton tip={actionTip} className={actionClass} disabled={actionBusy} onClick={onAction}>
           {actionIcon}
         </IconButton>
       </div>
@@ -92,6 +94,8 @@ export function SelectionCard({
   removedToast,
 }: Props) {
   const [query, setQuery] = useState("")
+  // Ligne dont l'ajout/retrait est en cours : évite le double-clic.
+  const [busyRef, setBusyRef] = useState<string | null>(null)
   const kind: "audio" | "video" = prefix === "tracks/" ? "audio" : "video"
   const q = query.trim().toLowerCase()
   const match = (name: string) => name.toLowerCase().includes(q)
@@ -101,20 +105,26 @@ export function SelectionCard({
   const shownAvailable = available.filter((a) => match(a.name))
 
   const add = async (name: string) => {
+    setBusyRef(prefix + name)
     try {
       await onChange([...selected, prefix + name])
       toast.success(addedToast)
     } catch (e) {
       toast.error((e as Error).message)
+    } finally {
+      setBusyRef(null)
     }
   }
 
   const remove = async (path: string) => {
+    setBusyRef(path)
     try {
       await onChange(selected.filter((p) => p !== path))
       toast.success(removedToast)
     } catch (e) {
       toast.error((e as Error).message)
+    } finally {
+      setBusyRef(null)
     }
   }
 
@@ -153,6 +163,7 @@ export function SelectionCard({
                 actionTip="Retirer de la niche"
                 actionClass="size-7 text-muted-foreground"
                 onAction={() => remove(path)}
+                actionBusy={busyRef === path}
               />
             ))}
           </ul>
@@ -180,6 +191,7 @@ export function SelectionCard({
                   actionTip="Ajouter à la niche"
                   actionClass="size-7 text-primary"
                   onAction={() => add(a.name)}
+                  actionBusy={busyRef === prefix + a.name}
                   muted
                 />
               ))}
