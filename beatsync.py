@@ -1104,6 +1104,8 @@ def main() -> None:
     parser.add_argument("--start", type=float, default=None,
                         help="début manuel de la fenêtre, en s (défaut : cadrage auto buildup + drop)")
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
+    parser.add_argument("--section", choices=["drop", "calm"], default=None,
+                        help='passage ciblé : "drop" (moment fort, défaut) ou "calm" (passage calme)')
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
     parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,
@@ -1124,6 +1126,8 @@ def main() -> None:
     if args.cut_every is not None:
         config["cut_mode"] = "fixed"
         config["cut_every"] = args.cut_every
+    if args.section is not None:
+        config["section"] = args.section
     if args.subtitles:
         config["subtitles"] = {**config["subtitles"], "enabled": True, "preprompt": args.subtitles}
 
