@@ -55,3 +55,34 @@ def test_calm_deterministic():
     a = find_calm(analysis, dict(DEFAULT_CONFIG), 30)
     b = find_calm(analysis, dict(DEFAULT_CONFIG), 30)
     assert a == b
+
+
+from beatsync import resolve_window
+
+
+def test_resolve_window_calm_sets_no_drop():
+    analysis = make_analysis(lambda t: np.where((t >= 50.0) & (t < 90.0), 0.2, 0.9))
+    config = dict(DEFAULT_CONFIG)
+    config["section"] = "calm"
+    resolve_window(analysis, config, start=None, duration=30)
+    assert config["drop_time"] is None
+    assert 45.0 <= config["start"] <= 65.0
+    assert config["end"] <= analysis["duration"]
+
+
+def test_resolve_window_drop_unchanged():
+    # section="drop" par défaut : marche d'énergie -> drop détecté (non-régression).
+    analysis = make_analysis(lambda t: np.where(t < 40.0, 0.15, 0.95))
+    config = dict(DEFAULT_CONFIG)
+    resolve_window(analysis, config, start=None, duration=30)
+    assert config["drop_time"] is not None
+    assert abs(config["drop_time"] - 40.0) <= 2.0
+
+
+def test_resolve_window_explicit_start_wins_in_calm():
+    analysis = make_analysis(lambda t: np.where((t >= 50.0) & (t < 90.0), 0.2, 0.9))
+    config = dict(DEFAULT_CONFIG)
+    config["section"] = "calm"
+    resolve_window(analysis, config, start=12.0, duration=30)
+    assert config["start"] == 12.0
+    assert config["drop_time"] is None

@@ -411,14 +411,22 @@ def resolve_window(analysis: dict, config: dict, start: float | None = None,
                    duration: float | str = 30.0) -> dict:
     """Résout drop_time / start / end dans config (et le retourne).
 
-    start=None => cadrage auto : buildup avant le drop détecté (ou début du
-    morceau sans drop net). duration="full" => tout le morceau ; sinon la fin
-    est étendue à la frontière de phrase suivante.
+    config["section"] pilote le passage ciblé :
+      - "drop" (défaut) : cadrage sur le drop détecté (buildup avant).
+      - "calm" : cadrage sur la fenêtre la plus calme (find_calm), sans drop.
+    start=None => cadrage auto ; start fourni (CLI --start) => prioritaire.
+    duration="full" => tout le morceau ; sinon fin étendue à la frontière de phrase.
     """
-    drop = find_drop(analysis, config)
+    if config.get("section") == "calm":
+        drop = None
+        auto_start = (find_calm(analysis, config, duration)
+                      if duration != "full" else None)
+    else:
+        drop = find_drop(analysis, config)
+        auto_start = (max(0.0, drop - config["buildup"]) if drop is not None else 0.0)
     config["drop_time"] = drop
     if start is None:
-        start = max(0.0, drop - config["buildup"]) if drop is not None else 0.0
+        start = auto_start if auto_start is not None else 0.0
     config["start"] = float(start)
     if duration == "full":
         config["end"] = float(analysis["duration"])
