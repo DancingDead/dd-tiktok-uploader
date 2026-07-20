@@ -86,3 +86,15 @@ def test_resolve_window_explicit_start_wins_in_calm():
     resolve_window(analysis, config, start=12.0, duration=30)
     assert config["start"] == 12.0
     assert config["drop_time"] is None
+
+
+def test_resolve_window_calm_full_duration():
+    # Mode calme + duration="full" : pas de section ciblée sur tout le morceau ->
+    # start=0.0, aucun drop, fenêtre = morceau entier (comportement documenté).
+    analysis = make_analysis(lambda t: np.where((t >= 50.0) & (t < 90.0), 0.2, 0.9))
+    config = dict(DEFAULT_CONFIG)
+    config["section"] = "calm"
+    resolve_window(analysis, config, start=None, duration="full")
+    assert config["drop_time"] is None
+    assert config["start"] == 0.0
+    assert config["end"] == analysis["duration"]
