@@ -198,3 +198,13 @@ def test_coerce_overrides_rejects_unknown_color_grade():
 
 def test_coerce_overrides_accepts_known_color_grade():
     assert coerce_overrides({"color_grade": "froid"})["color_grade"] == "froid"
+
+
+def test_coerce_accepts_valid_section():
+    assert coerce_overrides({"section": "calm"})["section"] == "calm"
+    assert coerce_overrides({"section": "drop"})["section"] == "drop"
+
+
+def test_coerce_rejects_unknown_section():
+    with pytest.raises(ValueError):
+        coerce_overrides({"section": "chill"})
