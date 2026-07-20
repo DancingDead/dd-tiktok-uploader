@@ -32,6 +32,11 @@ const COLOR_GRADES = [
   { value: "delave", label: "Délavé" },
 ] as const
 
+const TRACK_SECTIONS = [
+  { value: "drop", label: "Fort (build-up + drop)" },
+  { value: "calm", label: "Calme (passage planant)" },
+]
+
 type Props = {
   preset: Preset | null
   template?: Overrides // pré-remplissage à la création (modèles Doux/Énergique)
@@ -110,6 +115,7 @@ export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: 
   const [strobeBeats, setStrobeBeats] = useState(o.strobe_beats ?? 16)
   const [font, setFont] = useState(o.subtitles?.font ?? "impact")
   const [colorGrade, setColorGrade] = useState(o.color_grade ?? "neutre")
+  const [section, setSection] = useState(o.section ?? "drop")
   const [grain, setGrain] = useState(o.grain ?? 0)
   const [clipSpeed, setClipSpeed] = useState(o.clip_speed ?? 1)
   const glitchInit =
@@ -135,6 +141,7 @@ export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: 
       chrono,
       min_presence: minPresence,
       cut_mode: cutMode,
+      section,
       cut_every: cutEvery,
       buildup,
       strobe_beats: strobeBeats,
@@ -250,6 +257,21 @@ export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: 
             min={0}
             max={1}
           />
+          <div className="grid gap-1.5">
+            <Label>Moment de la track</Label>
+            <Select value={section} onValueChange={setSection}>
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRACK_SECTIONS.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="grid gap-1.5">
             <Label>Ambiance couleur</Label>
             <Select value={colorGrade} onValueChange={setColorGrade}>
