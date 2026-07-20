@@ -22,20 +22,24 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     }
 
 # Attend que le port 8765 se libère.
+# NB : -ErrorAction SilentlyContinue est INDISPENSABLE — quand le port est déjà
+# libre, Get-NetTCPConnection jette une exception TERMINANTE (« No matching
+# objects »), que $ErrorActionPreference global ne neutralise pas pour ces cmdlets
+# CIM. Sans ça, le script meurt ici et ne relance jamais la tâche → site down.
 $tries = 0
-while ((Get-NetTCPConnection -LocalPort 8765 -State Listen) -and $tries -lt 15) {
-    Get-NetTCPConnection -LocalPort 8765 -State Listen |
+while ((Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue) -and $tries -lt 15) {
+    Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique |
         ForEach-Object { Stop-Process -Id $_ -Force }
     Start-Sleep -Seconds 1
     $tries++
 }
-Write-Host ("8765 libre: " + (-not [bool](Get-NetTCPConnection -LocalPort 8765 -State Listen)))
+Write-Host ("8765 libre: " + (-not [bool](Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)))
 
 # Relance une instance fraîche.
 Start-ScheduledTask -TaskName "DD-Usine"
 Start-Sleep -Seconds 8
-$owner = Get-NetTCPConnection -LocalPort 8765 -State Listen | Select-Object -ExpandProperty OwningProcess -Unique
+$owner = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique
 Write-Host ("Serveur PID: " + ($owner -join ','))
 try {
     Write-Host ("SITE -> HTTP " + (Invoke-WebRequest 'http://localhost:8765/' -UseBasicParsing -TimeoutSec 8).StatusCode)
