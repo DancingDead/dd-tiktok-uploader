@@ -30,6 +30,9 @@ DEFAULT_CONFIG = {
     "end": 30.0,
     "drop_time": None,                  # timestamp du drop dans le morceau (None = pas de drop connu)
     "buildup": 10.0,                    # s de buildup avant le drop dans la fenêtre auto
+    # Passage ciblé : "drop" = moment fort (build-up + drop) | "calm" = passage calme.
+    # NB : distinct du champ "section" des entrées d'EDL (buildup/drop) construit dans build_edl.
+    "section": "drop",
     "strobe_beats": 16,                 # coupes forcées à 1 beat après le drop
     "effects": {"zoom": True, "flash": True, "shake": True, "speed": True},
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
@@ -345,6 +348,47 @@ def find_drop(analysis: dict, config: dict) -> float | None:
     drop_time = grid[idx[int(np.argmax(contrast))]]
     beats = np.asarray(analysis["beats"], dtype=float)
     return float(beats[int(np.argmin(np.abs(beats - drop_time)))])
+
+
+def find_calm(analysis: dict, config: dict, duration: float | str = 30.0) -> float | None:
+    """Début (calé sur un beat) de la fenêtre la plus calme du morceau, ou None
+    si le morceau est plus court que la fenêtre demandée.
+
+    Miroir de `find_drop` : au lieu du contraste d'énergie maximal, on cherche la
+    fenêtre de `duration` s à énergie moyenne minimale, en n'acceptant que les
+    fenêtres SANS silence (leur minimum d'énergie reste au-dessus d'un seuil) —
+    sinon on choisirait une intro/fade muet ou le bord du silence.
+
+    Déterministe (aucun RNG) : ne casse pas la reproductibilité.
+    NB : le "calm" ici concerne le CHOIX DU PASSAGE (config["section"]) ; à ne pas
+    confondre avec le champ "section" (buildup/drop) des entrées d'EDL.
+    """
+    dt = 0.25
+    grid = np.arange(0.0, float(analysis["duration"]), dt)
+    energy = np.interp(
+        grid,
+        np.asarray(analysis["energy_times"], dtype=float),
+        np.asarray(analysis["energy"], dtype=float),
+    )
+    kernel = np.ones(max(1, int(2.0 / dt)))
+    energy = np.convolve(energy, kernel / len(kernel), mode="same")
+
+    W = int(round(float(duration) / dt))
+    if W < 1 or len(energy) < W:
+        return None
+
+    windows = np.lib.stride_tricks.sliding_window_view(energy, W)  # (N-W+1, W)
+    means = windows.mean(axis=1)
+    mins = windows.min(axis=1)
+
+    silence = 0.05 * float(energy.max())
+    musical = np.flatnonzero(mins >= silence)      # fenêtres sans silence
+    if musical.size == 0:                          # morceau très faible partout
+        musical = np.arange(len(means))
+    best = int(musical[int(np.argmin(means[musical]))])
+
+    beats = np.asarray(analysis["beats"], dtype=float)
+    return float(beats[int(np.argmin(np.abs(beats - grid[best])))])
 
 
 def snap_end_to_phrase(end: float, drop_time: float | None, beats: np.ndarray,
