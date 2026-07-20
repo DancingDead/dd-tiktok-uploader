@@ -71,6 +71,7 @@ def main() -> None:
     videos_dir.mkdir(parents=True, exist_ok=True)
     created_at = datetime.now().isoformat(timespec="seconds")
 
+    produced = 0
     for i, (track, seed) in enumerate(variants, 1):
         preset = niche_presets[(i - 1) % len(niche_presets)] if niche_presets else None
         config = merge_settings(load_settings(root / "settings.json"),
@@ -94,7 +95,13 @@ def main() -> None:
             caption=niche["caption_template"],
             subtitles={"lines": info["captions"]},
             created_at=datetime.now().isoformat(timespec="seconds"))
-    print(f"OK — {len(variants)} variante(s) traitée(s)", flush=True)
+        produced += 1
+    # Compte réel (≠ tentées) : un échec par variante était silencieux, la sortie
+    # restait « OK » en code 0 → l'UI annonçait un succès pour 0 vidéo produite.
+    print(f"OK — {produced}/{len(variants)} variante(s) produite(s)", flush=True)
+    if variants and produced == 0:
+        # Échec total → code retour non nul → le job passe « failed » côté UI.
+        sys.exit("échec : aucune variante n'a pu être produite (voir le journal)")
 
 
 if __name__ == "__main__":
