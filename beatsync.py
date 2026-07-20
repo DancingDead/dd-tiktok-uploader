@@ -30,6 +30,9 @@ DEFAULT_CONFIG = {
     "end": 30.0,
     "drop_time": None,                  # timestamp du drop dans le morceau (None = pas de drop connu)
     "buildup": 10.0,                    # s de buildup avant le drop dans la fenêtre auto
+    # Passage ciblé : "drop" = moment fort (build-up + drop) | "calm" = passage calme.
+    # NB : distinct du champ "section" des entrées d'EDL (buildup/drop) construit dans build_edl.
+    "section": "drop",
     "strobe_beats": 16,                 # coupes forcées à 1 beat après le drop
     "effects": {"zoom": True, "flash": True, "shake": True, "speed": True},
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
@@ -347,6 +350,47 @@ def find_drop(analysis: dict, config: dict) -> float | None:
     return float(beats[int(np.argmin(np.abs(beats - drop_time)))])
 
 
+def find_calm(analysis: dict, config: dict, duration: float | str = 30.0) -> float | None:
+    """Début (calé sur un beat) de la fenêtre la plus calme du morceau, ou None
+    si le morceau est plus court que la fenêtre demandée.
+
+    Miroir de `find_drop` : au lieu du contraste d'énergie maximal, on cherche la
+    fenêtre de `duration` s à énergie moyenne minimale, en n'acceptant que les
+    fenêtres SANS silence (leur minimum d'énergie reste au-dessus d'un seuil) —
+    sinon on choisirait une intro/fade muet ou le bord du silence.
+
+    Déterministe (aucun RNG) : ne casse pas la reproductibilité.
+    NB : le "calm" ici concerne le CHOIX DU PASSAGE (config["section"]) ; à ne pas
+    confondre avec le champ "section" (buildup/drop) des entrées d'EDL.
+    """
+    dt = 0.25
+    grid = np.arange(0.0, float(analysis["duration"]), dt)
+    energy = np.interp(
+        grid,
+        np.asarray(analysis["energy_times"], dtype=float),
+        np.asarray(analysis["energy"], dtype=float),
+    )
+    kernel = np.ones(max(1, int(2.0 / dt)))
+    energy = np.convolve(energy, kernel / len(kernel), mode="same")
+
+    W = int(round(float(duration) / dt))
+    if W < 1 or len(energy) < W:
+        return None
+
+    windows = np.lib.stride_tricks.sliding_window_view(energy, W)  # (N-W+1, W)
+    means = windows.mean(axis=1)
+    mins = windows.min(axis=1)
+
+    silence = 0.05 * float(energy.max())
+    musical = np.flatnonzero(mins >= silence)      # fenêtres sans silence
+    if musical.size == 0:                          # morceau très faible partout
+        musical = np.arange(len(means))
+    best = int(musical[int(np.argmin(means[musical]))])
+
+    beats = np.asarray(analysis["beats"], dtype=float)
+    return float(beats[int(np.argmin(np.abs(beats - grid[best])))])
+
+
 def snap_end_to_phrase(end: float, drop_time: float | None, beats: np.ndarray,
                        track_duration: float, phrase_beats: int = 16) -> float:
     """Étend la fin de fenêtre à la prochaine frontière de phrase (multiple de
@@ -367,14 +411,22 @@ def resolve_window(analysis: dict, config: dict, start: float | None = None,
                    duration: float | str = 30.0) -> dict:
     """Résout drop_time / start / end dans config (et le retourne).
 
-    start=None => cadrage auto : buildup avant le drop détecté (ou début du
-    morceau sans drop net). duration="full" => tout le morceau ; sinon la fin
-    est étendue à la frontière de phrase suivante.
+    config["section"] pilote le passage ciblé :
+      - "drop" (défaut) : cadrage sur le drop détecté (buildup avant).
+      - "calm" : cadrage sur la fenêtre la plus calme (find_calm), sans drop.
+    start=None => cadrage auto ; start fourni (CLI --start) => prioritaire.
+    duration="full" => tout le morceau ; sinon fin étendue à la frontière de phrase.
     """
-    drop = find_drop(analysis, config)
+    if config.get("section") == "calm":
+        drop = None
+        auto_start = (find_calm(analysis, config, duration)
+                      if duration != "full" else None)
+    else:
+        drop = find_drop(analysis, config)
+        auto_start = (max(0.0, drop - config["buildup"]) if drop is not None else 0.0)
     config["drop_time"] = drop
     if start is None:
-        start = max(0.0, drop - config["buildup"]) if drop is not None else 0.0
+        start = auto_start if auto_start is not None else 0.0
     config["start"] = float(start)
     if duration == "full":
         config["end"] = float(analysis["duration"])
@@ -1052,6 +1104,8 @@ def main() -> None:
     parser.add_argument("--start", type=float, default=None,
                         help="début manuel de la fenêtre, en s (défaut : cadrage auto buildup + drop)")
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
+    parser.add_argument("--section", choices=["drop", "calm"], default=None,
+                        help='passage ciblé : "drop" (moment fort, défaut) ou "calm" (passage calme)')
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
     parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,
@@ -1072,6 +1126,8 @@ def main() -> None:
     if args.cut_every is not None:
         config["cut_mode"] = "fixed"
         config["cut_every"] = args.cut_every
+    if args.section is not None:
+        config["section"] = args.section
     if args.subtitles:
         config["subtitles"] = {**config["subtitles"], "enabled": True, "preprompt": args.subtitles}
 

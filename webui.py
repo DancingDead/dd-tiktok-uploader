@@ -32,6 +32,7 @@ EDITABLE_SETTINGS = [
 NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
                          "grain", "clip_speed")
 ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
+ALLOWED_SECTIONS = ("drop", "calm")
 
 
 def coerce_overrides(overrides: dict) -> dict:
@@ -43,6 +44,8 @@ def coerce_overrides(overrides: dict) -> dict:
             coerced[key] = float(coerced[key])
     if "color_grade" in coerced and coerced["color_grade"] not in ALLOWED_COLOR_GRADES:
         raise ValueError(f"color_grade inconnu : {coerced['color_grade']!r}")
+    if "section" in coerced and coerced["section"] not in ALLOWED_SECTIONS:
+        raise ValueError(f"section inconnue : {coerced['section']!r}")
     accents = coerced.get("accents")
     if isinstance(accents, dict) and "glitch" in accents \
             and not isinstance(accents["glitch"], bool) \

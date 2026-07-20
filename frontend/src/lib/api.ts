@@ -40,6 +40,7 @@ export type Overrides = {
   chrono?: boolean
   min_presence?: number
   cut_mode?: string
+  section?: string
   cut_every?: number
   buildup?: number
   strobe_beats?: number
