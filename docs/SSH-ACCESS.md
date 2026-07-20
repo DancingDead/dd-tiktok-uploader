@@ -38,16 +38,22 @@ cat ~/.ssh/id_ed25519.pub
 
 ## Utilisation quotidienne (depuis le Mac)
 
+> ⚠️ **Se connecter à l'IP Tailscale `100.74.173.64`, PAS au nom `dancingdeadhq`.**
+> Comme le **Funnel** est actif, le nom résout vers l'entrée publique HTTPS
+> (`176.58.90.x`), qui ne relaie que le 443 → SSH y *timeout*. L'IP Tailscale pointe
+> direct sur la tour où `sshd` écoute.
+
 ```bash
-ssh "Dancing Dead@dancingdeadhq"          # ou  ssh "Dancing Dead@100.74.173.64"
+ssh "Dancing Dead@100.74.173.64"
 ```
 
-Alias pratique — dans `~/.ssh/config` sur le Mac :
+Alias pratique — dans `~/.ssh/config` sur le Mac (bien mettre l'**IP**, pas le nom) :
 
 ```
 Host tour
-    HostName dancingdeadhq
+    HostName 100.74.173.64
     User Dancing Dead
+    IdentityFile ~/.ssh/id_ed25519
 ```
 
 Ensuite `ssh tour`, et on peut lancer des commandes sans session interactive :
@@ -79,4 +85,6 @@ ssh tour "cd 'C:\Users\Dancing Dead\Desktop\DEV\dd-tiktok-uploader'; uv run pyth
 - **`ssh tour` demande un mot de passe malgré la clé** : le compte est admin → vérifier que
   la clé est bien dans `administrators_authorized_keys` (pas `~/.ssh/`) et que l'ACL n'accorde
   qu'à SYSTEM + Administrateurs (sinon sshd ignore le fichier). `icacls` dans setup-ssh.ps1.
-- **MagicDNS ne résout pas `dancingdeadhq`** : utiliser l'IP Tailscale `100.74.173.64`.
+- **`ssh …@dancingdeadhq` *timeout*** : le nom résout vers l'entrée **publique du Funnel**
+  (`176.58.90.x`, HTTPS uniquement), pas vers la tour → toujours passer par l'IP Tailscale
+  `100.74.173.64` (voir l'avertissement plus haut).
