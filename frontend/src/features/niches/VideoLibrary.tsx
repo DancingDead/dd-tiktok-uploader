@@ -114,37 +114,47 @@ export function VideoLibrary({
               <p className="line-clamp-2 text-xs text-muted-foreground">{preview}</p>
             )}
 
-            <div className="flex flex-wrap items-center gap-1">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setStatus(v.id, "approved", "vidéo validée")}
-              >
-                <Check /> Valider
-              </Button>
-              <IconButton
-                tip="Rejeter"
-                onClick={() => setStatus(v.id, "rejected", "vidéo rejetée")}
-              >
-                <X />
-              </IconButton>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button asChild size="icon" variant="ghost">
-                    <a href={api.videoUrl(v.id, true)}>
-                      <Download />
-                    </a>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Télécharger</TooltipContent>
-              </Tooltip>
-              <IconButton
-                tip="Supprimer la vidéo"
-                className="ml-auto text-muted-foreground"
-                onClick={() => remove(v.id)}
-              >
-                <Trash2 />
-              </IconButton>
+            {/* Deux tiers : l'action-récompense (Valider) et le téléchargement en
+                haut ; les négatives en bas. Rejeter est LIBELLÉ (réversible),
+                Supprimer reste une icône isolée, teintée « destructif » et à part,
+                pour ne pas confondre deux actions aux conséquences opposées. */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setStatus(v.id, "approved", "vidéo validée")}
+                >
+                  <Check /> Valider
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button asChild size="icon" variant="ghost">
+                      <a href={api.videoUrl(v.id, true)}>
+                        <Download />
+                      </a>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Télécharger</TooltipContent>
+                </Tooltip>
+              </div>
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setStatus(v.id, "rejected", "vidéo rejetée")}
+                >
+                  <X /> Rejeter
+                </Button>
+                <IconButton
+                  tip="Supprimer définitivement"
+                  className="ml-auto text-destructive/80 hover:text-destructive"
+                  onClick={() => remove(v.id)}
+                >
+                  <Trash2 />
+                </IconButton>
+              </div>
             </div>
           </div>
         )

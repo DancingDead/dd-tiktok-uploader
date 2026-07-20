@@ -32,6 +32,12 @@ EDITABLE_SETTINGS = [
 NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
                          "grain", "clip_speed")
 ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
+# Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
+ASSET_MIMETYPES = {
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
+    ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".aiff": "audio/aiff",
+    ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+}
 ALLOWED_SECTIONS = ("drop", "calm")
 
 
@@ -317,6 +323,30 @@ def create_app(root: Path | None = None):
     @app.delete("/api/clips/<path:name>")
     def delete_clip_ep(name):
         return _delete_asset("clips", "clips/", VIDEO_EXTS, name)
+
+    def _serve_asset(dir_key, exts, name):
+        """Sert un fichier du catalogue partagé pour aperçu (écoute/visionnage).
+        Même garde anti-traversal que _delete_asset : uniquement un fichier
+        directement sous le dossier catalogue. send_file gère les requêtes Range
+        (scrub audio/vidéo) par défaut."""
+        from flask import send_file
+        safe = Path(name).name  # neutralise toute traversée de chemin
+        if Path(safe).suffix.lower() not in exts:
+            return jsonify({"error": f"format non supporté : {safe}"}), 400
+        base = paths[dir_key].resolve()
+        target = (base / safe).resolve()
+        if target.parent != base or not target.is_file():
+            return jsonify({"error": "fichier introuvable"}), 404
+        return send_file(target, mimetype=ASSET_MIMETYPES.get(Path(safe).suffix.lower()),
+                         download_name=safe)
+
+    @app.get("/api/tracks/<path:name>")
+    def serve_track_ep(name):
+        return _serve_asset("tracks", AUDIO_EXTENSIONS, name)
+
+    @app.get("/api/clips/<path:name>")
+    def serve_clip_ep(name):
+        return _serve_asset("clips", VIDEO_EXTS, name)
 
     @app.post("/api/clip-links")
     def save_clip_links():

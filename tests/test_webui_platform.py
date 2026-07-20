@@ -208,3 +208,26 @@ def test_coerce_accepts_valid_section():
 def test_coerce_rejects_unknown_section():
     with pytest.raises(ValueError):
         coerce_overrides({"section": "chill"})
+
+
+def test_serve_catalog_asset_for_preview(client, tmp_path):
+    client.post("/api/clips", data={"file": (io.BytesIO(b"fake video"), "extrait.mp4")},
+                content_type="multipart/form-data")
+    client.post("/api/tracks", data={"file": (io.BytesIO(b"fake audio"), "son.mp3")},
+                content_type="multipart/form-data")
+
+    # aperçu : le fichier est servi tel quel, avec un type MIME média
+    r = client.get("/api/clips/extrait.mp4")
+    assert r.status_code == 200
+    assert r.data == b"fake video"
+    assert r.headers["Content-Type"].startswith("video/")
+
+    r = client.get("/api/tracks/son.mp3")
+    assert r.status_code == 200
+    assert r.data == b"fake audio"
+    assert r.headers["Content-Type"].startswith("audio/")
+
+    # absent -> 404 ; format non supporté -> 400 ; traversée de chemin -> 404
+    assert client.get("/api/clips/absent.mp4").status_code == 404
+    assert client.get("/api/tracks/notes.txt").status_code == 400
+    assert client.get("/api/clips/..%2f..%2fsecret.mp4").status_code == 404
