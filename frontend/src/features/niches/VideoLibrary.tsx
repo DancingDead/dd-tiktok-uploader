@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { toast } from "sonner"
 import { Check, Clapperboard, Download, Trash2, X } from "lucide-react"
 
@@ -41,13 +42,20 @@ export function VideoLibrary({
   videos: Video[]
   refresh: () => Promise<void>
 }) {
+  // Une action à la fois par vidéo : sans ça, un double-clic sur Valider/Rejeter/
+  // Supprimer envoyait deux requêtes.
+  const [busyId, setBusyId] = useState<number | null>(null)
+
   const setStatus = async (id: number, status: Video["status"], msg: string) => {
+    setBusyId(id)
     try {
       await api.setVideoStatus(id, status)
       await refresh()
       toast.success(msg)
     } catch (e) {
       toast.error((e as Error).message)
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -56,12 +64,15 @@ export function VideoLibrary({
       description: "Supprimer définitivement cette vidéo ? Le fichier sera effacé du disque.",
     })
     if (!ok) return
+    setBusyId(id)
     try {
       await api.deleteVideo(id)
       await refresh()
       toast.success("vidéo supprimée")
     } catch (e) {
       toast.error((e as Error).message)
+    } finally {
+      setBusyId(null)
     }
   }
 
@@ -86,13 +97,15 @@ export function VideoLibrary({
     >
       {[...videos].reverse().map((v) => {
         const preview = linesPreview(v.subtitles?.lines)
+        const busy = busyId === v.id
         return (
           <div key={v.id} className="flex flex-col gap-2 rounded-lg border bg-card p-2">
             {v.exists ? (
               <video
                 src={api.videoUrl(v.id)}
+                poster={api.posterUrl(v.id)}
                 controls
-                preload="metadata"
+                preload="none"
                 className="w-full rounded bg-black"
                 style={{ aspectRatio: "9/16" }}
               />
@@ -124,6 +137,7 @@ export function VideoLibrary({
                   size="sm"
                   variant="secondary"
                   className="flex-1"
+                  disabled={busy}
                   onClick={() => setStatus(v.id, "approved", "vidéo validée")}
                 >
                   <Check /> Valider
@@ -143,6 +157,7 @@ export function VideoLibrary({
                 <Button
                   size="sm"
                   variant="outline"
+                  disabled={busy}
                   onClick={() => setStatus(v.id, "rejected", "vidéo rejetée")}
                 >
                   <X /> Rejeter
@@ -150,6 +165,7 @@ export function VideoLibrary({
                 <IconButton
                   tip="Supprimer définitivement"
                   className="ml-auto text-destructive/80 hover:text-destructive"
+                  disabled={busy}
                   onClick={() => remove(v.id)}
                 >
                   <Trash2 />

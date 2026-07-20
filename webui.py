@@ -409,6 +409,36 @@ def create_app(root: Path | None = None):
                          as_attachment=request.args.get("dl") == "1",
                          download_name=path.name)
 
+    @app.get("/api/videos/<int:video_id>/poster")
+    def serve_video_poster(video_id):
+        """Vignette (frame 0) de la vidéo, pour éviter le rectangle gris de la
+        bibliothèque. Extraite via ffmpeg à la première demande puis mise en
+        cache (invalidée si la vidéo est plus récente)."""
+        from flask import send_file
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT file FROM videos WHERE id = ?", (video_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return jsonify({"error": "vidéo inconnue"}), 404
+        video = (paths["data"].parent / row["file"]).resolve()
+        if not video.is_file() or paths["data"].resolve() not in video.parents:
+            return jsonify({"error": "fichier introuvable"}), 404
+        cache = paths["data"] / "cache" / "posters"
+        cache.mkdir(parents=True, exist_ok=True)
+        poster = cache / f"{video_id}.jpg"
+        if not poster.is_file() or poster.stat().st_mtime < video.stat().st_mtime:
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-loglevel", "error", "-i", str(video),
+                     "-frames:v", "1", "-q:v", "4", str(poster)],
+                    check=True, capture_output=True,
+                )
+            except Exception:
+                return jsonify({"error": "poster indisponible"}), 404
+        return send_file(poster, mimetype="image/jpeg")
+
     @app.delete("/api/videos/<int:video_id>")
     def delete_video_ep(video_id):
         conn = get_conn()

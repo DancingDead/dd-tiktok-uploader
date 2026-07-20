@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { toast } from "sonner"
 import { Plus } from "lucide-react"
 
@@ -14,8 +14,27 @@ export function NichesTab({
   state: AppState
   refresh: () => Promise<void>
 }) {
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // Niche sélectionnée reflétée dans l'URL (#niche/<id>) : lien partageable et
+  // sélection qui survit au rechargement (avant : state local pur, perdu au F5).
+  const nicheFromHash = () => {
+    const m = window.location.hash.match(/^#niche\/(\d+)$/)
+    return m ? Number(m[1]) : null
+  }
+  const [selectedId, setSelectedId] = useState<number | null>(nicheFromHash)
   const selected = state.niches.find((n) => n.id === selectedId) ?? null
+
+  useEffect(() => {
+    const target = selectedId === null ? "" : `#niche/${selectedId}`
+    if (window.location.hash !== target) {
+      history.replaceState(null, "", target || window.location.pathname + window.location.search)
+    }
+  }, [selectedId])
+
+  useEffect(() => {
+    const onHash = () => setSelectedId(nicheFromHash())
+    window.addEventListener("hashchange", onHash)
+    return () => window.removeEventListener("hashchange", onHash)
+  }, [])
 
   const create = async () => {
     const name = await promptText({ title: "Nouvelle niche", placeholder: "ex. Naruto Édits" })
@@ -34,7 +53,7 @@ export function NichesTab({
     <div className="space-y-6">
       <PageHeader
         title="Niches"
-        subtitle="Chaque niche est un univers de contenu : sa banque de clips, ses presets de montage, sa cadence."
+        subtitle="Chaque niche est un univers de contenu : ses sons, sa banque de clips et ses presets de montage."
       />
 
       <div
@@ -58,7 +77,7 @@ export function NichesTab({
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span>{n.clips.length} clips</span>
                 <span>{n.preset_ids.length} preset(s)</span>
-                <span>{n.cadence}/j</span>
+                <span>{n.cadence} par lot</span>
               </div>
             </button>
           )
