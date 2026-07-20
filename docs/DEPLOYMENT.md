@@ -106,40 +106,6 @@ schtasks /Create /TN "DD-LMStudio" /SC ONLOGON ^
 **c) Tailscale** : au premier lancement, `tailscale up` (connexion au compte). Cocher
 « Run at startup » dans l'app. Récupérer l'IP/nom Tailscale de la tour.
 
-### 5 bis. Démarrage sans intervention (auto-login + reboots Windows Update)
-
-But : **appuyer sur le bouton d'alimentation le matin et ne rien faire d'autre.**
-
-Piège important : l'usine ne tourne **pas** en « session 0 » sans login. LM Studio a
-besoin d'une **session interactive ouverte** (GPU) et les tâches `DD-Usine` /
-`DD-LMStudio` sont déclenchées **`ONLOGON`**. Ce qui permet de « ne pas se logger »,
-c'est la **connexion automatique** qui ouvre la session au boot et déclenche tout.
-
-Symptôme vécu : ça marche au démarrage du matin (cold boot → auto-login), puis la
-connexion tombe en pleine journée → c'est un **redémarrage automatique de Windows
-Update** qui est retombé sur l'écran de login **sans rejouer l'auto-login**. Résultat :
-tour allumée mais Flask, LM Studio **et** l'accès Tailscale de l'équipe sont éteints.
-
-Correctif (une fois, PowerShell **admin** sur la tour) :
-
-```powershell
-powershell -ExecutionPolicy Bypass -File deploy\harden-boot.ps1
-```
-
-Le script fait trois choses :
-
-1. **Auto-login blindé** via Sysinternals Autologon (mot de passe chiffré dans la LSA,
-   contrairement à la case `netplwiz` qui se décoche après certaines MàJ).
-2. **Reprise de session automatique après une MàJ** (ARSO) : même un reboot Windows
-   Update rouvre la session seul → les tâches `ONLOGON` relancent Flask + LM Studio.
-3. **Pas de redémarrage surprise en journée** tant qu'une session est ouverte
-   (`NoAutoRebootWithLoggedOnUsers`). ⚠️ Sur Windows **Home**, cette stratégie peut
-   être ignorée → régler en plus des **heures d'activité** larges (fenêtre de 18 h).
-
-Avec 1 + 2, même un reboot en journée **se relogge seul** et tout remonte en 1-2 min.
-Après exécution, faire un **reboot de test** : la session doit se rouvrir et l'usine
-répondre sur `http://localhost:8765` sans aucune action.
-
 ## 6. Accès équipe
 
 Chaque membre installe **Tailscale**, rejoint le même réseau (ton compte / tailnet),
