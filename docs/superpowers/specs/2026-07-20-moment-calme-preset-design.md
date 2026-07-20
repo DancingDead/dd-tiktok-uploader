@@ -48,11 +48,13 @@ miroir de `find_drop` :
 - Fenêtre glissante de longueur `W = round(duration / dt)` beats de grille ; pour chaque
   début candidat `i`, énergie moyenne de la fenêtre via somme cumulée :
   `mean[i] = (csum[i+W] - csum[i]) / W`.
-- **Garde anti-silence** : soit `amplitude = energy.max() - energy.min()` et
-  `floor = energy.min() + 0.15 * amplitude`. On restreint le choix aux fenêtres dont la
-  moyenne est `>= floor` (exclut les intros/fades quasi muets). Si **aucune** fenêtre ne
-  passe le plancher (morceau globalement très faible), on retombe sur l'ensemble des
-  fenêtres (pas de plancher) pour garantir un résultat.
+- **Garde anti-silence** : on écarte les fenêtres qui **contiennent** du silence plutôt que
+  celles dont la *moyenne* est basse (un plancher sur la moyenne exclurait à tort la vraie
+  vallée calme, qui est le minimum, et ferait choisir la fenêtre au bord du silence). Seuil
+  de silence `silence = 0.05 * energy.max()` ; une fenêtre est retenue si son **minimum**
+  d'énergie est `>= silence` (donc entièrement « musicale », sans intro/fade muet). Si
+  **aucune** fenêtre ne passe (morceau très faible partout), on retombe sur toutes les
+  fenêtres pour garantir un résultat.
 - Choix = fenêtre à **moyenne minimale** parmi les candidates (`argmin` → première en cas
   d'égalité : déterministe).
 - Retourne le **début** de la fenêtre calé sur le beat le plus proche (comme `find_drop`).
