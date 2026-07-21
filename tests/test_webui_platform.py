@@ -235,3 +235,18 @@ def test_serve_catalog_asset_for_preview(client, tmp_path):
 
 def test_video_poster_unknown_returns_404(client):
     assert client.get("/api/videos/99999/poster").status_code == 404
+
+
+def test_coerce_clamps_out_of_range_numbers():
+    c = coerce_overrides({"min_presence": 50, "cut_every": 0, "clip_speed": 9, "buildup": -5})
+    assert c["min_presence"] == 1.0
+    assert c["cut_every"] == 1
+    assert c["clip_speed"] == 1.5
+    assert c["buildup"] == 0.0
+
+
+def test_create_preset_duplicate_name_conflicts(client):
+    assert client.post("/api/presets", json={"name": "strobo", "overrides": {}}).status_code == 200
+    r = client.post("/api/presets", json={"name": "strobo", "overrides": {}})
+    assert r.status_code == 409
+    assert "existe déjà" in r.get_json()["error"]

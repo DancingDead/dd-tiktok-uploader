@@ -31,6 +31,17 @@ EDITABLE_SETTINGS = [
 # Clés d'overrides de preset qui doivent être numériques (défense XSS : jamais de HTML stocké)
 NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
                          "grain", "clip_speed")
+# Plages valides : au-delà, le rendu casse en silence (min_presence trop haut =
+# plus aucun clip retenu → montage vide). On borne à la source, pour tous les
+# clients (UI + API), plutôt que de compter sur des bornes UI.
+OVERRIDE_RANGES = {
+    "min_presence": (0.0, 1.0),
+    "cut_every": (1, 16),
+    "buildup": (0.0, 30.0),
+    "strobe_beats": (0, 64),
+    "grain": (0.0, 1.0),
+    "clip_speed": (0.5, 1.5),
+}
 ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
 # Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
 ASSET_MIMETYPES = {
@@ -46,8 +57,11 @@ def coerce_overrides(overrides: dict) -> dict:
     et valide color_grade. ValueError/TypeError si non convertible/inconnu."""
     coerced = dict(overrides)
     for key in NUMERIC_OVERRIDE_KEYS:
-        if key in coerced and not isinstance(coerced[key], (int, float)):
-            coerced[key] = float(coerced[key])
+        if key in coerced:
+            if not isinstance(coerced[key], (int, float)):
+                coerced[key] = float(coerced[key])
+            lo, hi = OVERRIDE_RANGES[key]
+            coerced[key] = max(lo, min(hi, coerced[key]))
     if "color_grade" in coerced and coerced["color_grade"] not in ALLOWED_COLOR_GRADES:
         raise ValueError(f"color_grade inconnu : {coerced['color_grade']!r}")
     if "section" in coerced and coerced["section"] not in ALLOWED_SECTIONS:
@@ -529,6 +543,8 @@ def create_app(root: Path | None = None):
         try:
             pid = dbmod.create_preset(conn, data["name"],
                                       coerce_overrides(data.get("overrides", {})))
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "ce nom de preset existe déjà"}), 409
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
         finally:
@@ -542,6 +558,8 @@ def create_app(root: Path | None = None):
         try:
             dbmod.update_preset(conn, preset_id, data["name"],
                                 coerce_overrides(data.get("overrides", {})))
+        except sqlite3.IntegrityError:
+            return jsonify({"error": "ce nom de preset existe déjà"}), 409
         except (KeyError, TypeError, ValueError) as exc:
             return jsonify({"error": f"données invalides : {exc}"}), 400
         finally:

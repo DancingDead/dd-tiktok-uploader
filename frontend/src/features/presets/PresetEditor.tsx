@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { api, type Overrides, type Preset } from "@/lib/api"
 import { toast } from "sonner"
 import { confirm } from "@/components/confirm"
@@ -40,6 +40,7 @@ const TRACK_SECTIONS = [
 type Props = {
   preset: Preset | null
   template?: Overrides // pré-remplissage à la création (modèles Doux/Énergique)
+  existingNames: string[] // noms déjà pris (pour nommer un doublon unique)
   onSaved: (id: number) => void
   onDeleted: () => void
   refresh: () => Promise<void>
@@ -72,6 +73,7 @@ function NumberField({
   step,
   min,
   max,
+  disabled,
 }: {
   id: string
   label: string
@@ -80,7 +82,16 @@ function NumberField({
   step?: number
   min?: number
   max?: number
+  disabled?: boolean
 }) {
+  // Clamp à la sortie du champ (pas à chaque frappe, sinon on ne peut plus taper
+  // un décimal) : min/max HTML ne bornent pas la saisie clavier.
+  const clamp = () => {
+    let v = value
+    if (typeof min === "number") v = Math.max(min, v)
+    if (typeof max === "number") v = Math.min(max, v)
+    if (v !== value) onChange(v)
+  }
   return (
     <div className="grid gap-1.5">
       <Label htmlFor={id}>{label}</Label>
@@ -92,13 +103,15 @@ function NumberField({
         min={min}
         max={max}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+        onBlur={clamp}
       />
     </div>
   )
 }
 
-export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: Props) {
+export function PresetEditor({ preset, template, existingNames, onSaved, onDeleted, refresh }: Props) {
   const o = preset?.overrides ?? template ?? {}
   const [name, setName] = useState(preset?.name ?? "")
   const [zoom, setZoom] = useState(o.effects?.zoom ?? false)
@@ -129,41 +142,78 @@ export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: 
 
   const isNew = preset === null
 
+  const buildOverrides = (): Overrides => ({
+    effects: { zoom, flash, shake, speed },
+    accents: { rgb, glitch },
+    delogo,
+    chrono,
+    min_presence: minPresence,
+    cut_mode: cutMode,
+    section,
+    cut_every: cutEvery,
+    buildup,
+    strobe_beats: strobeBeats,
+    color_grade: colorGrade,
+    grain,
+    clip_speed: clipSpeed,
+    subtitles: { font },
+  })
+
+  // Modifications non enregistrées : snapshot pris au montage (l'éditeur est
+  // remonté à chaque changement de preset, cf. key= côté PresetsTab), comparé
+  // à l'état courant. Sans repère, changer de preset perdait la saisie en silence.
+  const snapshot = JSON.stringify({ name: name.trim(), o: buildOverrides() })
+  const snapshotRef = useRef(snapshot)
+  const dirty = snapshot !== snapshotRef.current
+
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ""
+    }
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [dirty])
+
   async function save() {
     if (!name.trim()) {
       toast.error("nom requis")
       return
     }
-    const overrides: Overrides = {
-      effects: { zoom, flash, shake, speed },
-      accents: { rgb, glitch },
-      delogo,
-      chrono,
-      min_presence: minPresence,
-      cut_mode: cutMode,
-      section,
-      cut_every: cutEvery,
-      buildup,
-      strobe_beats: strobeBeats,
-      color_grade: colorGrade,
-      grain,
-      clip_speed: clipSpeed,
-      subtitles: { font },
-    }
     setBusy(true)
     try {
       if (isNew) {
-        const { id } = await api.createPreset(name.trim(), overrides)
+        const { id } = await api.createPreset(name.trim(), buildOverrides())
         await refresh()
         toast.success("enregistré")
         onSaved(id)
       } else {
-        await api.updatePreset(preset.id, name.trim(), overrides)
+        await api.updatePreset(preset.id, name.trim(), buildOverrides())
         await refresh()
         toast.success("enregistré")
       }
-    } catch {
-      toast.error("échec de l'enregistrement")
+    } catch (e) {
+      // Remonte le message du serveur (ex. « ce nom de preset existe déjà »).
+      toast.error((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function duplicate() {
+    if (isNew) return
+    const base = `${preset.name} copie`
+    let unique = base
+    for (let n = 2; existingNames.includes(unique); n++) unique = `${base} ${n}`
+    setBusy(true)
+    try {
+      const { id } = await api.createPreset(unique, preset.overrides)
+      await refresh()
+      toast.success(`dupliqué en « ${unique} »`)
+      onSaved(id)
+    } catch (e) {
+      toast.error((e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -354,30 +404,46 @@ export function PresetEditor({ preset, template, onSaved, onDeleted, refresh }: 
             value={cutEvery}
             onChange={setCutEvery}
             min={1}
+            max={16}
+            disabled={cutMode !== "fixed"}
           />
           <NumberField
             id="buildup"
             label="Buildup … s"
             value={buildup}
             onChange={setBuildup}
+            min={0}
+            max={30}
+            disabled={section !== "drop"}
           />
           <NumberField
             id="strobe-beats"
             label="Strobo après drop … beats"
             value={strobeBeats}
             onChange={setStrobeBeats}
+            min={0}
+            max={64}
+            disabled={section !== "drop"}
           />
         </CardContent>
       </Card>
 
-      <div className="flex items-center gap-2">
-        <Button onClick={save} disabled={busy}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={save} disabled={busy || (!isNew && !dirty)}>
           {isNew ? "Créer le preset" : "Enregistrer"}
         </Button>
+        {!isNew && (
+          <Button variant="secondary" onClick={duplicate} disabled={busy}>
+            Dupliquer
+          </Button>
+        )}
         {!isNew && (
           <Button variant="destructive" onClick={remove} disabled={busy}>
             Supprimer
           </Button>
+        )}
+        {dirty && (
+          <span className="text-xs text-muted-foreground">modifications non enregistrées</span>
         )}
       </div>
     </div>
