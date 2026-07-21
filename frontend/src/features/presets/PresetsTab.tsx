@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Plus } from "lucide-react"
 import type { AppState, Overrides } from "@/lib/api"
 import { PageHeader } from "@/components/PageHeader"
@@ -55,10 +55,31 @@ const TEMPLATE_BUTTONS: { key: keyof typeof PRESET_TEMPLATES; label: string }[] 
 type Props = { state: AppState; refresh: () => Promise<void> }
 
 export function PresetsTab({ state, refresh }: Props) {
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [template, setTemplate] = useState<Overrides | undefined>()
   const presets = state.presets
+  // Sélection reflétée dans l'URL (#preset/<id>) : partageable + conservée au
+  // reload. À défaut de hash, on ouvre le 1er preset plutôt qu'un formulaire vide.
+  const presetFromHash = () => {
+    const m = window.location.hash.match(/^#preset\/(\d+)$/)
+    return m ? Number(m[1]) : null
+  }
+  const [selectedId, setSelectedId] = useState<number | null>(
+    () => presetFromHash() ?? presets[0]?.id ?? null,
+  )
+  const [template, setTemplate] = useState<Overrides | undefined>()
   const selected = presets.find((p) => p.id === selectedId) ?? null
+
+  useEffect(() => {
+    const target = selectedId === null ? "" : `#preset/${selectedId}`
+    if (window.location.hash !== target) {
+      history.replaceState(null, "", target || window.location.pathname + window.location.search)
+    }
+  }, [selectedId])
+
+  useEffect(() => {
+    const onHash = () => setSelectedId(presetFromHash())
+    window.addEventListener("hashchange", onHash)
+    return () => window.removeEventListener("hashchange", onHash)
+  }, [])
 
   return (
     <>
@@ -69,7 +90,9 @@ export function PresetsTab({ state, refresh }: Props) {
       <div className="flex gap-6">
         <div className="flex w-[180px] min-w-[180px] flex-col gap-2">
           {presets.length === 0 && (
-            <p className="text-sm text-muted-foreground">aucun preset</p>
+            <p className="text-sm text-muted-foreground">
+              aucun preset — crée-en un avec « Nouveau » ou pars d'un modèle ci-dessous.
+            </p>
           )}
           {presets.map((p) => {
             const active = p.id === selectedId
@@ -117,6 +140,7 @@ export function PresetsTab({ state, refresh }: Props) {
           key={selectedId ?? (template ? JSON.stringify(template) : "new")}
           preset={selected}
           template={template}
+          existingNames={presets.map((p) => p.name)}
           onSaved={(id) => {
             setTemplate(undefined)
             setSelectedId(id)

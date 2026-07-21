@@ -81,8 +81,15 @@ function Brand() {
   )
 }
 
+// L'onglet est déduit du hash au montage (#preset/… → Presets, #niche/… →
+// Niches), pour que les deep-links survivent au rechargement.
+function tabFromHash(): TabKey {
+  if (window.location.hash.startsWith("#preset")) return "presets"
+  return "niches"
+}
+
 function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
-  const [tab, setTab] = useState<TabKey>("niches")
+  const [tab, setTab] = useState<TabKey>(tabFromHash)
 
   const logout = async () => {
     await api.logout()
@@ -121,7 +128,13 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
         {TABS.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
-            onClick={() => setTab(key)}
+            onClick={() => {
+              setTab(key)
+              // Un changement d'onglet manuel abandonne l'item deep-linké.
+              if (window.location.hash) {
+                history.replaceState(null, "", window.location.pathname + window.location.search)
+              }
+            }}
             className={cn(
               "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors",
               tab === key
