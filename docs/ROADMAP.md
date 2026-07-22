@@ -31,13 +31,11 @@ les bons couloirs ». La roadmap suit cette bascule.
 
 ### P0 — Leviers validés, effort faible (prochain lot)
 
-**P0.1 — Variantes audio sped-up (± nightcore/slowed)**
-- *Pourquoi :* ~80 % du top 100 des sons TikTok sont tempo-altérés ; un sped-up a triplé les
-  streams d'un original en 1 mois. Le hardstyle (BPM élevé) est le genre idéal. `confiance haute`
-- *Quoi :* par montage, produire une version accélérée (ffmpeg `atempo` sur l'audio, la vidéo
-  suit) ; option de preset. Réutilise le pipeline de rendu existant.
-- *Critères d'acceptation :* un lot peut générer, pour un même son, la version normale **et**
-  sped-up ; le facteur de vitesse est réglable dans le preset ; reproductibilité préservée.
+**P0.1 — Variantes audio sped-up — ÉCARTÉ (décision 2026-07-22)**
+- Le levier sped-up sert à « TikTok-ifier » des genres **lents** (pop/R&B ~120 BPM). Le
+  catalogue DD est déjà à **150-160+ BPM** (hardstyle / hard techno) → accélérer davantage
+  est inutilisable, et l'intérêt (version distincte native TikTok) ne se transpose pas.
+  Constat marché global non applicable à cette niche. **Non retenu.**
 
 **P0.2 — « Hook-first » (accroche dans la 1re seconde)**
 - *Pourquoi :* un micro-moment / hook 1-2 s surperforme un extrait long ; le scroll se gagne
