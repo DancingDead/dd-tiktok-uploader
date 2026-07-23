@@ -56,6 +56,7 @@ export function AssetSection({
   const fileRef = useRef<HTMLInputElement>(null)
   const [newLink, setNewLink] = useState("")
   const [jobId, setJobId] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
   const links = parseLinks(linksText)
 
   const guard = async (fn: () => Promise<unknown>, ok: string) => {
@@ -68,11 +69,18 @@ export function AssetSection({
     }
   }
 
-  const upload = async () => {
-    const file = fileRef.current?.files?.[0]
-    if (!file) return toast.error("choisis un fichier")
-    await guard(() => onUpload(file), "uploadé")
-    if (fileRef.current) fileRef.current.value = ""
+  // Un seul contrôle : le bouton ouvre l'explorateur (l'input reste caché) et la
+  // sélection déclenche l'envoi. Deux contrôles côte à côte faisaient cliquer le
+  // bouton en premier, sans effet visible (le toast d'erreur est à l'opposé de l'écran).
+  const upload = async (file: File) => {
+    setUploading(true)
+    try {
+      await guard(() => onUpload(file), "uploadé")
+    } finally {
+      setUploading(false)
+      // Remis à zéro pour que re-choisir LE MÊME fichier redéclenche « change ».
+      if (fileRef.current) fileRef.current.value = ""
+    }
   }
 
   const addLink = async () => {
@@ -114,9 +122,18 @@ export function AssetSection({
     <div className="space-y-6">
       {/* Upload direct */}
       <div className="flex flex-wrap items-center gap-3">
-        <Input ref={fileRef} type="file" accept={accept} className="max-w-xs" />
-        <Button onClick={upload}>
-          <Upload /> Uploader un fichier
+        <input
+          ref={fileRef}
+          type="file"
+          accept={accept}
+          className="hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0]
+            if (file) upload(file)
+          }}
+        />
+        <Button onClick={() => fileRef.current?.click()} disabled={uploading}>
+          <Upload /> {uploading ? "Envoi…" : "Uploader un fichier"}
         </Button>
       </div>
 
