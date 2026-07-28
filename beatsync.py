@@ -292,6 +292,65 @@ def usable_intervals(classification: dict, duration: float, sample_dt: float,
     return intervals
 
 
+# Scène de fin : on ne cherche le climax que dans la queue du clip — en mode
+# chrono, la fin de la timeline correspond à la fin de l'histoire.
+FINAL_SCENE_TAIL = 1 / 3
+# Poids du score : le duel prime (deux personnages face à face = l'affrontement),
+# la présence et le mouvement départagent.
+FINAL_SCENE_WEIGHTS = {"dual": 1.0, "presence": 0.6, "motion": 0.6}
+
+
+def interval_dual_ratio(clip: dict, interval: dict) -> float:
+    """Fraction d'échantillons « duel » (deux personnages face à face) sur une
+    plage. `clip["dual"]` est un tableau par échantillon, pas un agrégat par
+    plage : on le découpe sur scan_dt, comme le fait le cadrage. 0.0 si le clip
+    n'a pas été scanné."""
+    dual = clip.get("dual")
+    if dual is None or not len(dual):
+        return 0.0
+    dt = clip.get("scan_dt") or (1.0 / SCAN_FPS)
+    window = np.asarray(dual, dtype=bool)[int(interval["start"] / dt):
+                                          math.ceil(interval["end"] / dt)]
+    return float(window.mean()) if len(window) else 0.0
+
+
+def find_final_scene(clips: list[dict]) -> dict | None:
+    """Plage la plus « badass » de la queue des clips : le climax de l'histoire.
+    Retourne {"clip", "interval"} ou None si rien d'exploitable — l'usine ne
+    casse pas sur un catalogue non scanné, elle se termine normalement.
+
+    Pure et sans RNG : à catalogue égal la scène est la même, donc la
+    reproductibilité ne dépend pas du tirage seedé."""
+    candidates: list[tuple[dict, dict, float, float]] = []
+    for clip in clips:
+        if clip.get("kind") == "image" or not clip.get("duration"):
+            continue
+        tail_start = clip["duration"] * (1.0 - FINAL_SCENE_TAIL)
+        for interval in clip.get("intervals", []):
+            if interval["start"] < tail_start:
+                continue
+            candidates.append((clip, interval, interval_dual_ratio(clip, interval),
+                               float(interval.get("motion", 0.0))))
+    if not candidates:
+        return None
+
+    # Le mouvement n'est pas borné a priori : on le normalise sur les candidats
+    # pour qu'un clip très agité n'écrase pas le critère de présence.
+    max_motion = max(motion for _, _, _, motion in candidates) or 1.0
+    weights = FINAL_SCENE_WEIGHTS
+
+    def score(clip, interval, dual, motion) -> float:
+        return (weights["dual"] * dual
+                + weights["presence"] * float(interval.get("presence", 1.0))
+                + weights["motion"] * (motion / max_motion))
+
+    # Départage déterministe : meilleur score, puis nom de clip, puis plage la
+    # plus tardive.
+    best = min(candidates,
+               key=lambda c: (-score(*c), str(c[0]["path"].name), -c[1]["start"]))
+    return {"clip": best[0], "interval": best[1]}
+
+
 SCAN_FPS = 2.0
 SCAN_W, SCAN_H = 640, 360        # résolution de détection (visages + contours)
 SMALL_W, SMALL_H = 32, 18        # résolution des heuristiques couleur/mouvement
