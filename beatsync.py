@@ -55,6 +55,11 @@ DEFAULT_CONFIG = {
     },
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
+        "mode": "llm",                  # "llm" = punchlines générées | "fixe" = texte écrit à la main
+        "text": "",                     # mode fixe : caption unique, du début à la fin
+        "x": 0.5,                       # ancrage horizontal, fraction de largeur (texte centré dessus)
+        "y": 0.74,                      # ancrage vertical, fraction de hauteur
+        "size": 64,                     # taille de police, px
         "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
         "min_dur": 1.4,                 # durée min. d'affichage d'une punchline (lisibilité)
         "model": "claude-opus-4-8",     # modèle de génération
@@ -785,6 +790,10 @@ def _drawtext_escape(text: str) -> str:
     out = text.replace("\\", "\\\\")
     for ch in (":", "'", "%", ",", ";", "[", "]"):
         out = out.replace(ch, "\\" + ch)
+    # Un retour à la ligne réel casse le parseur de filtergraph ; drawtext
+    # interprète la séquence \n comme un saut de ligne. Fait en dernier : le
+    # doublement des antislashs ci-dessus ne doit pas s'y appliquer.
+    out = out.replace("\r\n", "\n").replace("\n", "\\n")
     return out
 
 
@@ -973,6 +982,12 @@ def apply_subtitles(edl: list[dict], config: dict, seed: int,
     si la génération échoue (rendu sans sous-titres, jamais de plantage)."""
     sub = config.get("subtitles") or {}
     if not sub.get("enabled"):
+        return edl
+    if sub.get("mode") == "fixe":
+        # Caption unique écrite à la main : ni créneaux, ni LLM, ni cache.
+        text = sub.get("text", "")
+        for entry in edl:
+            entry["caption"] = text
         return edl
     n = assign_caption_slots(edl, float(sub.get("min_dur", 1.4)))
     lines = generate_punchlines(sub.get("preprompt", ""), n, seed, cache_dir,

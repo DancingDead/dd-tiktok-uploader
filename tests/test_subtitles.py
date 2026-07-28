@@ -235,3 +235,64 @@ def test_segment_filters_uses_configured_font():
     config = dict(DEFAULT, subtitles={**DEFAULT["subtitles"], "font": "douce"})
     vf = " ".join(_segment_filters(entry, config))
     assert "Baloo2-Bold.ttf" in vf
+
+
+# --- Mode texte fixe --------------------------------------------------------
+
+
+def fixed_config(**subs):
+    return {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                     "enabled": True, "mode": "fixe", **subs}}
+
+
+def test_fixed_mode_puts_the_same_caption_on_every_segment():
+    edl = make_edl([0.0, 0.4, 0.8, 1.2, 1.6])
+    out = apply_subtitles(edl, fixed_config(text="LIEN EN BIO"), seed=1)
+    assert [e["caption"] for e in out] == ["LIEN EN BIO"] * 5
+
+
+def test_fixed_mode_never_calls_the_llm(monkeypatch):
+    """L'usine ne doit pas dépendre du LLM quand le texte est écrit à la main.
+    On compte les appels plutôt que de lever : generate_punchlines rattrape
+    Exception (dégradation en []), une AssertionError y serait avalée."""
+    calls = []
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model: (calls.append(1) or ["X"] * n))
+    edl = make_edl([0.0, 0.4, 0.8])
+    out = apply_subtitles(edl, fixed_config(text="DANCING DEAD"), seed=1)
+    assert calls == []
+    assert all(e["caption"] == "DANCING DEAD" for e in out)
+
+
+def test_fixed_mode_disabled_leaves_the_edl_alone():
+    edl = make_edl([0.0, 0.4])
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "enabled": False, "mode": "fixe", "text": "X"}}
+    out = apply_subtitles(edl, config, seed=1)
+    assert all("caption" not in e for e in out)
+
+
+def test_unknown_mode_degrades_to_llm(monkeypatch):
+    """Dégradation sûre : une valeur inattendue ne fait pas planter la génération."""
+    monkeypatch.setattr(beatsync, "_call_llm", lambda *a, **k: ["A", "B", "C", "D"])
+    edl = make_edl([0.0, 0.4, 1.8, 3.4])
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "enabled": True, "mode": "n'importe quoi",
+                                       "preprompt": "test"}}
+    out = apply_subtitles(edl, config, seed=1)
+    assert all(e["caption"] for e in out)
+
+
+# --- Échappement drawtext ---------------------------------------------------
+
+
+def test_drawtext_escape_handles_newlines():
+    """Un retour à la ligne réel casserait le parseur de filtergraph ; drawtext
+    attend la séquence à deux caractères."""
+    assert beatsync._drawtext_escape("HAUT\nBAS") == "HAUT\\nBAS"
+
+
+def test_drawtext_escape_handles_quotes_and_specials():
+    escaped = beatsync._drawtext_escape("c'est 100% : oui")
+    for ch in ("'", "%", ":"):
+        assert f"\\{ch}" in escaped
