@@ -637,11 +637,17 @@ def frame_extract(clip: dict, clip_in: float, source_needed: float,
     if not len(window_x):
         return 0.5, "crop"
     focus_x = float(np.clip(window_x.mean(), 0.0, 1.0))
+    # Les deux cadrages de secours dépendent du format de sortie. En 9:16 un
+    # duel empilé fonctionne ; en 1:1 chaque moitié deviendrait une bande 2:1,
+    # et le crop tient déjà les deux personnages.
+    out_ratio = float(config["width"]) / float(config["height"])
     dual = np.asarray(clip.get("dual", []), dtype=bool)[i0:i1]
-    if len(dual) and float(dual.mean()) >= 0.5:
-        return focus_x, "split"   # duel : deux moitiés empilées haut/bas
-    if float(window_x.std()) >= 0.18:
-        return focus_x, "blur"    # action sur toute la largeur : fond flouté
+    if len(dual) and float(dual.mean()) >= 0.5 and out_ratio <= 0.75:
+        return focus_x, "split"
+    # Fond flouté seulement si la source est vraiment plus large que la sortie :
+    # seuil 1,125 en vertical (tout 16:9 y a droit), 2,0 en carré (seul un scope).
+    if float(window_x.std()) >= 0.18 and clip.get("ratio", 1.0) >= 2.0 * out_ratio:
+        return focus_x, "blur"
     return focus_x, "crop"
 
 
@@ -871,7 +877,11 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                                  "pan_dir": rng.choice([1, -1])},
                     # Le scan n'a pas tourné : layout déduit du seul ratio.
                     "focus_x": 0.5,
-                    "layout": "blur" if clip["ratio"] >= 1.2 else "crop",
+                    # Même règle que les vidéos : le scan n'a pas tourné, mais le
+                    # rapport source/sortie décide pareil.
+                    "layout": ("blur"
+                               if clip["ratio"] >= 2.0 * (config["width"] / config["height"])
+                               else "crop"),
                     "clip_w": clip["width"],
                     "clip_h": clip["height"],
                 }
