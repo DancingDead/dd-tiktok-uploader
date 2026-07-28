@@ -1152,9 +1152,19 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     subs = config.get("subtitles", {})
     font = resolve_caption_font(subs.get("font", "impact"))
     if cap and font:
-        cap_x = max(0.0, min(1.0, float(subs.get("x", 0.5))))
-        cap_y = max(0.0, min(1.0, float(subs.get("y", 0.74))))
-        cap_size = max(8, int(subs.get("size", 64)))
+        # Dernière ligne de défense avant le rendu : une valeur absente, `None`
+        # ou non convertible (ex. formulaire vidé, JSON malformé) retombe sur
+        # le défaut au lieu de faire planter le rendu — même principe que
+        # generate_punchlines qui dégrade en `[]` plutôt que de bloquer l'usine.
+        def _coerce(value, cast, default):
+            try:
+                return cast(value)
+            except (TypeError, ValueError):
+                return default
+
+        cap_x = max(0.0, min(1.0, _coerce(subs.get("x", 0.5), float, 0.5)))
+        cap_y = max(0.0, min(1.0, _coerce(subs.get("y", 0.74), float, 0.74)))
+        cap_size = max(8, _coerce(subs.get("size", 64), int, 64))
         post.append(
             f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
             f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"

@@ -234,6 +234,26 @@ def test_no_caption_means_no_drawtext():
     assert "drawtext" not in " ".join(_segment_filters(entry, DEFAULT))
 
 
+def test_caption_placement_degrades_to_defaults_on_none_values():
+    """`None` (ex. champ de formulaire vidé) ne doit pas faire planter le
+    rendu : dégradation sur le défaut, comme generate_punchlines -> []."""
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "x": None, "y": None, "size": None}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
+    assert "y=h*0.7400-text_h/2" in joined
+
+
+def test_caption_placement_degrades_to_defaults_on_unparsable_strings():
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "x": "gauche", "y": "haut", "size": "96.5"}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
+    assert "y=h*0.7400-text_h/2" in joined
+
+
 # --- Polices embarquées ------------------------------------------------------
 
 
