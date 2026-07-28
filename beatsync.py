@@ -1016,7 +1016,15 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         pre += f"setpts=(PTS-STARTPTS)/{speed:.6f},"
 
     # --- Chaîne commune post-layout (opère sur du 1080x1920) ---
-    post = [f"fps={fps}"]
+    # Flux optique sur les ralentis : minterpolate invente les images manquantes
+    # entre les images réelles. Placé ici — donc APRÈS le setpts (dans `pre`) et
+    # APRÈS le scale/crop — il travaille sur du 1080x1920 déjà cadré plutôt que
+    # sur la source, et sert les trois layouts sans duplication. Coûteux (5 à 15x
+    # le temps d'encodage du segment) : réservé aux segments ralentis, désactivable.
+    if speed < 1.0 and (config.get("speed_ramp") or {}).get("interpolate"):
+        post = [f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"]
+    else:
+        post = [f"fps={fps}"]
     if "zoom" in effects:
         post.append(
             "zoompan=z='1+0.10*max(0,1-on/6)'"

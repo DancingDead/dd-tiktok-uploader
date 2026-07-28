@@ -120,3 +120,42 @@ def test_ramps_are_active_without_a_drop():
     config = {**DEFAULT_CONFIG, "start": 0.0, "end": DURATION, "drop_time": None}
     edl = build_edl(make_analysis(), make_clips(), config, seed=42)
     assert any(e["speed"] < 1.0 for e in edl)
+
+
+# --- Flux optique au rendu --------------------------------------------------
+
+from beatsync import _segment_filters  # noqa: E402
+
+
+def seg(speed):
+    return {"timeline_start": 0.0, "duration": 1.0, "clip_path": "/clips/a.mp4",
+            "clip_in": 0.0, "speed": speed, "effects": [], "layout": "crop",
+            "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080}
+
+
+def test_slowed_segment_gets_optical_flow_interpolation():
+    joined = " ".join(_segment_filters(seg(0.5), DEFAULT_CONFIG))
+    assert "minterpolate=fps=30:mi_mode=mci" in joined
+    # L'interpolation REMPLACE le fps= simple, elle ne s'y ajoute pas.
+    assert ",fps=30," not in joined
+
+
+def test_normal_and_fast_segments_keep_the_plain_fps_filter():
+    for speed in (1.0, 1.4):
+        joined = " ".join(_segment_filters(seg(speed), DEFAULT_CONFIG))
+        assert "minterpolate" not in joined
+        assert "fps=30" in joined
+
+
+def test_interpolation_can_be_disabled():
+    config = {**DEFAULT_CONFIG,
+              "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "interpolate": False}}
+    joined = " ".join(_segment_filters(seg(0.5), config))
+    assert "minterpolate" not in joined
+    assert "fps=30" in joined
+
+
+def test_interpolation_applies_to_every_layout():
+    for layout in ("crop", "split", "blur"):
+        entry = {**seg(0.5), "layout": layout}
+        assert "minterpolate" in " ".join(_segment_filters(entry, DEFAULT_CONFIG))
