@@ -272,6 +272,35 @@ def test_coerce_overrides_speed_ramp_without_interpolate_is_untouched():
     assert out["speed_ramp"] == {"slow": 0.5}
 
 
+def test_coerce_overrides_slow_beats_is_an_int():
+    out = coerce_overrides({"speed_ramp": {"slow_beats": "3"}})
+    assert out["speed_ramp"]["slow_beats"] == 3
+    assert isinstance(out["speed_ramp"]["slow_beats"], int)
+
+
+def test_coerce_overrides_clamps_slow_beats():
+    """Au-delà d'impact_beats (8 par défaut), la fusion avale toute la grille :
+    il ne resterait qu'une poignée de plans très longs."""
+    assert coerce_overrides({"speed_ramp": {"slow_beats": 99}})["speed_ramp"]["slow_beats"] == 8
+    assert coerce_overrides({"speed_ramp": {"slow_beats": 0}})["speed_ramp"]["slow_beats"] == 1
+
+
+def test_coerce_overrides_slow_beats_rejects_non_numeric():
+    with pytest.raises(ValueError):
+        coerce_overrides({"speed_ramp": {"slow_beats": "beaucoup"}})
+
+
+def test_coerce_overrides_slow_beats_boolean_does_not_pass_as_a_count():
+    """isinstance(True, int) vaut True en Python : sans garde, un booléen
+    passerait pour un nombre de beats valide."""
+    assert coerce_overrides({"speed_ramp": {"slow_beats": True}})["speed_ramp"]["slow_beats"] == 1
+
+
+def test_coerce_overrides_keeps_both_speed_ramp_keys():
+    out = coerce_overrides({"speed_ramp": {"interpolate": False, "slow_beats": 4}})
+    assert out["speed_ramp"] == {"interpolate": False, "slow_beats": 4}
+
+
 def test_coerce_overrides_leaves_end_scene_absent_alone():
     assert "end_scene" not in coerce_overrides({"grain": 0.2})
 

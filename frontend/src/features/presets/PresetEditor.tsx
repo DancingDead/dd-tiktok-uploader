@@ -142,6 +142,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const [grain, setGrain] = useState(o.grain ?? 0)
   const [clipSpeed, setClipSpeed] = useState(o.clip_speed ?? 1)
   const [interpolate, setInterpolate] = useState(o.speed_ramp?.interpolate ?? true)
+  const [slowBeats, setSlowBeats] = useState(o.speed_ramp?.slow_beats ?? 2)
   const glitchInit =
     typeof o.accents?.glitch === "number"
       ? o.accents.glitch
@@ -170,7 +171,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
     subtitles: { font },
     format,
     end_scene: { enabled: endScene, beats: endBeats, freeze: endFreeze, speed: endSpeed },
-    speed_ramp: { interpolate },
+    speed_ramp: { interpolate, slow_beats: slowBeats },
   })
 
   // Modifications non enregistrées : snapshot pris au montage (l'éditeur est
@@ -397,6 +398,21 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
             </label>
             <p className="text-xs text-muted-foreground">
               Désactiver accélère beaucoup la génération, au prix d'un ralenti moins fluide.
+            </p>
+          </div>
+          <div className="grid gap-1.5 sm:col-span-2">
+            <NumberField
+              id="slow-beats"
+              label="Longueur du ralenti (beats)"
+              value={slowBeats}
+              onChange={setSlowBeats}
+              step={1}
+              min={1}
+              max={8}
+            />
+            <p className="text-xs text-muted-foreground">
+              À 1, le ralenti dure une coupe. Plus haut, il s'étend en avalant les coupes
+              qui le précèdent — et coûte d'autant plus cher si les ralentis fluides sont actifs.
             </p>
           </div>
           <div className="grid gap-3 border-t pt-4">

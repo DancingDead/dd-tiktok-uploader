@@ -47,6 +47,9 @@ ALLOWED_FORMATS = ("vertical", "carre")
 # Bornes des champs de la scène de fin : au-delà, la scène avale la vidéo ou
 # le figé dépasse le segment.
 END_SCENE_RANGES = {"beats": (2, 32), "freeze": (0.0, 3.0), "speed": (0.5, 1.5)}
+# Longueur du segment ralenti, en beats. 1 = pas de fusion ; au-delà de
+# `impact_beats` (8 par défaut) la fusion avalerait toute la grille de coupe.
+SLOW_BEATS_RANGE = (1, 8)
 # Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
 ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
@@ -94,9 +97,18 @@ def coerce_overrides(overrides: dict) -> dict:
             end_scene["beats"] = int(end_scene["beats"])
         coerced["end_scene"] = end_scene
     speed_ramp = coerced.get("speed_ramp")
-    if isinstance(speed_ramp, dict) and "interpolate" in speed_ramp:
+    if isinstance(speed_ramp, dict):
         speed_ramp = dict(speed_ramp)
-        speed_ramp["interpolate"] = bool(speed_ramp["interpolate"])
+        if "interpolate" in speed_ramp:
+            speed_ramp["interpolate"] = bool(speed_ramp["interpolate"])
+        if "slow_beats" in speed_ramp:
+            value = speed_ramp["slow_beats"]
+            # isinstance(True, int) vaut True : sans cette garde, un booléen
+            # passerait pour un nombre de beats valide.
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                value = float(value)
+            lo, hi = SLOW_BEATS_RANGE
+            speed_ramp["slow_beats"] = int(max(lo, min(hi, value)))
         coerced["speed_ramp"] = speed_ramp
     return coerced
 
