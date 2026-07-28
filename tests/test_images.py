@@ -69,3 +69,104 @@ def test_scan_skips_images(tmp_path, fake_ffprobe, monkeypatch):
 
 def test_image_max_dur_is_a_short_flash():
     assert 0.0 < IMAGE_MAX_DUR <= 1.0
+
+
+# --- Sélection au montage ---------------------------------------------------
+
+import numpy as np  # noqa: E402
+
+from beatsync import DEFAULT_CONFIG, build_edl  # noqa: E402
+
+BPM = 128.0
+BEAT = 60.0 / BPM
+DURATION = 60.0
+
+
+def make_analysis():
+    beats = np.arange(0.0, DURATION, BEAT)
+    times = np.linspace(0.0, DURATION, 601)
+    energy = np.where(
+        times < DURATION / 2,
+        np.interp(times, [0.0, DURATION / 2], [0.05, 0.20]),
+        np.interp(times, [DURATION / 2, DURATION], [0.80, 1.00]),
+    )
+    return {"duration": DURATION, "bpm": BPM, "beats": beats,
+            "energy": energy, "energy_times": times}
+
+
+def video(name, duration=90.0):
+    return {"path": Path(f"/clips/{name}"), "kind": "video", "duration": duration,
+            "width": 1920, "height": 1080, "ratio": 1920 / 1080}
+
+
+def image(name, width=1920, height=1080):
+    return {"path": Path(f"/clips/{name}"), "kind": "image", "duration": None,
+            "width": width, "height": height, "ratio": width / height}
+
+
+def mixed_config(**overrides):
+    return {**DEFAULT_CONFIG, "start": 0.0, "end": DURATION,
+            "drop_time": 30.0, **overrides}
+
+
+def build(clips, seed=42, **overrides):
+    return build_edl(make_analysis(), clips, mixed_config(**overrides), seed=seed)
+
+
+def test_images_are_used_only_on_short_segments():
+    edl = build([video("a.mp4"), image("b.png")])
+    used = [e for e in edl if e.get("kind") == "image"]
+    assert used, "aucune image montée"
+    assert all(e["duration"] <= IMAGE_MAX_DUR + 1e-9 for e in used)
+
+
+def test_images_never_slow_down_or_speed_up():
+    edl = build([video("a.mp4"), image("b.png")])
+    assert all(e["speed"] == pytest.approx(1.0)
+               for e in edl if e.get("kind") == "image")
+
+
+def test_images_start_at_zero_and_get_kenburns():
+    edl = build([video("a.mp4"), image("b.png")])
+    for entry in edl:
+        if entry.get("kind") == "image":
+            assert entry["clip_in"] == pytest.approx(0.0)
+            assert "kenburns" in entry["effects"]
+            assert "zoom" not in entry["effects"], "kenburns fait déjà le zoom"
+            assert entry["kenburns"]["zoom_dir"] in (1, -1)
+            assert entry["kenburns"]["pan_dir"] in (1, -1)
+
+
+def test_images_keep_a_minimum_gap_of_three_segments():
+    """Sans garde-fou, un passage de strobo devient un diaporama."""
+    edl = build([video("a.mp4"), image("b.png"), image("c.png"), image("d.png")])
+    positions = [i for i, e in enumerate(edl) if e.get("kind") == "image"]
+    assert positions, "aucune image montée"
+    assert all(b - a >= 3 for a, b in zip(positions, positions[1:]))
+
+
+def test_wide_image_falls_back_to_the_blurred_background_layout():
+    edl = build([video("a.mp4"), image("wide.png", 1920, 1080)])
+    used = [e for e in edl if e.get("kind") == "image"]
+    assert used and all(e["layout"] == "blur" for e in used)
+
+
+def test_portrait_image_is_cropped():
+    edl = build([video("a.mp4"), image("tall.png", 1080, 1920)])
+    used = [e for e in edl if e.get("kind") == "image"]
+    assert used and all(e["layout"] == "crop" for e in used)
+
+
+def test_image_selection_is_reproducible():
+    clips = [video("a.mp4"), image("b.png"), image("c.png")]
+    a = build(clips, seed=7)
+    b = build(clips, seed=7)
+    assert a == b
+
+
+def test_video_only_catalog_is_unchanged():
+    """Non-régression : sans image dans le catalogue, aucune clé nouvelle ne
+    perturbe l'EDL et rien n'est marqué image."""
+    edl = build([video("a.mp4"), video("b.mp4")])
+    assert all(e["kind"] == "video" for e in edl)
+    assert all("kenburns" not in e["effects"] for e in edl)

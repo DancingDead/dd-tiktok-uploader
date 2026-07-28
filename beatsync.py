@@ -582,12 +582,21 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             return [{"start": 0.0, "end": clip["duration"], "motion": 1.0}]
         return clip["intervals"]  # scanné ([] = rien d'exploitable, clip exclu)
 
+    # Vidéos et images vivent dans le même catalogue mais ne se montent pas
+    # pareil : une image n'a pas de plage exploitable, elle n'a qu'un plafond
+    # de durée et un écart minimum entre deux apparitions.
+    video_clips = [c for c in clips if c.get("kind", "video") != "image"]
+    image_clips = [c for c in clips if c.get("kind") == "image"]
+    IMAGE_MIN_GAP = 3          # segments entre deux images (anti-diaporama)
+    last_image_seg = -IMAGE_MIN_GAP
+
     # --- Attribution des clips : tirage seedé dans les plages exploitables ---
     edl: list[dict] = []
     prev_path = None
     drop_seg_count = 0
     last_clip_in: dict = {}  # par clip : dernier point d'entrée (mode chrono)
-    for (seg_start, beat_index), (seg_end, end_beat) in zip(boundaries, boundaries[1:]):
+    for seg_index, ((seg_start, beat_index), (seg_end, end_beat)) in enumerate(
+            zip(boundaries, boundaries[1:])):
         duration = seg_end - seg_start
         tier = tier_at(beat_index if beat_index >= 0 else (int(in_window[0]) if len(in_window) else 0))
         if drop_out is None:
@@ -621,16 +630,49 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
 
         source_needed = duration * speed
         usable = [
-            c for c in clips
+            c for c in video_clips
             if any(iv["end"] - iv["start"] >= source_needed for iv in intervals_of(c))
         ]
+        if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
+                and seg_index - last_image_seg >= IMAGE_MIN_GAP:
+            usable = usable + image_clips
         if not usable:
             raise ValueError(
                 f"aucun clip n'a de plage exploitable de {source_needed:.2f}s "
-                "(clips trop courts, ou trop de zones écartées par le scan)"
+                "(clips trop courts, trop de zones écartées par le scan, ou "
+                "catalogue composé uniquement d'images — une image ne peut tenir "
+                f"qu'un segment de {IMAGE_MAX_DUR:.2f}s au plus)"
             )
         pool = [c for c in usable if c["path"] != prev_path] or usable
         clip = rng.choice(pool)
+
+        if clip.get("kind") == "image":
+            # Flash court : pas de plage à choisir, pas de ralenti sur un fixe.
+            # Le Ken Burns (sens tirés à la seed) évite l'image figée ; le zoom
+            # ordinaire serait redondant avec lui.
+            last_image_seg = seg_index
+            prev_path = clip["path"]
+            edl.append(
+                {
+                    "timeline_start": seg_start,
+                    "duration": duration,
+                    "clip_path": clip["path"],
+                    "kind": "image",
+                    "clip_in": 0.0,
+                    "beat_index": beat_index,
+                    "section": section,
+                    "speed": 1.0,
+                    "effects": [e for e in effects if e != "zoom"] + ["kenburns"],
+                    "kenburns": {"zoom_dir": rng.choice([1, -1]),
+                                 "pan_dir": rng.choice([1, -1])},
+                    # Le scan n'a pas tourné : layout déduit du seul ratio.
+                    "focus_x": 0.5,
+                    "layout": "blur" if clip["ratio"] >= 1.2 else "crop",
+                    "clip_w": clip["width"],
+                    "clip_h": clip["height"],
+                }
+            )
+            continue
 
         candidates = [iv for iv in intervals_of(clip) if iv["end"] - iv["start"] >= source_needed]
         # Personnages à l'écran : écarte les plages quasi vides (fallback si toutes le sont).
@@ -684,6 +726,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "timeline_start": seg_start,
                 "duration": duration,
                 "clip_path": clip["path"],
+                "kind": "video",
                 "clip_in": clip_in,
                 "beat_index": beat_index,
                 "section": section,
