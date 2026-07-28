@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
         "slow": 0.5,                    # segment d'anticipation (finit sur un impact), 0.5–1.0
         "fast": 1.4,                    # segment de relance (commence sur un impact), 1.0–1.5
         "impact_beats": 8,              # périodicité des impacts en beats ; 0 = pas de ramps
+        "slow_beats": 2,                # beats fusionnés avant un impact ; 0 ou 1 = pas de fusion
         "min_dur": 0.25,                # s : en dessous (strobo), pas de ramp
         "interpolate": True,            # flux optique sur les segments ralentis
     },
@@ -131,6 +132,34 @@ def ramp_speed(start_beat: int, end_beat: int, duration: float,
     deux s'appliquent, le ralenti gagne (l'anticipation prime). Pure, sans RNG :
     la reproductibilité ne dépend pas d'elle."""
     return _ramp_decision(start_beat, end_beat, duration, anchor, config)[0]
+
+
+def merge_boundaries_before_impacts(cut_beats: list[tuple[float, int]], anchor: int,
+                                    config: dict) -> list[tuple[float, int]]:
+    """Retire les coupes situées dans les `slow_beats` beats qui précèdent un
+    impact : les segments concernés fusionnent en un seul, plus long, qui se
+    termine sur l'impact et recevra le ralenti. Sans ça le ralenti subit la
+    grille de coupe et dure un demi-beat après le drop — invisible.
+
+    Le beat d'impact lui-même n'est jamais retiré (c'est lui qui porte le motif,
+    et pour le drop c'est une coupe garantie). Pure, sans RNG."""
+    ramp = config.get("speed_ramp") or {}
+    slow_beats = int(ramp.get("slow_beats", 0))
+    impact_beats = int(ramp.get("impact_beats", 8))
+    if slow_beats < 1 or impact_beats <= 0 or not config.get("effects", {}).get("speed"):
+        return cut_beats
+
+    def distance_to_next_impact(beat_index: int) -> int:
+        return (anchor - beat_index) % impact_beats  # 0 si le beat EST un impact
+
+    # `slow_beats` est la LONGUEUR voulue du segment ralenti : pour qu'il couvre
+    # N beats, il faut retirer les N-1 coupes intermédiaires, donc les distances
+    # 1..N-1. À 1, rien n'est retiré — c'est la grille actuelle.
+    kept = [(t, b) for t, b in cut_beats
+            if not (0 < distance_to_next_impact(b) < slow_beats)]
+    # Une fenêtre sans aucun impact verrait tout disparaître : on préfère la
+    # grille d'origine à un montage d'un seul plan.
+    return kept or cut_beats
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
@@ -574,6 +603,16 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 nxt = drop_idx  # garantit une coupe pile sur le drop
             i = nxt
 
+    # Ancre des impacts : le drop quand il existe, sinon le premier beat de la
+    # fenêtre (mode calme) — le motif de vitesse reste actif dans les deux cas.
+    impact_anchor = drop_idx if drop_idx is not None else (
+        int(in_window[0]) if len(in_window) else 0)
+
+    # Les ralentis prennent leur temps : on retire les coupes qui morcelleraient
+    # le segment d'anticipation. À faire AVANT la quantification, pour que
+    # l'exemption `min_dur` juge la durée fusionnée et non celle d'origine.
+    cut_beats = merge_boundaries_before_impacts(cut_beats, impact_anchor, config)
+
     # --- Frontières de segments : quantifiées frame, jamais < 1 frame d'écart ---
     out_end = round((end - start) * fps) / fps
     boundaries: list[tuple[float, int]] = [(0.0, -1)]  # -1 : début de fenêtre, pas un beat
@@ -586,11 +625,6 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     drop_out = None
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
-
-    # Ancre des impacts : le drop quand il existe, sinon le premier beat de la
-    # fenêtre (mode calme) — le motif de vitesse reste actif dans les deux cas.
-    impact_anchor = drop_idx if drop_idx is not None else (
-        int(in_window[0]) if len(in_window) else 0)
 
     def intervals_of(clip: dict) -> list[dict]:
         if "intervals" not in clip:  # pas scanné : clip entier utilisable
