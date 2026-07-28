@@ -307,6 +307,23 @@ def test_patch_niche_rejects_invalid_subtitles(client):
     assert bad.status_code == 400
 
 
+def test_create_niche_coerces_subtitles(client):
+    """POST /api/niches doit coercer `subtitles` comme le fait PATCH — un client
+    d'API qui envoie des champs mal formés dès la création ne doit pas
+    contourner la validation en passant par le seul endpoint asymétrique."""
+    bad = client.post("/api/niches", json={"name": "Test", "subtitles": {"size": "gros"}})
+    assert bad.status_code == 400
+
+    ok = client.post("/api/niches", json={"name": "Test2", "subtitles": {
+        "mode": "fixe", "x": "0.25", "size": "72"}})
+    assert ok.status_code == 200
+    nid = ok.get_json()["id"]
+    niches = client.get("/api/state").get_json()["niches"]
+    subs = next(n["subtitles"] for n in niches if n["id"] == nid)
+    assert subs["x"] == pytest.approx(0.25)
+    assert subs["size"] == 72
+
+
 def test_patch_niche_stores_a_fixed_caption(client):
     nid = client.post("/api/niches", json={"name": "Test", "cadence": 1}).get_json()["id"]
     ok = client.patch(f"/api/niches/{nid}", json={"subtitles": {

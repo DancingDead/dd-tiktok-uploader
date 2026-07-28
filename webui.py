@@ -519,6 +519,9 @@ def create_app(root: Path | None = None):
         data = request.json or {}
         conn = get_conn()
         try:
+            subtitles = data.get("subtitles", {})
+            if isinstance(subtitles, dict):
+                subtitles = coerce_subtitles(subtitles)
             nid = dbmod.create_niche(
                 conn, paths["data"], data["name"],
                 owner=data.get("owner", session["member"]),
@@ -526,7 +529,7 @@ def create_app(root: Path | None = None):
                 caption_template=data.get("caption_template", "{title}"),
                 hashtags=data.get("hashtags", []),
                 preset_ids=data.get("preset_ids", []),
-                subtitles=data.get("subtitles", {}))
+                subtitles=subtitles)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
         finally:
