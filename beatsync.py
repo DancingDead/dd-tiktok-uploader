@@ -24,6 +24,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 IMAGE_MAX_DUR = 0.6
 
 DEFAULT_CONFIG = {
+    "format": "vertical",               # "vertical" = 1080x1920 | "carre" = 1080x1080
     "width": 1080,
     "height": 1920,
     "fps": 30,
@@ -94,6 +95,20 @@ def merge_settings(base: dict, overrides: dict) -> dict:
         else:
             merged[key] = dict(value) if isinstance(value, dict) else value
     return merged
+
+
+# Formats de sortie. Le carré recadre beaucoup moins un rush 16:9 (44 % de la
+# largeur jetée contre 68 % en vertical), ce qui sert notamment l'animé.
+FORMATS = {"vertical": (1080, 1920), "carre": (1080, 1080)}
+
+
+def apply_format(config: dict) -> dict:
+    """Pose `width`/`height` d'après `format`, sans muter l'entrée. Un format
+    inconnu retombe sur vertical — dégradation sûre, comme `section`."""
+    out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in config.items()}
+    out["width"], out["height"] = FORMATS.get(out.get("format", "vertical"),
+                                              FORMATS["vertical"])
+    return out
 
 
 def _clamp_speed(value: float) -> float:
@@ -1177,7 +1192,7 @@ def generate_video(track_path, clips: list[dict], config: dict, seed: int,
     Point d'entrée réutilisable (CLI et usine par niche). `config` n'est pas
     muté (copie interne). Retourne un récapitulatif {segments, window, captions}."""
     analysis = analyze_audio(Path(track_path))
-    cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in config.items()}
+    cfg = apply_format(config)   # copie interne + dimensions dérivées du format
     resolve_window(analysis, cfg, start=start, duration=duration)
     drop = cfg["drop_time"]
     log(f"  {analysis['bpm']:.0f} BPM ; fenêtre {cfg['start']:.1f}→{cfg['end']:.1f}s"
@@ -1454,7 +1469,7 @@ def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Montage vidéo vertical 9:16 synchronisé sur les beats d'un morceau."
+        description="Montage vidéo 9:16 ou 1:1 synchronisé sur les beats d'un morceau."
     )
     parser.add_argument("track", help="chemin du morceau audio")
     parser.add_argument("clips_dir", help="dossier des clips vidéo")
@@ -1465,6 +1480,8 @@ def main() -> None:
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
     parser.add_argument("--section", choices=["drop", "calm"], default=None,
                         help='passage ciblé : "drop" (moment fort, défaut) ou "calm" (passage calme)')
+    parser.add_argument("--format", choices=["vertical", "carre"], default=None,
+                        help="format de sortie : vertical 9:16 (défaut) ou carré 1:1")
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
     parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,
@@ -1487,6 +1504,8 @@ def main() -> None:
         config["cut_every"] = args.cut_every
     if args.section is not None:
         config["section"] = args.section
+    if args.format is not None:
+        config["format"] = args.format
     if args.subtitles:
         config["subtitles"] = {**config["subtitles"], "enabled": True, "preprompt": args.subtitles}
 
