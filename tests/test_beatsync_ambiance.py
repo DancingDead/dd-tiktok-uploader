@@ -168,6 +168,8 @@ def test_clip_speed_propagates_to_all_segments():
         "start": 0.0,
         "end": _DURATION,
         "drop_time": None,
+        # Ramps neutralisés : ces tests portent sur clip_speed et son clamp.
+        "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "impact_beats": 0},
     }
     edl = build_edl(_analysis(), _clips(), config, seed=1)
     assert edl, "EDL non vide"
@@ -181,6 +183,8 @@ def test_clip_speed_too_high_is_clamped_to_1_5():
         "start": 0.0,
         "end": _DURATION,
         "drop_time": None,
+        # Ramps neutralisés : ces tests portent sur clip_speed et son clamp.
+        "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "impact_beats": 0},
     }
     edl = build_edl(_analysis(), _clips(), config, seed=1)
     assert edl, "EDL non vide"
@@ -194,6 +198,8 @@ def test_clip_speed_negative_is_clamped_to_0_5():
         "start": 0.0,
         "end": _DURATION,
         "drop_time": None,
+        # Ramps neutralisés : ces tests portent sur clip_speed et son clamp.
+        "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "impact_beats": 0},
     }
     edl = build_edl(_analysis(), _clips(), config, seed=1)
     assert edl, "EDL non vide"
@@ -205,6 +211,8 @@ def test_gasp_speed_ignores_clip_speed_clamp():
     # écrase toujours speed=0.5, quelle que soit la valeur (clampée) de
     # clip_speed. drop_time=50 tombe dans la zone d'énergie forte de
     # _analysis(), ce qui déclenche buildup -> drop avec strobe_beats.
+    # impact_beats très grand : seul le drop (l'ancre elle-même) reste un
+    # impact, les autres segments buildup ne le sont plus (cf. ramp_speed).
     config = {
         **DEFAULT_CONFIG,
         "clip_speed": 0.9,
@@ -212,6 +220,7 @@ def test_gasp_speed_ignores_clip_speed_clamp():
         "end": _DURATION,
         "drop_time": 50.0,
         "buildup": 5.0,
+        "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "impact_beats": 10_000},
     }
     edl = build_edl(_analysis(), _clips(), config, seed=1)
     buildup_segments = [e for e in edl if e.get("section") == "buildup"]

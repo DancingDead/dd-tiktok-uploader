@@ -41,6 +41,13 @@ DEFAULT_CONFIG = {
     "color_grade": "neutre",            # ambiance couleur : neutre|chaud|froid|delave
     "grain": 0.0,                       # texture film/VHS, 0.0–1.0
     "clip_speed": 1.0,                  # slow-mo global par segment, 0.5–1.5
+    "speed_ramp": {                     # ramps calés sur les beats (interrupteur : effects.speed)
+        "slow": 0.5,                    # segment d'anticipation (finit sur un impact), 0.5–1.0
+        "fast": 1.4,                    # segment de relance (commence sur un impact), 1.0–1.5
+        "impact_beats": 8,              # périodicité des impacts en beats ; 0 = pas de ramps
+        "min_dur": 0.25,                # s : en dessous (strobo), pas de ramp
+        "interpolate": True,            # flux optique sur les segments ralentis
+    },
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
         "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
@@ -70,6 +77,40 @@ def merge_settings(base: dict, overrides: dict) -> dict:
         else:
             merged[key] = dict(value) if isinstance(value, dict) else value
     return merged
+
+
+def _clamp_speed(value: float) -> float:
+    """Borne moteur du slow-mo/accéléré. Défensif : l'UI n'impose pas de borne."""
+    return max(0.5, min(1.5, float(value)))
+
+
+def is_impact(beat_index: int, anchor: int, impact_beats: int) -> bool:
+    """Un « impact » est un beat qui porte le motif de vitesse : l'ancre (le drop
+    quand il existe) et tous les beats espacés d'un multiple d'`impact_beats`,
+    avant comme après. `beat_index` négatif = borne de fenêtre, jamais un impact."""
+    if beat_index < 0 or impact_beats <= 0:
+        return False
+    return (beat_index - anchor) % impact_beats == 0
+
+
+def ramp_speed(start_beat: int, end_beat: int, duration: float,
+               anchor: int, config: dict) -> float:
+    """Vitesse d'un segment : ralenti d'anticipation s'il FINIT sur un impact,
+    accéléré de relance s'il COMMENCE sur un impact, sinon `clip_speed`. Quand les
+    deux s'appliquent, le ralenti gagne (l'anticipation prime). Pure, sans RNG :
+    la reproductibilité ne dépend pas d'elle."""
+    base = _clamp_speed(config.get("clip_speed", 1.0))
+    ramp = config.get("speed_ramp") or {}
+    if not config.get("effects", {}).get("speed"):
+        return base
+    if duration < float(ramp.get("min_dur", 0.25)):
+        return base
+    impact_beats = int(ramp.get("impact_beats", 8))
+    if is_impact(end_beat, anchor, impact_beats):
+        return _clamp_speed(ramp.get("slow", 0.5))
+    if is_impact(start_beat, anchor, impact_beats):
+        return _clamp_speed(ramp.get("fast", 1.4))
+    return base
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
@@ -513,6 +554,11 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # Ancre des impacts : le drop quand il existe, sinon le premier beat de la
+    # fenêtre (mode calme) — le motif de vitesse reste actif dans les deux cas.
+    impact_anchor = drop_idx if drop_idx is not None else (
+        int(in_window[0]) if len(in_window) else 0)
+
     def intervals_of(clip: dict) -> list[dict]:
         if "intervals" not in clip:  # pas scanné : clip entier utilisable
             return [{"start": 0.0, "end": clip["duration"], "motion": 1.0}]
@@ -523,7 +569,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     prev_path = None
     drop_seg_count = 0
     last_clip_in: dict = {}  # par clip : dernier point d'entrée (mode chrono)
-    for (seg_start, beat_index), (seg_end, _) in zip(boundaries, boundaries[1:]):
+    for (seg_start, beat_index), (seg_end, end_beat) in zip(boundaries, boundaries[1:]):
         duration = seg_end - seg_start
         tier = tier_at(beat_index if beat_index >= 0 else (int(in_window[0]) if len(in_window) else 0))
         if drop_out is None:
@@ -531,12 +577,9 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         else:
             section = "buildup" if seg_start < drop_out - 1e-9 else "drop"
 
-        # Gasp : slow-mo x0.5 sur le dernier segment avant l'impact du drop.
-        # Défensif : clampe l'entrée à [0.5, 1.5] (l'UI n'impose pas de borne).
-        speed = max(0.5, min(1.5, config.get("clip_speed", 1.0)))
-        if effects_cfg.get("speed") and drop_out is not None and section == "buildup" \
-                and abs(seg_end - drop_out) < 1e-9:
-            speed = 0.5
+        # Ramps : ralenti avant un impact, accéléré après. Le « gasp » historique
+        # avant le drop en est un cas particulier — le drop est un impact.
+        speed = ramp_speed(beat_index, end_beat, duration, impact_anchor, config)
 
         effects: list[str] = []
         accents = config.get("accents", {})
