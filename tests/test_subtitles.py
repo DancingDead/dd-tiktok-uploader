@@ -200,6 +200,40 @@ def test_caption_special_chars_escaped():
     assert "\\:" in vf or "\\\\:" in vf
 
 
+def caption_entry():
+    return {"timeline_start": 0.0, "duration": 1.0, "clip_path": "/clips/a.mp4",
+            "clip_in": 0.0, "speed": 1.0, "effects": [], "layout": "crop",
+            "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080, "caption": "TEST"}
+
+
+def test_caption_placement_comes_from_the_config():
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "x": 0.25, "y": 0.10, "size": 96}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=96" in joined
+    assert "x=w*0.2500-text_w/2" in joined
+    assert "y=h*0.1000-text_h/2" in joined
+
+
+def test_caption_defaults_keep_the_historical_placement():
+    joined = " ".join(_segment_filters(caption_entry(), DEFAULT))
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
+
+
+def test_generated_punchlines_use_the_same_placement_path():
+    """Un seul chemin de code : le mode LLM hérite du réglage de placement."""
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"], "mode": "llm", "size": 40}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=40" in joined
+
+
+def test_no_caption_means_no_drawtext():
+    entry = caption_entry()
+    del entry["caption"]
+    assert "drawtext" not in " ".join(_segment_filters(entry, DEFAULT))
+
+
 # --- Polices embarquées ------------------------------------------------------
 
 

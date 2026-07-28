@@ -1145,14 +1145,20 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     grain = grain_filter(config.get("grain", 0.0))
     if grain:
         post.append(grain)
-    # Punchline incrustée (après les accents pour rester nette), bas-centrée
+    # Punchline incrustée (après les accents pour rester nette). Position et
+    # taille réglables : le texte est centré sur le point d'ancrage (x, y),
+    # exprimé en fraction d'écran. Vaut pour les deux modes, généré et fixe.
     cap = entry.get("caption")
-    font = resolve_caption_font(config.get("subtitles", {}).get("font", "impact"))
+    subs = config.get("subtitles", {})
+    font = resolve_caption_font(subs.get("font", "impact"))
     if cap and font:
+        cap_x = max(0.0, min(1.0, float(subs.get("x", 0.5))))
+        cap_y = max(0.0, min(1.0, float(subs.get("y", 0.74))))
+        cap_size = max(8, int(subs.get("size", 64)))
         post.append(
             f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
-            ":fontsize=64:fontcolor=white:borderw=5:bordercolor=black@0.9"
-            ":x=(w-text_w)/2:y=h*0.70"
+            f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"
+            f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
         )
     post.append("setsar=1,format=yuv420p")
     post.append("tpad=stop_mode=clone:stop_duration=1")
