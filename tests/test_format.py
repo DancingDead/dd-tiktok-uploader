@@ -121,10 +121,12 @@ def image_clip(ratio):
 
 def test_image_layout_follows_the_same_rule_as_videos():
     """Effet de bord assumé du volet C : en vertical le seuil des images passe
-    de 1.2 à 1.125 (= 2.0 x 0.5625), donc un 4:3 (1.33) gagne un fond flouté."""
+    de 1.2 à 1.125 (= 2.0 x 0.5625). Un ratio de 1.15 tombe dans la bande
+    [1.125, 1.2) : sous l'ancien seuil fixe c'était `crop`, sous le nouveau
+    c'est `blur` — c'est précisément le déplacement de seuil qu'on épingle."""
     from tests.test_images import make_analysis, video
 
-    clips = [video("a.mp4"), image_clip(4 / 3)]
+    clips = [video("a.mp4"), image_clip(1.15)]
     config = apply_format({**DEFAULT_CONFIG, "format": "vertical",
                            "start": 0.0, "end": 60.0, "drop_time": 30.0})
     edl = build_edl(make_analysis(), clips, config, seed=42)
