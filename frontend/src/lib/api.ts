@@ -59,7 +59,7 @@ export type Overrides = {
   subtitles?: { font?: string }
   format?: "vertical" | "carre"
   end_scene?: { enabled?: boolean; beats?: number; freeze?: number; speed?: number }
-  speed_ramp?: { interpolate?: boolean }
+  speed_ramp?: { interpolate?: boolean; slow_beats?: number }
 }
 
 export type Preset = { id: number; name: string; overrides: Overrides }
