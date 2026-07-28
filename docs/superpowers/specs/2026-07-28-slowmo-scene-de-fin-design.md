@@ -1,13 +1,14 @@
-# Spec — Ralentis plus longs et « scène de fin »
+# Spec — Ralentis plus longs, « scène de fin », format carré
 
 **Date** : 2026-07-28
 **Statut** : validé, prêt pour plan d'implémentation
 
 Suite directe du spec du 2026-07-28 sur les ramps de vitesse
 (`2026-07-28-ramps-images-texte-fixe-design.md`), écrit après avoir regardé les
-premiers rendus. Deux volets : les ralentis existants durent trop peu pour se
-voir, et il manque une conclusion au montage quand le mode chronologique raconte
-une histoire.
+premiers rendus. Trois volets : les ralentis existants durent trop peu pour se
+voir ; il manque une conclusion au montage quand le mode chronologique raconte
+une histoire ; et le 9:16 recadre trop violemment les rushes d'animé, qui sont
+en 16:9.
 
 ---
 
@@ -212,6 +213,99 @@ d'overrides existant, avec coercition et bornage côté serveur
 
 ---
 
+## Volet C — Format vertical ou carré
+
+### Problème
+
+Le montage sort toujours en 9:16 (1080×1920). Les clips sources sont des rushes
+d'animé en 16:9 : le recadrage vertical en jette **68 % de la largeur**. En 1:1
+il n'en jette que 44 %, et le résultat tient souvent mieux — notamment pour
+l'animé, où la composition est large.
+
+`width` et `height` sont déjà des champs de config dont tout le cadrage dérive,
+mais ils ne sont exposés nulle part : ni dans les réglages, ni dans les overrides
+de preset. Seuls des commentaires et la description du CLI supposent le 9:16.
+
+### Décisions de cadrage (issues du brainstorming)
+
+- Le format se choisit **dans le preset**. Écartés : les réglages globaux (il
+  faudrait basculer toute l'usine pour tester un carré sur une niche) et la niche
+  (on ne pourrait plus comparer les deux formats sur le même contenu sans
+  dupliquer la niche). Au niveau preset, une niche qui alterne deux presets
+  produit les deux formats dans le même lot, sur les mêmes morceaux.
+- Les deux cadrages de secours **s'adaptent au format**. Écartés : garder la
+  logique telle quelle (duels empilés en bandes 2:1, fonds floutés inutiles) et
+  le crop seul en carré (on perdrait le plan d'ensemble sur les sources très
+  larges).
+
+### Design
+
+#### C.1 Le champ
+
+```python
+"format": "vertical",   # "vertical" = 1080x1920 | "carre" = 1080x1080
+```
+
+Fonction **pure** :
+
+```python
+FORMATS = {"vertical": (1080, 1920), "carre": (1080, 1080)}
+
+def apply_format(config: dict) -> dict
+```
+
+Elle pose `width` et `height` d'après `format`, sans muter l'entrée. Un format
+inconnu retombe sur `"vertical"` — dégradation sûre, même principe que `section`
+et `subtitles.mode`.
+
+Appelée en tête de `generate_video`, le **point de passage unique** par lequel
+entrent le CLI et l'usine par niche. `width`/`height` restent les champs que lit
+le rendu ; `format` est seulement ce qui les pose. Le reste de la chaîne de
+filtres dérive déjà de ces deux nombres et n'est pas touché.
+
+#### C.2 Les deux règles de cadrage, exprimées en ratio de sortie
+
+Dans `build_edl`, le choix du layout devient fonction du ratio de sortie
+`out_ratio = width / height` (0,5625 en vertical, 1,0 en carré) :
+
+**Split** (duel, moitiés gauche/droite empilées) — condition ajoutée :
+`out_ratio <= 0.75`. Vrai en vertical, faux en carré. En 1:1 un crop centré tient
+déjà les deux personnages dans la plupart des plans, là où l'empilement donnerait
+deux bandes 2:1.
+
+**Blur** (plan entier sur fond flouté) — condition ajoutée au test de dispersion
+existant : `clip_ratio >= 2.0 * out_ratio`. En vertical le seuil vaut 1,125, donc
+tout 16:9 y a droit et le **comportement actuel est préservé à l'identique**. En
+carré il vaut 2,0 : un 16:9 (1,78) passe en crop, seul un scope 2.35:1 déclenche
+le fond flouté.
+
+Les deux conditions sont pures et dérivées de la config, donc testables sans
+rendu.
+
+#### C.3 Ce qui suit sans modification
+
+- `delogo` est exprimé en fractions des dimensions du **clip source**.
+- La punchline (`x`, `y`, `size`) est en fractions de la **sortie**.
+- `kenburns_filter` prend déjà `s={width}x{height}`.
+- Les deux dimensions restent paires — H.264 l'exige.
+
+#### C.4 Validation et surfaces
+
+`coerce_overrides` refuse un format inconnu en 400, comme il le fait déjà pour
+`color_grade` et `section` (`ALLOWED_FORMATS = ("vertical", "carre")`).
+
+UI : un choix à deux entrées dans l'éditeur de preset. CLI : `--format`, et la
+description argparse (« Montage vidéo vertical 9:16… ») cesse de mentionner un
+format unique.
+
+### Hors périmètre de ce volet
+
+Desserrer `min_presence` et les seuils de scan pour le carré. Le carré pardonne
+beaucoup plus au recadrage, donc les plages écartées par le scan pourraient être
+moins nombreuses — mais ça se décide en regardant des rendus, pas a priori.
+
+---
+
 ## Interactions vérifiées
 
 - **Images du catalogue** : exclues de `find_final_scene` (pas de plages), et la
@@ -230,6 +324,20 @@ d'overrides existant, avec coercition et bornage côté serveur
   entière ; la réservation des derniers beats du volet B s'applique ensuite. Une
   coupe supprimée deux fois ne pose pas de problème (opérations idempotentes sur
   une liste de frontières).
+- **Volet C + volet B** : la scène de fin passe par la logique de layout
+  ordinaire, donc elle hérite des règles sensibles au format sans traitement
+  particulier. En carré, un duel final sera recadré plutôt qu'empilé — ce qui est
+  l'effet recherché.
+- **Volet C + images du catalogue** : la branche image de `build_edl` choisit
+  aujourd'hui son layout sur un seuil codé en dur (`ratio >= 1.2`), hérité du
+  9:16. Il devient la **même règle** que pour les vidéos
+  (`clip_ratio >= 2.0 * out_ratio`), pour qu'une image ne se comporte pas
+  autrement qu'un clip dans le même format. Effet de bord assumé : en vertical le
+  seuil passe de 1,2 à 1,125, donc les images dont le ratio tombe entre les deux
+  gagnent un fond flouté qu'elles n'avaient pas.
+- **Volet C + punchlines** : `x` et `y` étant des fractions de la sortie, une
+  position réglée en vertical reste proportionnellement la même en carré. Le
+  texte ne sort pas du cadre.
 
 ## Hors périmètre
 
@@ -260,4 +368,16 @@ Tous purs, sans FFmpeg ni réseau :
   identique à celle produite sans la fonctionnalité.
 - `_segment_input_args` : la source consommée est réduite du figé.
 - `_segment_filters` : `tpad` porte `stop_duration = 1 + freeze`.
-- `coerce_overrides` : bornage des trois nouvelles valeurs.
+- `coerce_overrides` : bornage des trois nouvelles valeurs de `end_scene`, et
+  refus d'un `format` inconnu.
+- `apply_format` : les deux formats donnent les bonnes dimensions ; un format
+  inconnu retombe sur vertical ; la config d'entrée n'est pas mutée.
+- Layout sensible au format : en carré aucun segment ne reçoit `split` même sur
+  un duel franc ; un 16:9 y passe en `crop` alors qu'il passe en `blur` en
+  vertical ; une source 2.35:1 déclenche `blur` dans les deux formats.
+- Non-régression du vertical pour les **vidéos** : à format `"vertical"`, le
+  layout choisi pour un clip vidéo est celui d'avant ce spec (le seuil 1,125 y
+  est plus permissif que le test de dispersion, qui reste le facteur limitant).
+  Les **images** font exception, par le changement de seuil documenté plus haut —
+  un test le verrouille explicitement plutôt que de le laisser passer pour une
+  régression.
