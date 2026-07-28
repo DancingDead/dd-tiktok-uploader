@@ -97,6 +97,43 @@ def test_empty_catalog_yields_no_scene():
     assert find_final_scene([]) is None
 
 
+def test_a_single_interval_spanning_the_whole_clip_still_yields_a_scene():
+    """Un clip proprement scanné produit UNE plage couvrant presque tout le
+    clip ; son début est avant le dernier tiers mais sa fin est dedans. Elle
+    ne doit pas être écartée en bloc — seulement restreinte à sa portion
+    utile, le dernier tiers."""
+    clip = scanned_clip("a.mp4", duration=100.0, intervals=[iv(0.5, 99.5)])
+    scene = find_final_scene([clip])
+    assert scene is not None
+    assert scene["interval"]["start"] == pytest.approx(100.0 * 2 / 3)
+    assert scene["interval"]["end"] == pytest.approx(99.5)
+
+
+def test_an_interval_entirely_before_the_tail_is_still_rejected():
+    """Une plage dont la FIN est avant le dernier tiers reste écartée — ce
+    n'est pas le cas que le finding 1 corrige."""
+    clip = scanned_clip("a.mp4", duration=100.0, intervals=[iv(5.0, 15.0)])
+    assert find_final_scene([clip]) is None
+
+
+def test_min_source_excludes_intervals_too_short_to_supply_it():
+    """Une plage plus courte que la source nécessaire n'est pas candidate —
+    sinon le rendu lirait au-delà, dans des images que le scan a rejetées."""
+    clip = scanned_clip("a.mp4", duration=100.0, intervals=[iv(90.0, 91.0)])  # 1 s utile
+    assert find_final_scene([clip], min_source=2.0) is None
+    assert find_final_scene([clip], min_source=0.5) is not None
+
+
+def test_min_source_is_checked_against_the_restricted_portion():
+    """La restriction du finding 1 s'applique AVANT le filtre de longueur : une
+    plage large mais dont seule une petite portion tombe dans le dernier
+    tiers doit être jugée sur cette portion, pas sur sa longueur totale."""
+    clip = scanned_clip("a.mp4", duration=90.0, intervals=[iv(0.0, 61.0)])
+    # tail_start = 60.0 ; portion utile = [60, 61] = 1 s.
+    assert find_final_scene([clip], min_source=2.0) is None
+    assert find_final_scene([clip], min_source=0.5) is not None
+
+
 def test_tie_break_is_deterministic():
     """Scores strictement égaux : le clip dont le nom vient en premier, puis
     la plage la plus tardive. Deux appels donnent le même résultat."""
@@ -195,6 +232,41 @@ def test_no_scene_found_falls_back_to_a_normal_montage():
     edl = build_edl(make_analysis(), raw, end_cfg(), seed=42)
     assert edl
     assert all(not e.get("end_scene") for e in edl)
+
+
+def test_end_scene_skips_a_too_short_interval_and_falls_back():
+    """Si la seule plage exploitable est trop courte pour la source requise,
+    la scène de fin ne se déclenche pas — le montage se termine normalement
+    plutôt que de lire au-delà, dans du non-scanné."""
+    # Une plage longue au milieu du clip pour alimenter le montage ordinaire,
+    # et une plage de 1 s tout à la fin — trop courte pour la scène de fin.
+    short = [scanned_clip("a.mp4", intervals=[iv(1.0, 50.0), iv(94.0, 95.0)])]
+    edl = build_edl(make_analysis(), short, end_cfg(beats=8, freeze=0.0, speed=1.0), seed=42)
+    assert all(not e.get("end_scene") for e in edl)
+
+
+def test_end_scene_swallowing_the_drop_is_rejected():
+    """La réservation de la scène de fin ne doit jamais avaler la coupe
+    garantie sur le drop : si le candidat tombe avant ou sur le drop, pas de
+    scène de fin, et le montage garde sa coupe sur le drop."""
+    bpm = 90.0
+    beat = 60.0 / bpm
+    duration = 20.0
+    beats = np.arange(0.0, duration, beat)
+    times = np.linspace(0.0, duration, 201)
+    energy = np.linspace(0.2, 1.0, len(times))
+    analysis = {"duration": duration, "bpm": bpm, "beats": beats,
+                "energy": energy, "energy_times": times}
+    cfg = {
+        **DEFAULT_CONFIG,
+        "start": 0.0, "end": duration, "drop_time": 10.0,
+        "end_scene": {**DEFAULT_CONFIG["end_scene"], "enabled": True, "beats": 32},
+    }
+    edl = build_edl(analysis, catalog(), cfg, seed=42)
+    assert all(not e.get("end_scene") for e in edl)
+    drop_out = round(10.0 * cfg["fps"]) / cfg["fps"]
+    assert any(abs(e["timeline_start"] - drop_out) < 1e-6 for e in edl), \
+        "la coupe garantie sur le drop doit survivre"
 
 
 def test_end_scene_is_reproducible():

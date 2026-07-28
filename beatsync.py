@@ -335,10 +335,23 @@ def interval_dual_ratio(clip: dict, interval: dict) -> float:
     return float(window.mean()) if len(window) else 0.0
 
 
-def find_final_scene(clips: list[dict]) -> dict | None:
+def find_final_scene(clips: list[dict], min_source: float = 0.0) -> dict | None:
     """Plage la plus « badass » de la queue des clips : le climax de l'histoire.
     Retourne {"clip", "interval"} ou None si rien d'exploitable — l'usine ne
     casse pas sur un catalogue non scanné, elle se termine normalement.
+
+    Une plage qui déborde du dernier tiers n'est pas écartée : elle est
+    restreinte à `[max(start, tail_start), end]`, sa portion utile. `motion`/
+    `presence` restent la moyenne de la plage ENTIÈRE (pas de données par
+    échantillon pour les recalculer) ; `interval_dual_ratio`, lui, est
+    recalculé sur la portion restreinte — c'est gratuit et plus juste. Une
+    plage entièrement avant `tail_start` reste écartée.
+
+    `min_source` : durée de source nécessaire à la scène (dépend de
+    `end_scene.beats`/`freeze`/`speed`, calculée par l'appelant) ; une plage
+    dont la portion utile est plus courte n'est pas candidate — sinon le
+    rendu lirait au-delà de la plage exploitable, dans des images que le
+    scan a rejetées.
 
     Pure et sans RNG : à catalogue égal la scène est la même, donc la
     reproductibilité ne dépend pas du tirage seedé."""
@@ -348,10 +361,14 @@ def find_final_scene(clips: list[dict]) -> dict | None:
             continue
         tail_start = clip["duration"] * (1.0 - FINAL_SCENE_TAIL)
         for interval in clip.get("intervals", []):
-            if interval["start"] < tail_start:
+            if interval["end"] <= tail_start:
                 continue
-            candidates.append((clip, interval, interval_dual_ratio(clip, interval),
-                               float(interval.get("motion", 0.0))))
+            start = max(interval["start"], tail_start)
+            if interval["end"] - start < min_source:
+                continue
+            restricted = {**interval, "start": start}
+            candidates.append((clip, restricted, interval_dual_ratio(clip, restricted),
+                               float(restricted.get("motion", 0.0))))
     if not candidates:
         return None
 
@@ -739,14 +756,24 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     # --- Scène de fin : un seul segment sur les N derniers beats -------------
     es_cfg = config.get("end_scene") or {}
     end_scene, es_start = None, None
-    if es_cfg.get("enabled"):
-        scene = find_final_scene(clips)
-        if scene is not None and len(beats) >= 2:
-            beat_dur = float(np.median(np.diff(beats)))
-            raw_start = out_end - int(es_cfg.get("beats", 8)) * beat_dur
-            candidate = round(max(0.0, raw_start) * fps) / fps
-            # Une scène qui avalerait toute la fenêtre n'est plus une conclusion.
-            if candidate >= frame and candidate <= out_end - frame:
+    if es_cfg.get("enabled") and len(beats) >= 2:
+        beat_dur = float(np.median(np.diff(beats)))
+        raw_start = out_end - int(es_cfg.get("beats", 8)) * beat_dur
+        candidate = round(max(0.0, raw_start) * fps) / fps
+        # Une scène qui avalerait toute la fenêtre n'est plus une conclusion,
+        # et une scène qui commencerait avant ou sur le drop lui volerait sa coupe.
+        fits_window = candidate >= frame and candidate <= out_end - frame
+        keeps_drop = not (drop_out is not None and candidate <= drop_out + frame)
+        if fits_window and keeps_drop:
+            # Durée de source nécessaire à CE candidat : sert de plancher à
+            # find_final_scene pour qu'elle n'écarte pas les plages trop
+            # courtes (le rendu lirait au-delà, dans du non-scanné).
+            es_speed = _clamp_speed(es_cfg.get("speed", 0.5))
+            scene_duration = out_end - candidate
+            freeze = max(0.0, min(scene_duration, float(es_cfg.get("freeze", 1.0))))
+            es_source = (scene_duration - freeze) * es_speed
+            scene = find_final_scene(clips, min_source=es_source)
+            if scene is not None:
                 end_scene, es_start = scene, candidate
                 # On POSE la frontière : sans elle le segment final commencerait
                 # à la dernière coupe existante, d'une durée arbitraire.
