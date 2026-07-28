@@ -63,6 +63,30 @@ def test_shared_clip_catalog_and_niche_selection(client, tmp_path):
     assert client.get("/api/state").get_json()["clip_links"].startswith("https://")
 
 
+def test_shared_clip_catalog_accepts_images(client, tmp_path):
+    """Les images vivent dans clips/ comme les vidéos : même upload, même
+    listing, même suppression."""
+    upload = client.post("/api/clips", data={
+        "file": (io.BytesIO(b"fake png"), "affiche.png")},
+        content_type="multipart/form-data")
+    assert upload.status_code == 200
+    assert (tmp_path / "clips/affiche.png").is_file()
+
+    names = [c["name"] for c in client.get("/api/state").get_json()["clips"]]
+    assert "affiche.png" in names
+
+    assert client.get("/api/clips/affiche.png").status_code == 200
+    assert client.delete("/api/clips/affiche.png").status_code == 200
+    assert not (tmp_path / "clips/affiche.png").is_file()
+
+
+def test_shared_clip_catalog_still_rejects_unknown_formats(client):
+    refused = client.post("/api/clips", data={
+        "file": (io.BytesIO(b"nope"), "notes.txt")},
+        content_type="multipart/form-data")
+    assert refused.status_code == 400
+
+
 def test_delete_catalog_asset_removes_file_and_niche_selection(client, tmp_path):
     # deux clips dans le catalogue partagé
     for fname in ("a.mp4", "b.mp4"):

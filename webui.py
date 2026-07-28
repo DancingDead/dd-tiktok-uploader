@@ -48,6 +48,8 @@ ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
     ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".aiff": "audio/aiff",
     ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png", ".webp": "image/webp",
 }
 ALLOWED_SECTIONS = ("drop", "calm")
 
@@ -189,6 +191,9 @@ def create_app(root: Path | None = None):
     app.add_url_rule("/<path:path>", "spa", serve_spa)
 
     VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+    # Le catalogue « clips » contient les deux : une image se monte en flash court.
+    CLIP_EXTS = VIDEO_EXTS | IMAGE_EXTS
 
     @app.get("/api/state")
     def state():
@@ -209,7 +214,7 @@ def create_app(root: Path | None = None):
             (
                 {"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 1)}
                 for p in clips_dir.glob("*")
-                if p.suffix.lower() in VIDEO_EXTS
+                if p.suffix.lower() in CLIP_EXTS
             ),
             key=lambda c: c["name"],
         ) if clips_dir.is_dir() else []
@@ -298,7 +303,7 @@ def create_app(root: Path | None = None):
     def upload_clip():
         file = request.files["file"]
         name = Path(file.filename).name  # pas de traversée de chemin
-        if Path(name).suffix.lower() not in VIDEO_EXTS:
+        if Path(name).suffix.lower() not in CLIP_EXTS:
             return jsonify({"error": f"format non supporté : {name}"}), 400
         paths["clips"].mkdir(exist_ok=True)
         file.save(paths["clips"] / name)
@@ -336,7 +341,7 @@ def create_app(root: Path | None = None):
 
     @app.delete("/api/clips/<path:name>")
     def delete_clip_ep(name):
-        return _delete_asset("clips", "clips/", VIDEO_EXTS, name)
+        return _delete_asset("clips", "clips/", CLIP_EXTS, name)
 
     def _serve_asset(dir_key, exts, name):
         """Sert un fichier du catalogue partagé pour aperçu (écoute/visionnage).
@@ -360,7 +365,7 @@ def create_app(root: Path | None = None):
 
     @app.get("/api/clips/<path:name>")
     def serve_clip_ep(name):
-        return _serve_asset("clips", VIDEO_EXTS, name)
+        return _serve_asset("clips", CLIP_EXTS, name)
 
     @app.post("/api/clip-links")
     def save_clip_links():

@@ -43,10 +43,10 @@ export function Catalogue({ state, refresh }: Props) {
         <AssetSection
           assets={state.clips}
           linksText={state.clip_links}
-          accept=".mp4,.mov,.m4v,.mkv,.webm,.avi"
+          accept=".mp4,.mov,.m4v,.mkv,.webm,.avi,.jpg,.jpeg,.png,.webp"
           linkNote="Depuis YouTube (vidéo ou playlist) — « Télécharger » récupère la vidéo ≤1080p dans clips/."
           downloadLabel="Télécharger les clips"
-          emptyLabel="aucun clip"
+          emptyLabel="aucun clip ni image"
           onUpload={api.uploadClip}
           onDelete={api.deleteClip}
           onSaveLinks={api.saveClipLinks}
