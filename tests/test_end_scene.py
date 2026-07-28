@@ -260,7 +260,7 @@ def test_end_scene_swallowing_the_drop_is_rejected():
     cfg = {
         **DEFAULT_CONFIG,
         "start": 0.0, "end": duration, "drop_time": 10.0,
-        "end_scene": {**DEFAULT_CONFIG["end_scene"], "enabled": True, "beats": 32},
+        "end_scene": {**DEFAULT_CONFIG["end_scene"], "enabled": True, "beats": 20},
     }
     edl = build_edl(analysis, catalog(), cfg, seed=42)
     assert all(not e.get("end_scene") for e in edl)
