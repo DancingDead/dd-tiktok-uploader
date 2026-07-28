@@ -159,8 +159,10 @@ apparaître **brièvement**.
 - le service (`GET /api/clips/<name>`), avec les mimetypes correspondants ajoutés à
   `ASSET_MIMETYPES`.
 
-La grille du catalogue affiche une vignette `<img>` pour une image au lieu du lecteur
-vidéo. Le reste (sélection dans la niche, retrait, catalogue partagé) ne bouge pas.
+Côté React, la table du catalogue (`AssetSection.tsx`) n'affiche que nom, taille et
+bouton supprimer — **pas d'aperçu** : la seule modification est l'attribut `accept` de
+la section Clips dans `Catalogue.tsx`. Le reste (sélection dans la niche, retrait,
+catalogue partagé) ne bouge pas.
 
 #### 2.2 Chargement et scan
 
@@ -303,9 +305,14 @@ La carte « Punchlines » du détail niche gagne :
 - un `textarea` pour le texte ;
 - trois curseurs : X (%), Y (%), taille (px), avec valeur numérique affichée.
 
-Le texte passe par `esc()` partout où il est rendu via `innerHTML` (défense XSS
-existante). `x`, `y` et `size` sont coercés et bornés **côté serveur** — 400 si non
-convertible — comme les overrides numériques existants.
+Le rendu du texte ne demande aucune précaution XSS particulière : le frontend est du
+React (`NicheDetail.tsx`), qui échappe les valeurs interpolées par construction —
+l'`esc()` mentionné dans CLAUDE.md concerne l'ancienne UI vanilla.
+
+`x`, `y` et `size` sont en revanche coercés et bornés **côté serveur** — 400 si non
+convertible — comme les overrides numériques existants : le champ `subtitles` de la
+niche est un blob JSON écrit tel quel en base, et une valeur non numérique casserait
+le rendu FFmpeg au moment de la génération, loin de la saisie.
 
 ---
 
