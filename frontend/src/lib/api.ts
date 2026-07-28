@@ -57,6 +57,8 @@ export type Overrides = {
   grain?: number
   clip_speed?: number
   subtitles?: { font?: string }
+  format?: "vertical" | "carre"
+  end_scene?: { enabled?: boolean; beats?: number; freeze?: number; speed?: number }
 }
 
 export type Preset = { id: number; name: string; overrides: Overrides }

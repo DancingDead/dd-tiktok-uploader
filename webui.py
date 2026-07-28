@@ -43,6 +43,10 @@ OVERRIDE_RANGES = {
     "clip_speed": (0.5, 1.5),
 }
 ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
+ALLOWED_FORMATS = ("vertical", "carre")
+# Bornes des champs de la scène de fin : au-delà, la scène avale la vidéo ou
+# le figé dépasse le segment.
+END_SCENE_RANGES = {"beats": (2, 32), "freeze": (0.0, 3.0), "speed": (0.5, 1.5)}
 # Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
 ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
@@ -75,6 +79,20 @@ def coerce_overrides(overrides: dict) -> dict:
         accents = dict(accents)
         accents["glitch"] = float(accents["glitch"])
         coerced["accents"] = accents
+    if "format" in coerced and coerced["format"] not in ALLOWED_FORMATS:
+        raise ValueError(f"format inconnu : {coerced['format']!r}")
+    end_scene = coerced.get("end_scene")
+    if isinstance(end_scene, dict):
+        end_scene = dict(end_scene)
+        for key, (lo, hi) in END_SCENE_RANGES.items():
+            if key in end_scene:
+                value = end_scene[key]
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    value = float(value)
+                end_scene[key] = max(lo, min(hi, value))
+        if "beats" in end_scene:
+            end_scene["beats"] = int(end_scene["beats"])
+        coerced["end_scene"] = end_scene
     return coerced
 
 
