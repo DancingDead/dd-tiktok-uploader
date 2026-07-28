@@ -106,3 +106,98 @@ def test_tie_break_is_deterministic():
     assert first["clip"]["path"].name == "a.mp4"
     assert first["interval"]["start"] == pytest.approx(85.0)
     assert find_final_scene([a, b])["interval"] == first["interval"]
+
+
+# --- Montage dans l'EDL -----------------------------------------------------
+
+BPM = 128.0
+BEAT = 60.0 / BPM
+DURATION = 60.0
+
+
+def make_analysis():
+    beats = np.arange(0.0, DURATION, BEAT)
+    times = np.linspace(0.0, DURATION, 601)
+    energy = np.where(
+        times < DURATION / 2,
+        np.interp(times, [0.0, DURATION / 2], [0.05, 0.20]),
+        np.interp(times, [DURATION / 2, DURATION], [0.80, 1.00]),
+    )
+    return {"duration": DURATION, "bpm": BPM, "beats": beats,
+            "energy": energy, "energy_times": times}
+
+
+def catalog():
+    """Deux clips scannés, exploitables de bout en bout, avec un duel dans la
+    queue du second."""
+    return [
+        scanned_clip("a.mp4", intervals=[iv(1.0, 95.0)]),
+        scanned_clip("b.mp4", intervals=[iv(1.0, 40.0), iv(70.0, 95.0)],
+                     dual_ranges=[(70.0, 95.0)]),
+    ]
+
+
+def end_cfg(**end_scene):
+    return {
+        **DEFAULT_CONFIG,
+        "start": 0.0, "end": DURATION, "drop_time": 30.0,
+        "end_scene": {**DEFAULT_CONFIG["end_scene"], "enabled": True, **end_scene},
+    }
+
+
+def test_end_scene_is_a_single_segment_of_the_configured_length():
+    edl = build_edl(make_analysis(), catalog(), end_cfg(beats=8), seed=42)
+    final = [e for e in edl if e.get("end_scene")]
+    assert len(final) == 1
+    assert final[0]["duration"] == pytest.approx(8 * BEAT, abs=BEAT / 2)
+    assert final[0] is edl[-1]
+
+
+def test_end_scene_carries_speed_freeze_and_ramp_slow():
+    edl = build_edl(make_analysis(), catalog(), end_cfg(speed=0.5, freeze=1.0), seed=42)
+    final = edl[-1]
+    assert final["speed"] == pytest.approx(0.5)
+    assert final["freeze"] == pytest.approx(1.0)
+    assert final["ramp_slow"] is True, "la scène de fin mérite le flux optique"
+
+
+def test_end_scene_enters_at_the_end_of_the_chosen_interval():
+    """Le climax est la conclusion du plan : on cale l'entrée sur la fin de la
+    plage, pas sur son début."""
+    edl = build_edl(make_analysis(), catalog(), end_cfg(beats=8, freeze=1.0, speed=0.5),
+                    seed=42)
+    final = edl[-1]
+    source = (final["duration"] - final["freeze"]) * final["speed"]
+    assert final["clip_in"] + source == pytest.approx(95.0, abs=0.1)
+
+
+def test_end_scene_picks_the_duel_clip():
+    edl = build_edl(make_analysis(), catalog(), end_cfg(), seed=42)
+    assert edl[-1]["clip_path"].name == "b.mp4"
+
+
+def test_disabled_end_scene_changes_nothing():
+    analysis = make_analysis()
+    off = {**DEFAULT_CONFIG, "start": 0.0, "end": DURATION, "drop_time": 30.0}
+    a = build_edl(analysis, catalog(), off, seed=42)
+    b = build_edl(analysis, catalog(),
+                  {**off, "end_scene": {**DEFAULT_CONFIG["end_scene"], "enabled": False}},
+                  seed=42)
+    assert a == b
+    assert all("end_scene" not in e for e in a)
+
+
+def test_no_scene_found_falls_back_to_a_normal_montage():
+    """Catalogue non scanné : find_final_scene rend None, le montage se termine
+    normalement au lieu de casser."""
+    raw = [{"path": Path("/clips/a.mp4"), "kind": "video", "duration": 100.0,
+            "width": 1920, "height": 1080, "ratio": 16 / 9}]
+    edl = build_edl(make_analysis(), raw, end_cfg(), seed=42)
+    assert edl
+    assert all(not e.get("end_scene") for e in edl)
+
+
+def test_end_scene_is_reproducible():
+    a = build_edl(make_analysis(), catalog(), end_cfg(), seed=7)
+    b = build_edl(make_analysis(), catalog(), end_cfg(), seed=7)
+    assert a == b

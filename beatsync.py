@@ -54,6 +54,12 @@ DEFAULT_CONFIG = {
         "min_dur": 0.25,                # s : en dessous (strobo), pas de ramp
         "interpolate": True,            # flux optique sur les segments ralentis
     },
+    "end_scene": {                      # conclusion du montage : ralenti long figé
+        "enabled": False,               # opt-in : aucun preset existant ne change
+        "beats": 8,                     # durée totale de la scène, en beats
+        "freeze": 1.0,                  # s de figé à la toute fin
+        "speed": 0.5,
+    },
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
         "mode": "llm",                  # "llm" = punchlines générées | "fixe" = texte écrit à la main
@@ -600,6 +606,30 @@ def resolve_window(analysis: dict, config: dict, start: float | None = None,
     return config
 
 
+def frame_extract(clip: dict, clip_in: float, source_needed: float,
+                  config: dict) -> tuple[float, str]:
+    """Cadrage d'un extrait : centre d'intérêt horizontal et layout, moyennés
+    sur la fenêtre consommée. Pure. Sans données de scan, on centre.
+
+    Au moins 3 échantillons (1,5 s) : un extrait d'un beat n'en couvre parfois
+    qu'un seul, trop peu pour juger dispersion et duel."""
+    if "interest_x" not in clip:
+        return 0.5, "crop"
+    dt = clip.get("scan_dt", 1.0 / SCAN_FPS)
+    i0 = int(clip_in / dt)
+    i1 = max(i0 + 3, math.ceil((clip_in + source_needed) / dt))
+    window_x = np.asarray(clip["interest_x"], dtype=float)[i0:i1]
+    if not len(window_x):
+        return 0.5, "crop"
+    focus_x = float(np.clip(window_x.mean(), 0.0, 1.0))
+    dual = np.asarray(clip.get("dual", []), dtype=bool)[i0:i1]
+    if len(dual) and float(dual.mean()) >= 0.5:
+        return focus_x, "split"   # duel : deux moitiés empilées haut/bas
+    if float(window_x.std()) >= 0.18:
+        return focus_x, "blur"    # action sur toute la largeur : fond flouté
+    return focus_x, "crop"
+
+
 def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> list[dict]:
     """Construit l'Edit Decision List. Logique pure : aucun I/O, déterministe à seed égal.
 
@@ -685,6 +715,24 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # --- Scène de fin : un seul segment sur les N derniers beats -------------
+    es_cfg = config.get("end_scene") or {}
+    end_scene, es_start = None, None
+    if es_cfg.get("enabled"):
+        scene = find_final_scene(clips)
+        if scene is not None and len(beats) >= 2:
+            beat_dur = float(np.median(np.diff(beats)))
+            raw_start = out_end - int(es_cfg.get("beats", 8)) * beat_dur
+            candidate = round(max(0.0, raw_start) * fps) / fps
+            # Une scène qui avalerait toute la fenêtre n'est plus une conclusion.
+            if candidate >= frame and candidate <= out_end - frame:
+                end_scene, es_start = scene, candidate
+                # On POSE la frontière : sans elle le segment final commencerait
+                # à la dernière coupe existante, d'une durée arbitraire.
+                boundaries = [b for b in boundaries if b[0] < es_start - 1e-9]
+                boundaries.append((es_start, -1))
+                boundaries.append((out_end, -1))
+
     def intervals_of(clip: dict) -> list[dict]:
         if "intervals" not in clip:  # pas scanné : clip entier utilisable
             return [{"start": 0.0, "end": clip["duration"], "motion": 1.0}]
@@ -715,6 +763,39 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         # Ramps : ralenti avant un impact, accéléré après. Le « gasp » historique
         # avant le drop en est un cas particulier — le drop est un impact.
         speed, ramp_slow = _ramp_decision(beat_index, end_beat, duration, impact_anchor, config)
+
+        if end_scene is not None and seg_start >= es_start - 1e-9:
+            # Conclusion : ralenti long sur le climax, figé sur la dernière
+            # image. Pas de tirage — la scène a été choisie hors du rng.
+            clip = end_scene["clip"]
+            interval = end_scene["interval"]
+            es_speed = _clamp_speed(es_cfg.get("speed", 0.5))
+            freeze = max(0.0, min(duration, float(es_cfg.get("freeze", 1.0))))
+            es_source = (duration - freeze) * es_speed
+            # Le climax est la conclusion du plan : on cale l'entrée sur sa fin.
+            clip_in = max(interval["start"], interval["end"] - es_source)
+            focus_x, layout = frame_extract(clip, clip_in, es_source, config)
+            edl.append(
+                {
+                    "timeline_start": seg_start,
+                    "duration": duration,
+                    "clip_path": clip["path"],
+                    "kind": "video",
+                    "clip_in": clip_in,
+                    "beat_index": beat_index,
+                    "section": section,
+                    "speed": es_speed,
+                    "ramp_slow": True,   # ralenti voulu : il mérite le flux optique
+                    "end_scene": True,
+                    "freeze": freeze,
+                    "effects": [],       # la scène se suffit ; pas de shake ni de glitch
+                    "focus_x": focus_x,
+                    "layout": layout,
+                    "clip_w": clip["width"],
+                    "clip_h": clip["height"],
+                }
+            )
+            continue
 
         effects: list[str] = []
         accents = config.get("accents", {})
@@ -813,21 +894,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         prev_path = clip["path"]
 
         # Cadrage : centre d'intérêt et layout, moyennés sur l'extrait choisi.
-        focus_x, layout = 0.5, "crop"
-        if "interest_x" in clip:
-            dt = clip.get("scan_dt", 1.0 / SCAN_FPS)
-            i0 = int(clip_in / dt)
-            # Au moins 3 échantillons (1,5 s) : un extrait d'un beat n'en couvre
-            # parfois qu'un seul, trop peu pour juger dispersion et duel.
-            i1 = max(i0 + 3, math.ceil((clip_in + source_needed) / dt))
-            window_x = np.asarray(clip["interest_x"], dtype=float)[i0:i1]
-            if len(window_x):
-                focus_x = float(np.clip(window_x.mean(), 0.0, 1.0))
-                dual = np.asarray(clip.get("dual", []), dtype=bool)[i0:i1]
-                if len(dual) and float(dual.mean()) >= 0.5:
-                    layout = "split"   # duel : deux moitiés empilées haut/bas
-                elif float(window_x.std()) >= 0.18:
-                    layout = "blur"    # action sur toute la largeur : plan entier sur fond flouté
+        focus_x, layout = frame_extract(clip, clip_in, source_needed, config)
 
         edl.append(
             {
