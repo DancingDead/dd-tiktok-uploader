@@ -103,24 +103,34 @@ def is_impact(beat_index: int, anchor: int, impact_beats: int) -> bool:
     return (beat_index - anchor) % impact_beats == 0
 
 
+def _ramp_decision(start_beat: int, end_beat: int, duration: float,
+                    anchor: int, config: dict) -> tuple[float, bool]:
+    """Calcule la vitesse ET si le ralenti vient de la règle de ramp (impact en
+    fin de segment) — par opposition à `clip_speed`, un réglage global de preset
+    qui peut lui aussi produire un ralenti. Cette distinction sert uniquement à
+    décider du flux optique (`minterpolate`) au rendu : coûteux, il ne doit se
+    déclencher que sur les ralentis voulus par la ramp, jamais sur clip_speed."""
+    base = _clamp_speed(config.get("clip_speed", 1.0))
+    ramp = config.get("speed_ramp") or {}
+    if not config.get("effects", {}).get("speed"):
+        return base, False
+    if duration < float(ramp.get("min_dur", 0.25)):
+        return base, False
+    impact_beats = int(ramp.get("impact_beats", 8))
+    if is_impact(end_beat, anchor, impact_beats):
+        return _clamp_speed(ramp.get("slow", 0.5)), True
+    if is_impact(start_beat, anchor, impact_beats):
+        return _clamp_speed(ramp.get("fast", 1.4)), False
+    return base, False
+
+
 def ramp_speed(start_beat: int, end_beat: int, duration: float,
                anchor: int, config: dict) -> float:
     """Vitesse d'un segment : ralenti d'anticipation s'il FINIT sur un impact,
     accéléré de relance s'il COMMENCE sur un impact, sinon `clip_speed`. Quand les
     deux s'appliquent, le ralenti gagne (l'anticipation prime). Pure, sans RNG :
     la reproductibilité ne dépend pas d'elle."""
-    base = _clamp_speed(config.get("clip_speed", 1.0))
-    ramp = config.get("speed_ramp") or {}
-    if not config.get("effects", {}).get("speed"):
-        return base
-    if duration < float(ramp.get("min_dur", 0.25)):
-        return base
-    impact_beats = int(ramp.get("impact_beats", 8))
-    if is_impact(end_beat, anchor, impact_beats):
-        return _clamp_speed(ramp.get("slow", 0.5))
-    if is_impact(start_beat, anchor, impact_beats):
-        return _clamp_speed(ramp.get("fast", 1.4))
-    return base
+    return _ramp_decision(start_beat, end_beat, duration, anchor, config)[0]
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
@@ -611,7 +621,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
 
         # Ramps : ralenti avant un impact, accéléré après. Le « gasp » historique
         # avant le drop en est un cas particulier — le drop est un impact.
-        speed = ramp_speed(beat_index, end_beat, duration, impact_anchor, config)
+        speed, ramp_slow = _ramp_decision(beat_index, end_beat, duration, impact_anchor, config)
 
         effects: list[str] = []
         accents = config.get("accents", {})
@@ -736,6 +746,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "beat_index": beat_index,
                 "section": section,
                 "speed": speed,
+                "ramp_slow": ramp_slow,
                 "effects": effects,
                 "focus_x": focus_x,
                 "layout": layout,
@@ -1107,9 +1118,12 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     speed = entry.get("speed", 1.0)
 
     pre = ""
-    if config.get("delogo") and "clip_w" in entry:
+    if config.get("delogo") and "clip_w" in entry and entry.get("kind") != "image":
         # Gomme le logo de chaîne (coin haut-gauche) AVANT recadrage : le
         # recadrage intelligent ou le fond flouté peuvent le faire entrer au champ.
+        # Réservé aux rushes vidéo : une image fixe (affiche, visuel uploadé)
+        # n'a pas de logo de chaîne à gommer, et le rectangle flouté l'abîmerait
+        # pour rien.
         cw, ch = entry["clip_w"], entry["clip_h"]
         pre += (f"delogo=x={max(1, int(cw * 0.01))}:y={max(1, int(ch * 0.02))}"
                 f":w={int(cw * 0.22)}:h={int(ch * 0.10)},")
@@ -1117,12 +1131,16 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         pre += f"setpts=(PTS-STARTPTS)/{speed:.6f},"
 
     # --- Chaîne commune post-layout (opère sur du 1080x1920) ---
-    # Flux optique sur les ralentis : minterpolate invente les images manquantes
-    # entre les images réelles. Placé ici — donc APRÈS le setpts (dans `pre`) et
-    # APRÈS le scale/crop — il travaille sur du 1080x1920 déjà cadré plutôt que
-    # sur la source, et sert les trois layouts sans duplication. Coûteux (5 à 15x
-    # le temps d'encodage du segment) : réservé aux segments ralentis, désactivable.
-    if speed < 1.0 and (config.get("speed_ramp") or {}).get("interpolate"):
+    # Flux optique sur les ralentis DE RAMP : minterpolate invente les images
+    # manquantes entre les images réelles. Placé ici — donc APRÈS le setpts (dans
+    # `pre`) et APRÈS le scale/crop — il travaille sur du 1080x1920 déjà cadré
+    # plutôt que sur la source, et sert les trois layouts sans duplication.
+    # Coûteux (5 à 15x le temps d'encodage du segment) : on le déclenche
+    # uniquement quand `build_edl` a marqué le segment `ramp_slow` (ralenti
+    # voulu par la règle de ramp), jamais sur un ralenti venant de `clip_speed`,
+    # un réglage global de preset qui n'a rien à voir avec la ramp — sinon un
+    # preset à clip_speed=0.85 rend TOUS les segments coûteux à interpoler.
+    if entry.get("ramp_slow") and (config.get("speed_ramp") or {}).get("interpolate"):
         post = [f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"]
     else:
         post = [f"fps={fps}"]

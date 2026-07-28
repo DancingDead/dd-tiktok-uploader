@@ -127,14 +127,14 @@ def test_ramps_are_active_without_a_drop():
 from beatsync import _segment_filters  # noqa: E402
 
 
-def seg(speed):
+def seg(speed, ramp_slow=False):
     return {"timeline_start": 0.0, "duration": 1.0, "clip_path": "/clips/a.mp4",
-            "clip_in": 0.0, "speed": speed, "effects": [], "layout": "crop",
-            "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080}
+            "clip_in": 0.0, "speed": speed, "ramp_slow": ramp_slow, "effects": [],
+            "layout": "crop", "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080}
 
 
 def test_slowed_segment_gets_optical_flow_interpolation():
-    joined = " ".join(_segment_filters(seg(0.5), DEFAULT_CONFIG))
+    joined = " ".join(_segment_filters(seg(0.5, ramp_slow=True), DEFAULT_CONFIG))
     assert "minterpolate=fps=30:mi_mode=mci" in joined
     # L'interpolation REMPLACE le fps= simple, elle ne s'y ajoute pas.
     assert ",fps=30," not in joined
@@ -150,12 +150,48 @@ def test_normal_and_fast_segments_keep_the_plain_fps_filter():
 def test_interpolation_can_be_disabled():
     config = {**DEFAULT_CONFIG,
               "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "interpolate": False}}
-    joined = " ".join(_segment_filters(seg(0.5), config))
+    joined = " ".join(_segment_filters(seg(0.5, ramp_slow=True), config))
     assert "minterpolate" not in joined
     assert "fps=30" in joined
 
 
 def test_interpolation_applies_to_every_layout():
     for layout in ("crop", "split", "blur"):
-        entry = {**seg(0.5), "layout": layout}
+        entry = {**seg(0.5, ramp_slow=True), "layout": layout}
         assert "minterpolate" in " ".join(_segment_filters(entry, DEFAULT_CONFIG))
+
+
+def test_global_clip_speed_slowdown_does_not_trigger_interpolation():
+    """Régression : un ralenti venant de `clip_speed` (réglage global de preset,
+    0.5 à 1.5) n'est PAS un ralenti de ramp — minterpolate ne doit pas se
+    déclencher dessus, même si la vitesse finale est < 1.0."""
+    joined = " ".join(_segment_filters(seg(0.85, ramp_slow=False), DEFAULT_CONFIG))
+    assert "minterpolate" not in joined
+    assert "fps=30" in joined
+
+
+def test_ramp_slowdown_triggers_interpolation_even_with_global_clip_speed():
+    """Un ralenti de ramp déclenche bien minterpolate, même combiné à un
+    clip_speed global qui n'est pas 1.0 (le champ `ramp_slow` est ce qui compte,
+    pas la vitesse absolue)."""
+    joined = " ".join(_segment_filters(seg(0.5, ramp_slow=True), DEFAULT_CONFIG))
+    assert "minterpolate=fps=30:mi_mode=mci" in joined
+
+
+# --- delogo exclu des images -------------------------------------------------
+
+
+def test_delogo_is_not_applied_to_image_segments():
+    """Une image fixe (affiche, visuel uploadé) n'a pas de logo de chaîne à
+    gommer : le rectangle flouté de delogo l'abîmerait pour rien."""
+    entry = {**seg(1.0), "kind": "image", "clip_w": 1920, "clip_h": 1080}
+    config = {**DEFAULT_CONFIG, "delogo": True}
+    joined = " ".join(_segment_filters(entry, config))
+    assert "delogo" not in joined
+
+
+def test_delogo_still_applies_to_video_segments():
+    entry = {**seg(1.0), "kind": "video"}
+    config = {**DEFAULT_CONFIG, "delogo": True}
+    joined = " ".join(_segment_filters(entry, config))
+    assert "delogo" in joined
