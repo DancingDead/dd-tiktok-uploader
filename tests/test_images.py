@@ -170,3 +170,69 @@ def test_video_only_catalog_is_unchanged():
     edl = build([video("a.mp4"), video("b.mp4")])
     assert all(e["kind"] == "video" for e in edl)
     assert all("kenburns" not in e["effects"] for e in edl)
+
+
+# --- Rendu ------------------------------------------------------------------
+
+from beatsync import _segment_filters, _segment_input_args, kenburns_filter  # noqa: E402
+
+
+def image_entry(**overrides):
+    return {"timeline_start": 0.0, "duration": 0.5, "clip_path": Path("/clips/b.png"),
+            "kind": "image", "clip_in": 0.0, "speed": 1.0,
+            "effects": ["kenburns"], "kenburns": {"zoom_dir": 1, "pan_dir": 1},
+            "focus_x": 0.5, "layout": "crop", "clip_w": 1920, "clip_h": 1080,
+            **overrides}
+
+
+def video_entry(**overrides):
+    return {"timeline_start": 0.0, "duration": 0.5, "clip_path": Path("/clips/a.mp4"),
+            "kind": "video", "clip_in": 12.0, "speed": 1.0, "effects": [],
+            "focus_x": 0.5, "layout": "crop", "clip_w": 1920, "clip_h": 1080,
+            **overrides}
+
+
+def test_image_input_is_looped_without_seek():
+    args = _segment_input_args(image_entry())
+    assert args[:2] == ["-loop", "1"]
+    assert "-ss" not in args
+    assert args[-2:] == ["-i", "/clips/b.png"]
+
+
+def test_video_input_seeks_before_the_input():
+    args = _segment_input_args(video_entry())
+    assert args[0] == "-ss" and args[1].startswith("12.0")
+    assert "-loop" not in args
+
+
+def test_video_input_accounts_for_speed():
+    """Un segment accéléré consomme plus de source : duration x speed."""
+    args = _segment_input_args(video_entry(duration=2.0, speed=1.4))
+    assert float(args[3]) == pytest.approx(2.0 * 1.4 + 0.5)
+
+
+def test_kenburns_zoom_direction_changes_the_expression():
+    zoom_in = kenburns_filter(image_entry(kenburns={"zoom_dir": 1, "pan_dir": 1}),
+                              DEFAULT_CONFIG)
+    zoom_out = kenburns_filter(image_entry(kenburns={"zoom_dir": -1, "pan_dir": 1}),
+                               DEFAULT_CONFIG)
+    assert zoom_in.startswith("zoompan=") and zoom_out.startswith("zoompan=")
+    assert zoom_in != zoom_out
+
+
+def test_kenburns_pan_direction_changes_the_expression():
+    left = kenburns_filter(image_entry(kenburns={"zoom_dir": 1, "pan_dir": -1}),
+                           DEFAULT_CONFIG)
+    right = kenburns_filter(image_entry(kenburns={"zoom_dir": 1, "pan_dir": 1}),
+                            DEFAULT_CONFIG)
+    assert left != right
+
+
+def test_segment_filters_apply_kenburns_to_an_image():
+    joined = " ".join(_segment_filters(image_entry(), DEFAULT_CONFIG))
+    assert "zoompan=" in joined
+
+
+def test_segment_filters_leave_videos_untouched():
+    joined = " ".join(_segment_filters(video_entry(), DEFAULT_CONFIG))
+    assert "zoompan=" not in joined

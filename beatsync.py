@@ -1055,6 +1055,31 @@ def glitch_amount(accents: dict) -> float:
         return 0.0
 
 
+def _segment_input_args(entry: dict) -> list[str]:
+    """Arguments d'entrée FFmpeg d'un segment. Une image est bouclée (`-loop 1`)
+    et n'a pas de point d'entrée ; une vidéo est seekée AVANT `-i` (seek rapide).
+    Le rab de 0,5 s absorbe l'imprécision du seek : `-frames:v` coupe pile."""
+    source_needed = entry["duration"] * entry.get("speed", 1.0)
+    path = str(entry["clip_path"])
+    if entry.get("kind") == "image":
+        return ["-loop", "1", "-t", f"{source_needed + 0.5:.6f}", "-i", path]
+    return ["-ss", f"{entry['clip_in']:.6f}", "-t", f"{source_needed + 0.5:.6f}",
+            "-i", path]
+
+
+def kenburns_filter(entry: dict, config: dict) -> str:
+    """Zoom + pan lents sur une image fixe, pour qu'elle ne soit jamais figée.
+    Les sens sont tirés à la seed dans build_edl : le filtre est déterministe."""
+    width, height, fps = config["width"], config["height"], config["fps"]
+    kb = entry.get("kenburns") or {}
+    n = max(1, round(entry["duration"] * fps))
+    z = f"1.02+0.10*on/{n}" if kb.get("zoom_dir", 1) > 0 else f"1.12-0.10*on/{n}"
+    pan = 1 if kb.get("pan_dir", 1) > 0 else -1
+    x = f"iw/2-(iw/zoom/2)+{pan}*(on/{n})*iw*0.04"
+    return (f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={width}x{height}:fps={fps}")
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
@@ -1086,6 +1111,8 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         post = [f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"]
     else:
         post = [f"fps={fps}"]
+    if "kenburns" in effects:
+        post.append(kenburns_filter(entry, config))
     if "zoom" in effects:
         post.append(
             "zoompan=z='1+0.10*max(0,1-on/6)'"
@@ -1172,12 +1199,9 @@ def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -
             # accumulerait la dérive. tpad clone la dernière frame au besoin,
             # -frames:v coupe pile au bon compte.
             n_frames = round(entry["duration"] * fps)
-            source_needed = entry["duration"] * entry.get("speed", 1.0)
             _run_ffmpeg(
                 [
-                    "-ss", f"{entry['clip_in']:.6f}",  # avant -i : seek rapide
-                    "-t", f"{source_needed + 0.5:.6f}",
-                    "-i", str(entry["clip_path"]),
+                    *_segment_input_args(entry),
                     *_segment_filters(entry, config),
                     "-frames:v", str(n_frames),
                     "-an",
