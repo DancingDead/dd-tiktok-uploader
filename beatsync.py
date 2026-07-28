@@ -18,6 +18,11 @@ import numpy as np
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+# Plafond de durée d'une image au montage : au-delà, un fixe casse le rythme.
+# Constante de module, pas un réglage : le catalogue d'images ne s'expose pas.
+IMAGE_MAX_DUR = 0.6
+
 DEFAULT_CONFIG = {
     "width": 1080,
     "height": 1920,
@@ -41,8 +46,20 @@ DEFAULT_CONFIG = {
     "color_grade": "neutre",            # ambiance couleur : neutre|chaud|froid|delave
     "grain": 0.0,                       # texture film/VHS, 0.0–1.0
     "clip_speed": 1.0,                  # slow-mo global par segment, 0.5–1.5
+    "speed_ramp": {                     # ramps calés sur les beats (interrupteur : effects.speed)
+        "slow": 0.5,                    # segment d'anticipation (finit sur un impact), 0.5–1.0
+        "fast": 1.4,                    # segment de relance (commence sur un impact), 1.0–1.5
+        "impact_beats": 8,              # périodicité des impacts en beats ; 0 = pas de ramps
+        "min_dur": 0.25,                # s : en dessous (strobo), pas de ramp
+        "interpolate": True,            # flux optique sur les segments ralentis
+    },
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
+        "mode": "llm",                  # "llm" = punchlines générées | "fixe" = texte écrit à la main
+        "text": "",                     # mode fixe : caption unique, du début à la fin
+        "x": 0.5,                       # ancrage horizontal, fraction de largeur (texte centré dessus)
+        "y": 0.74,                      # ancrage vertical, fraction de hauteur
+        "size": 64,                     # taille de police, px
         "preprompt": "",                # consigne de style (ex. « punchlines motivation gym »)
         "min_dur": 1.4,                 # durée min. d'affichage d'une punchline (lisibilité)
         "model": "claude-opus-4-8",     # modèle de génération
@@ -70,6 +87,50 @@ def merge_settings(base: dict, overrides: dict) -> dict:
         else:
             merged[key] = dict(value) if isinstance(value, dict) else value
     return merged
+
+
+def _clamp_speed(value: float) -> float:
+    """Borne moteur du slow-mo/accéléré. Défensif : l'UI n'impose pas de borne."""
+    return max(0.5, min(1.5, float(value)))
+
+
+def is_impact(beat_index: int, anchor: int, impact_beats: int) -> bool:
+    """Un « impact » est un beat qui porte le motif de vitesse : l'ancre (le drop
+    quand il existe) et tous les beats espacés d'un multiple d'`impact_beats`,
+    avant comme après. `beat_index` négatif = borne de fenêtre, jamais un impact."""
+    if beat_index < 0 or impact_beats <= 0:
+        return False
+    return (beat_index - anchor) % impact_beats == 0
+
+
+def _ramp_decision(start_beat: int, end_beat: int, duration: float,
+                    anchor: int, config: dict) -> tuple[float, bool]:
+    """Calcule la vitesse ET si le ralenti vient de la règle de ramp (impact en
+    fin de segment) — par opposition à `clip_speed`, un réglage global de preset
+    qui peut lui aussi produire un ralenti. Cette distinction sert uniquement à
+    décider du flux optique (`minterpolate`) au rendu : coûteux, il ne doit se
+    déclencher que sur les ralentis voulus par la ramp, jamais sur clip_speed."""
+    base = _clamp_speed(config.get("clip_speed", 1.0))
+    ramp = config.get("speed_ramp") or {}
+    if not config.get("effects", {}).get("speed"):
+        return base, False
+    if duration < float(ramp.get("min_dur", 0.25)):
+        return base, False
+    impact_beats = int(ramp.get("impact_beats", 8))
+    if is_impact(end_beat, anchor, impact_beats):
+        return _clamp_speed(ramp.get("slow", 0.5)), True
+    if is_impact(start_beat, anchor, impact_beats):
+        return _clamp_speed(ramp.get("fast", 1.4)), False
+    return base, False
+
+
+def ramp_speed(start_beat: int, end_beat: int, duration: float,
+               anchor: int, config: dict) -> float:
+    """Vitesse d'un segment : ralenti d'anticipation s'il FINIT sur un impact,
+    accéléré de relance s'il COMMENCE sur un impact, sinon `clip_speed`. Quand les
+    deux s'appliquent, le ralenti gagne (l'anticipation prime). Pure, sans RNG :
+    la reproductibilité ne dépend pas d'elle."""
+    return _ramp_decision(start_beat, end_beat, duration, anchor, config)[0]
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
@@ -101,10 +162,15 @@ def analyze_audio(track_path: Path) -> dict:
 
 
 def load_clips(folder: Path) -> list[dict]:
-    """Métadonnées des clips vidéo du dossier, triés par nom (déterminisme)."""
+    """Métadonnées des clips vidéo et images du dossier, triés par nom (déterminisme)."""
     clips = []
     for path in sorted(Path(folder).iterdir()):
-        if path.suffix.lower() not in VIDEO_EXTENSIONS:
+        suffix = path.suffix.lower()
+        if suffix in IMAGE_EXTENSIONS:
+            kind = "image"
+        elif suffix in VIDEO_EXTENSIONS:
+            kind = "video"
+        else:
             continue
         probe = subprocess.run(
             [
@@ -120,14 +186,20 @@ def load_clips(folder: Path) -> list[dict]:
         clips.append(
             {
                 "path": path,
-                "duration": float(info["format"]["duration"]),
+                "kind": kind,
+                # Une image n'a pas de durée : ffprobe n'en donne pas et le
+                # montage la boucle sur la durée du segment.
+                "duration": None if kind == "image" else float(info["format"]["duration"]),
                 "width": width,
                 "height": height,
                 "ratio": width / height,
             }
         )
     if not clips:
-        raise ValueError(f"aucun clip vidéo ({', '.join(sorted(VIDEO_EXTENSIONS))}) dans {folder}")
+        raise ValueError(
+            f"aucun clip ni image ({', '.join(sorted(VIDEO_EXTENSIONS | IMAGE_EXTENSIONS))}) "
+            f"dans {folder}"
+        )
     return clips
 
 
@@ -295,6 +367,8 @@ def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
     Avec cache par fichier (clé md5 du chemin, invalidé par mtime) quand
     cache_dir est fourni — on ne re-décode pas 30 clips à chaque génération."""
     for clip in clips:
+        if clip.get("kind") == "image":
+            continue  # rien à décoder ; sans clé `intervals` l'image est utilisable en entier
         cache_path = None
         if cache_dir is not None:
             digest = hashlib.md5(str(clip["path"]).encode()).hexdigest()
@@ -513,17 +587,31 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # Ancre des impacts : le drop quand il existe, sinon le premier beat de la
+    # fenêtre (mode calme) — le motif de vitesse reste actif dans les deux cas.
+    impact_anchor = drop_idx if drop_idx is not None else (
+        int(in_window[0]) if len(in_window) else 0)
+
     def intervals_of(clip: dict) -> list[dict]:
         if "intervals" not in clip:  # pas scanné : clip entier utilisable
             return [{"start": 0.0, "end": clip["duration"], "motion": 1.0}]
         return clip["intervals"]  # scanné ([] = rien d'exploitable, clip exclu)
+
+    # Vidéos et images vivent dans le même catalogue mais ne se montent pas
+    # pareil : une image n'a pas de plage exploitable, elle n'a qu'un plafond
+    # de durée et un écart minimum entre deux apparitions.
+    video_clips = [c for c in clips if c.get("kind", "video") != "image"]
+    image_clips = [c for c in clips if c.get("kind") == "image"]
+    IMAGE_MIN_GAP = 3          # segments entre deux images (anti-diaporama)
+    last_image_seg = -IMAGE_MIN_GAP
 
     # --- Attribution des clips : tirage seedé dans les plages exploitables ---
     edl: list[dict] = []
     prev_path = None
     drop_seg_count = 0
     last_clip_in: dict = {}  # par clip : dernier point d'entrée (mode chrono)
-    for (seg_start, beat_index), (seg_end, _) in zip(boundaries, boundaries[1:]):
+    for seg_index, ((seg_start, beat_index), (seg_end, end_beat)) in enumerate(
+            zip(boundaries, boundaries[1:])):
         duration = seg_end - seg_start
         tier = tier_at(beat_index if beat_index >= 0 else (int(in_window[0]) if len(in_window) else 0))
         if drop_out is None:
@@ -531,12 +619,9 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         else:
             section = "buildup" if seg_start < drop_out - 1e-9 else "drop"
 
-        # Gasp : slow-mo x0.5 sur le dernier segment avant l'impact du drop.
-        # Défensif : clampe l'entrée à [0.5, 1.5] (l'UI n'impose pas de borne).
-        speed = max(0.5, min(1.5, config.get("clip_speed", 1.0)))
-        if effects_cfg.get("speed") and drop_out is not None and section == "buildup" \
-                and abs(seg_end - drop_out) < 1e-9:
-            speed = 0.5
+        # Ramps : ralenti avant un impact, accéléré après. Le « gasp » historique
+        # avant le drop en est un cas particulier — le drop est un impact.
+        speed, ramp_slow = _ramp_decision(beat_index, end_beat, duration, impact_anchor, config)
 
         effects: list[str] = []
         accents = config.get("accents", {})
@@ -560,16 +645,49 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
 
         source_needed = duration * speed
         usable = [
-            c for c in clips
+            c for c in video_clips
             if any(iv["end"] - iv["start"] >= source_needed for iv in intervals_of(c))
         ]
+        if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
+                and seg_index - last_image_seg >= IMAGE_MIN_GAP:
+            usable = usable + image_clips
         if not usable:
             raise ValueError(
                 f"aucun clip n'a de plage exploitable de {source_needed:.2f}s "
-                "(clips trop courts, ou trop de zones écartées par le scan)"
+                "(clips trop courts, trop de zones écartées par le scan, ou "
+                "catalogue composé uniquement d'images — une image ne peut tenir "
+                f"qu'un segment de {IMAGE_MAX_DUR:.2f}s au plus)"
             )
         pool = [c for c in usable if c["path"] != prev_path] or usable
         clip = rng.choice(pool)
+
+        if clip.get("kind") == "image":
+            # Flash court : pas de plage à choisir, pas de ralenti sur un fixe.
+            # Le Ken Burns (sens tirés à la seed) évite l'image figée ; le zoom
+            # ordinaire serait redondant avec lui.
+            last_image_seg = seg_index
+            prev_path = clip["path"]
+            edl.append(
+                {
+                    "timeline_start": seg_start,
+                    "duration": duration,
+                    "clip_path": clip["path"],
+                    "kind": "image",
+                    "clip_in": 0.0,
+                    "beat_index": beat_index,
+                    "section": section,
+                    "speed": 1.0,
+                    "effects": [e for e in effects if e != "zoom"] + ["kenburns"],
+                    "kenburns": {"zoom_dir": rng.choice([1, -1]),
+                                 "pan_dir": rng.choice([1, -1])},
+                    # Le scan n'a pas tourné : layout déduit du seul ratio.
+                    "focus_x": 0.5,
+                    "layout": "blur" if clip["ratio"] >= 1.2 else "crop",
+                    "clip_w": clip["width"],
+                    "clip_h": clip["height"],
+                }
+            )
+            continue
 
         candidates = [iv for iv in intervals_of(clip) if iv["end"] - iv["start"] >= source_needed]
         # Personnages à l'écran : écarte les plages quasi vides (fallback si toutes le sont).
@@ -623,10 +741,12 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "timeline_start": seg_start,
                 "duration": duration,
                 "clip_path": clip["path"],
+                "kind": "video",
                 "clip_in": clip_in,
                 "beat_index": beat_index,
                 "section": section,
                 "speed": speed,
+                "ramp_slow": ramp_slow,
                 "effects": effects,
                 "focus_x": focus_x,
                 "layout": layout,
@@ -681,6 +801,10 @@ def _drawtext_escape(text: str) -> str:
     out = text.replace("\\", "\\\\")
     for ch in (":", "'", "%", ",", ";", "[", "]"):
         out = out.replace(ch, "\\" + ch)
+    # Un retour à la ligne réel casse le parseur de filtergraph ; drawtext
+    # interprète la séquence \n comme un saut de ligne. Fait en dernier : le
+    # doublement des antislashs ci-dessus ne doit pas s'y appliquer.
+    out = out.replace("\r\n", "\n").replace("\n", "\\n")
     return out
 
 
@@ -870,6 +994,12 @@ def apply_subtitles(edl: list[dict], config: dict, seed: int,
     sub = config.get("subtitles") or {}
     if not sub.get("enabled"):
         return edl
+    if sub.get("mode") == "fixe":
+        # Caption unique écrite à la main : ni créneaux, ni LLM, ni cache.
+        text = sub.get("text", "")
+        for entry in edl:
+            entry["caption"] = text
+        return edl
     n = assign_caption_slots(edl, float(sub.get("min_dur", 1.4)))
     lines = generate_punchlines(sub.get("preprompt", ""), n, seed, cache_dir,
                                 sub.get("model", "claude-opus-4-8"))
@@ -951,6 +1081,31 @@ def glitch_amount(accents: dict) -> float:
         return 0.0
 
 
+def _segment_input_args(entry: dict) -> list[str]:
+    """Arguments d'entrée FFmpeg d'un segment. Une image est bouclée (`-loop 1`)
+    et n'a pas de point d'entrée ; une vidéo est seekée AVANT `-i` (seek rapide).
+    Le rab de 0,5 s absorbe l'imprécision du seek : `-frames:v` coupe pile."""
+    source_needed = entry["duration"] * entry.get("speed", 1.0)
+    path = str(entry["clip_path"])
+    if entry.get("kind") == "image":
+        return ["-loop", "1", "-t", f"{source_needed + 0.5:.6f}", "-i", path]
+    return ["-ss", f"{entry['clip_in']:.6f}", "-t", f"{source_needed + 0.5:.6f}",
+            "-i", path]
+
+
+def kenburns_filter(entry: dict, config: dict) -> str:
+    """Zoom + pan lents sur une image fixe, pour qu'elle ne soit jamais figée.
+    Les sens sont tirés à la seed dans build_edl : le filtre est déterministe."""
+    width, height, fps = config["width"], config["height"], config["fps"]
+    kb = entry.get("kenburns") or {}
+    n = max(1, round(entry["duration"] * fps))
+    z = f"1.02+0.10*on/{n}" if kb.get("zoom_dir", 1) > 0 else f"1.12-0.10*on/{n}"
+    pan = 1 if kb.get("pan_dir", 1) > 0 else -1
+    x = f"iw/2-(iw/zoom/2)+{pan}*(on/{n})*iw*0.04"
+    return (f"zoompan=z='{z}':x='{x}':y='ih/2-(ih/zoom/2)'"
+            f":d=1:s={width}x{height}:fps={fps}")
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
@@ -963,9 +1118,12 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     speed = entry.get("speed", 1.0)
 
     pre = ""
-    if config.get("delogo") and "clip_w" in entry:
+    if config.get("delogo") and "clip_w" in entry and entry.get("kind") != "image":
         # Gomme le logo de chaîne (coin haut-gauche) AVANT recadrage : le
         # recadrage intelligent ou le fond flouté peuvent le faire entrer au champ.
+        # Réservé aux rushes vidéo : une image fixe (affiche, visuel uploadé)
+        # n'a pas de logo de chaîne à gommer, et le rectangle flouté l'abîmerait
+        # pour rien.
         cw, ch = entry["clip_w"], entry["clip_h"]
         pre += (f"delogo=x={max(1, int(cw * 0.01))}:y={max(1, int(ch * 0.02))}"
                 f":w={int(cw * 0.22)}:h={int(ch * 0.10)},")
@@ -973,7 +1131,21 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
         pre += f"setpts=(PTS-STARTPTS)/{speed:.6f},"
 
     # --- Chaîne commune post-layout (opère sur du 1080x1920) ---
-    post = [f"fps={fps}"]
+    # Flux optique sur les ralentis DE RAMP : minterpolate invente les images
+    # manquantes entre les images réelles. Placé ici — donc APRÈS le setpts (dans
+    # `pre`) et APRÈS le scale/crop — il travaille sur du 1080x1920 déjà cadré
+    # plutôt que sur la source, et sert les trois layouts sans duplication.
+    # Coûteux (5 à 15x le temps d'encodage du segment) : on le déclenche
+    # uniquement quand `build_edl` a marqué le segment `ramp_slow` (ralenti
+    # voulu par la règle de ramp), jamais sur un ralenti venant de `clip_speed`,
+    # un réglage global de preset qui n'a rien à voir avec la ramp — sinon un
+    # preset à clip_speed=0.85 rend TOUS les segments coûteux à interpoler.
+    if entry.get("ramp_slow") and (config.get("speed_ramp") or {}).get("interpolate"):
+        post = [f"minterpolate=fps={fps}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1"]
+    else:
+        post = [f"fps={fps}"]
+    if "kenburns" in effects:
+        post.append(kenburns_filter(entry, config))
     if "zoom" in effects:
         post.append(
             "zoompan=z='1+0.10*max(0,1-on/6)'"
@@ -991,14 +1163,30 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     grain = grain_filter(config.get("grain", 0.0))
     if grain:
         post.append(grain)
-    # Punchline incrustée (après les accents pour rester nette), bas-centrée
+    # Punchline incrustée (après les accents pour rester nette). Position et
+    # taille réglables : le texte est centré sur le point d'ancrage (x, y),
+    # exprimé en fraction d'écran. Vaut pour les deux modes, généré et fixe.
     cap = entry.get("caption")
-    font = resolve_caption_font(config.get("subtitles", {}).get("font", "impact"))
+    subs = config.get("subtitles", {})
+    font = resolve_caption_font(subs.get("font", "impact"))
     if cap and font:
+        # Dernière ligne de défense avant le rendu : une valeur absente, `None`
+        # ou non convertible (ex. formulaire vidé, JSON malformé) retombe sur
+        # le défaut au lieu de faire planter le rendu — même principe que
+        # generate_punchlines qui dégrade en `[]` plutôt que de bloquer l'usine.
+        def _coerce(value, cast, default):
+            try:
+                return cast(value)
+            except (TypeError, ValueError):
+                return default
+
+        cap_x = max(0.0, min(1.0, _coerce(subs.get("x", 0.5), float, 0.5)))
+        cap_y = max(0.0, min(1.0, _coerce(subs.get("y", 0.74), float, 0.74)))
+        cap_size = max(8, _coerce(subs.get("size", 64), int, 64))
         post.append(
             f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
-            ":fontsize=64:fontcolor=white:borderw=5:bordercolor=black@0.9"
-            ":x=(w-text_w)/2:y=h*0.70"
+            f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"
+            f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
         )
     post.append("setsar=1,format=yuv420p")
     post.append("tpad=stop_mode=clone:stop_duration=1")
@@ -1060,12 +1248,9 @@ def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -
             # accumulerait la dérive. tpad clone la dernière frame au besoin,
             # -frames:v coupe pile au bon compte.
             n_frames = round(entry["duration"] * fps)
-            source_needed = entry["duration"] * entry.get("speed", 1.0)
             _run_ffmpeg(
                 [
-                    "-ss", f"{entry['clip_in']:.6f}",  # avant -i : seek rapide
-                    "-t", f"{source_needed + 0.5:.6f}",
-                    "-i", str(entry["clip_path"]),
+                    *_segment_input_args(entry),
                     *_segment_filters(entry, config),
                     "-frames:v", str(n_frames),
                     "-an",

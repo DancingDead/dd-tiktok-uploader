@@ -48,6 +48,8 @@ ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
     ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".aiff": "audio/aiff",
     ".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png", ".webp": "image/webp",
 }
 ALLOWED_SECTIONS = ("drop", "calm")
 
@@ -73,6 +75,28 @@ def coerce_overrides(overrides: dict) -> dict:
         accents = dict(accents)
         accents["glitch"] = float(accents["glitch"])
         coerced["accents"] = accents
+    return coerced
+
+
+ALLOWED_SUBTITLE_MODES = {"llm", "fixe"}
+SUBTITLE_RANGES = {"x": (0.0, 1.0), "y": (0.0, 1.0), "size": (8, 200)}
+
+
+def coerce_subtitles(subtitles: dict) -> dict:
+    """Force et borne les champs de placement du texte. Le bloc `subtitles` de la
+    niche est un blob JSON écrit tel quel : une valeur non numérique ne casserait
+    qu'au rendu FFmpeg, loin de la saisie. ValueError si non convertible."""
+    coerced = dict(subtitles)
+    for key, (lo, hi) in SUBTITLE_RANGES.items():
+        if key in coerced:
+            value = coerced[key]
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                value = float(value)
+            coerced[key] = max(lo, min(hi, value))
+    if "size" in coerced:
+        coerced["size"] = int(coerced["size"])
+    if "mode" in coerced and coerced["mode"] not in ALLOWED_SUBTITLE_MODES:
+        raise ValueError(f"mode de sous-titres inconnu : {coerced['mode']!r}")
     return coerced
 
 
@@ -189,6 +213,9 @@ def create_app(root: Path | None = None):
     app.add_url_rule("/<path:path>", "spa", serve_spa)
 
     VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+    # Le catalogue « clips » contient les deux : une image se monte en flash court.
+    CLIP_EXTS = VIDEO_EXTS | IMAGE_EXTS
 
     @app.get("/api/state")
     def state():
@@ -209,7 +236,7 @@ def create_app(root: Path | None = None):
             (
                 {"name": p.name, "size_mb": round(p.stat().st_size / 1e6, 1)}
                 for p in clips_dir.glob("*")
-                if p.suffix.lower() in VIDEO_EXTS
+                if p.suffix.lower() in CLIP_EXTS
             ),
             key=lambda c: c["name"],
         ) if clips_dir.is_dir() else []
@@ -298,7 +325,7 @@ def create_app(root: Path | None = None):
     def upload_clip():
         file = request.files["file"]
         name = Path(file.filename).name  # pas de traversée de chemin
-        if Path(name).suffix.lower() not in VIDEO_EXTS:
+        if Path(name).suffix.lower() not in CLIP_EXTS:
             return jsonify({"error": f"format non supporté : {name}"}), 400
         paths["clips"].mkdir(exist_ok=True)
         file.save(paths["clips"] / name)
@@ -336,7 +363,7 @@ def create_app(root: Path | None = None):
 
     @app.delete("/api/clips/<path:name>")
     def delete_clip_ep(name):
-        return _delete_asset("clips", "clips/", VIDEO_EXTS, name)
+        return _delete_asset("clips", "clips/", CLIP_EXTS, name)
 
     def _serve_asset(dir_key, exts, name):
         """Sert un fichier du catalogue partagé pour aperçu (écoute/visionnage).
@@ -360,7 +387,7 @@ def create_app(root: Path | None = None):
 
     @app.get("/api/clips/<path:name>")
     def serve_clip_ep(name):
-        return _serve_asset("clips", VIDEO_EXTS, name)
+        return _serve_asset("clips", CLIP_EXTS, name)
 
     @app.post("/api/clip-links")
     def save_clip_links():
@@ -492,6 +519,9 @@ def create_app(root: Path | None = None):
         data = request.json or {}
         conn = get_conn()
         try:
+            subtitles = data.get("subtitles", {})
+            if isinstance(subtitles, dict):
+                subtitles = coerce_subtitles(subtitles)
             nid = dbmod.create_niche(
                 conn, paths["data"], data["name"],
                 owner=data.get("owner", session["member"]),
@@ -499,7 +529,7 @@ def create_app(root: Path | None = None):
                 caption_template=data.get("caption_template", "{title}"),
                 hashtags=data.get("hashtags", []),
                 preset_ids=data.get("preset_ids", []),
-                subtitles=data.get("subtitles", {}))
+                subtitles=subtitles)
         except Exception as exc:
             return jsonify({"error": str(exc)}), 400
         finally:
@@ -508,9 +538,12 @@ def create_app(root: Path | None = None):
 
     @app.patch("/api/niches/<int:niche_id>")
     def update_niche_ep(niche_id):
+        fields = dict(request.json or {})
         conn = get_conn()
         try:
-            dbmod.update_niche(conn, niche_id, **(request.json or {}))
+            if isinstance(fields.get("subtitles"), dict):
+                fields["subtitles"] = coerce_subtitles(fields["subtitles"])
+            dbmod.update_niche(conn, niche_id, **fields)
         except (TypeError, ValueError) as exc:
             return jsonify({"error": f"champ invalide : {exc}"}), 400
         finally:

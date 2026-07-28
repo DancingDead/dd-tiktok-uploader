@@ -5,7 +5,16 @@
 export type Asset = { name: string; size_mb: number }
 export type Job = { name: string; status: "running" | "done" | "failed"; log: string[] }
 
-export type Subtitles = { enabled?: boolean; preprompt?: string; lines?: string[] }
+export type Subtitles = {
+  enabled?: boolean
+  mode?: "llm" | "fixe"
+  preprompt?: string
+  text?: string
+  x?: number
+  y?: number
+  size?: number
+  lines?: string[]
+}
 
 export type Video = {
   id: number

@@ -93,7 +93,14 @@ def main() -> None:
             file=str(out.relative_to(root)),
             preset_id=(preset["id"] if preset else None),
             caption=niche["caption_template"],
-            subtitles={"lines": info["captions"]},
+            # `info["captions"]` reflète fidèlement ce que la vidéo porte :
+            # rempli par apply_subtitles dès que les sous-titres sont activés
+            # (mode généré OU fixe), vide s'ils sont désactivés. Pas de repli à
+            # ajouter ici — un repli sur le texte fixe se déclenchait justement
+            # quand `enabled` est False (l'UI garde la valeur en state même
+            # champ masqué) et écrivait une caption sur une vidéo qui n'en porte
+            # aucune.
+            subtitles={"lines": info["captions"] or []},
             created_at=datetime.now().isoformat(timespec="seconds"))
         produced += 1
     # Compte réel (≠ tentées) : un échec par variante était silencieux, la sortie

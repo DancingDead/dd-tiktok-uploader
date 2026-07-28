@@ -22,6 +22,13 @@ type Props = {
 
 const basename = (path: string) => path.replace(/^[^/]+\//, "")
 
+// Extensions d'image du catalogue clips/ (cf. CLIP_EXTS côté webui.py) : sert
+// à choisir entre <img> et <video> pour l'aperçu, faute d'info de type dans
+// l'objet Asset lui-même.
+const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"]
+const isImagePath = (path: string) =>
+  IMAGE_EXTENSIONS.some((ext) => path.toLowerCase().endsWith(ext))
+
 // Une ligne d'asset : nom + aperçu à la demande (on ne charge le média qu'au
 // clic, sinon lister 100 clips déclencherait 100 requêtes) + une action.
 function AssetRow({
@@ -47,6 +54,7 @@ function AssetRow({
 }) {
   const [open, setOpen] = useState(false)
   const url = api.assetUrl(assetRef)
+  const isImage = kind === "video" && isImagePath(assetRef)
   return (
     <li className="flex flex-col gap-2 rounded-md border bg-card px-3 py-2 text-sm">
       <div className="flex items-center gap-2">
@@ -65,6 +73,8 @@ function AssetRow({
       {open &&
         (kind === "audio" ? (
           <audio src={url} controls autoPlay preload="none" className="h-9 w-full" />
+        ) : isImage ? (
+          <img src={url} alt={label} className="max-h-48 w-full rounded bg-black object-contain" />
         ) : (
           <video
             src={url}

@@ -1,6 +1,8 @@
 """Tests des helpers purs de generate_niche : plan de variantes, nom de fichier."""
 
-from generate_niche import plan_variants, video_stem
+from pathlib import Path
+
+from generate_niche import main, plan_variants, video_stem
 
 
 def test_plan_variants_deterministic_and_distinct_seeds():
@@ -29,3 +31,44 @@ def test_video_stem_filesystem_safe():
     assert "/" not in stem and " " not in stem
     assert stem.endswith("_s123")
     assert "naruto-edits" in stem
+
+
+# --- Régression : pas de repli sur le texte fixe quand les sous-titres sont
+# désactivés (finding #3 de la revue finale) -------------------------------
+
+
+def test_disabled_fixed_subtitles_do_not_leak_into_video_captions(tmp_path, monkeypatch):
+    """Sous-titres désactivés (`enabled: False`) mais mode « fixe » + texte
+    encore en state (l'UI masque le champ sans le vider) : la vidéo enregistrée
+    ne doit porter AUCUNE caption, pas le texte fixe fantôme."""
+    import beatsync
+    import db as dbmod
+
+    root = tmp_path
+    (root / "clips").mkdir()
+    (root / "clips" / "c.mp4").write_bytes(b"x")
+
+    conn = dbmod.connect(root / "platform.db")
+    dbmod.add_member(conn, "theo", "s3cret")
+    niche_id = dbmod.create_niche(
+        conn, root / "data", "N", owner="theo", cadence=1,
+        tracks=["tracks/s.mp3"], clips=["clips/c.mp4"],
+        subtitles={"enabled": False, "mode": "fixe", "text": "LIEN EN BIO"})
+    conn.close()
+
+    dummy_clip = {"path": Path(root / "clips" / "c.mp4"), "kind": "video",
+                  "duration": 30.0, "width": 1920, "height": 1080, "ratio": 16 / 9}
+    monkeypatch.setattr(beatsync, "load_clips", lambda folder: [dummy_clip])
+    monkeypatch.setattr(beatsync, "scan_clips", lambda clips, cache_dir=None: None)
+    monkeypatch.setattr(
+        beatsync, "generate_video",
+        lambda *a, **k: {"captions": []})  # subtitles désactivées → apply_subtitles ne pose rien
+
+    monkeypatch.setattr("sys.argv", ["generate_niche.py", str(niche_id), "1", str(root)])
+    main()
+
+    conn = dbmod.connect(root / "platform.db")
+    videos = dbmod.list_videos(conn, niche_id=niche_id)
+    conn.close()
+    assert len(videos) == 1
+    assert videos[0]["subtitles"]["lines"] == []

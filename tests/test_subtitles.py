@@ -200,6 +200,60 @@ def test_caption_special_chars_escaped():
     assert "\\:" in vf or "\\\\:" in vf
 
 
+def caption_entry():
+    return {"timeline_start": 0.0, "duration": 1.0, "clip_path": "/clips/a.mp4",
+            "clip_in": 0.0, "speed": 1.0, "effects": [], "layout": "crop",
+            "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080, "caption": "TEST"}
+
+
+def test_caption_placement_comes_from_the_config():
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "x": 0.25, "y": 0.10, "size": 96}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=96" in joined
+    assert "x=w*0.2500-text_w/2" in joined
+    assert "y=h*0.1000-text_h/2" in joined
+
+
+def test_caption_defaults_keep_the_historical_placement():
+    joined = " ".join(_segment_filters(caption_entry(), DEFAULT))
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
+
+
+def test_generated_punchlines_use_the_same_placement_path():
+    """Un seul chemin de code : le mode LLM hérite du réglage de placement."""
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"], "mode": "llm", "size": 40}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=40" in joined
+
+
+def test_no_caption_means_no_drawtext():
+    entry = caption_entry()
+    del entry["caption"]
+    assert "drawtext" not in " ".join(_segment_filters(entry, DEFAULT))
+
+
+def test_caption_placement_degrades_to_defaults_on_none_values():
+    """`None` (ex. champ de formulaire vidé) ne doit pas faire planter le
+    rendu : dégradation sur le défaut, comme generate_punchlines -> []."""
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "x": None, "y": None, "size": None}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
+    assert "y=h*0.7400-text_h/2" in joined
+
+
+def test_caption_placement_degrades_to_defaults_on_unparsable_strings():
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "x": "gauche", "y": "haut", "size": "96.5"}}
+    joined = " ".join(_segment_filters(caption_entry(), config))
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
+    assert "y=h*0.7400-text_h/2" in joined
+
+
 # --- Polices embarquées ------------------------------------------------------
 
 
@@ -235,3 +289,64 @@ def test_segment_filters_uses_configured_font():
     config = dict(DEFAULT, subtitles={**DEFAULT["subtitles"], "font": "douce"})
     vf = " ".join(_segment_filters(entry, config))
     assert "Baloo2-Bold.ttf" in vf
+
+
+# --- Mode texte fixe --------------------------------------------------------
+
+
+def fixed_config(**subs):
+    return {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                     "enabled": True, "mode": "fixe", **subs}}
+
+
+def test_fixed_mode_puts_the_same_caption_on_every_segment():
+    edl = make_edl([0.0, 0.4, 0.8, 1.2, 1.6])
+    out = apply_subtitles(edl, fixed_config(text="LIEN EN BIO"), seed=1)
+    assert [e["caption"] for e in out] == ["LIEN EN BIO"] * 5
+
+
+def test_fixed_mode_never_calls_the_llm(monkeypatch):
+    """L'usine ne doit pas dépendre du LLM quand le texte est écrit à la main.
+    On compte les appels plutôt que de lever : generate_punchlines rattrape
+    Exception (dégradation en []), une AssertionError y serait avalée."""
+    calls = []
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model: (calls.append(1) or ["X"] * n))
+    edl = make_edl([0.0, 0.4, 0.8])
+    out = apply_subtitles(edl, fixed_config(text="DANCING DEAD"), seed=1)
+    assert calls == []
+    assert all(e["caption"] == "DANCING DEAD" for e in out)
+
+
+def test_fixed_mode_disabled_leaves_the_edl_alone():
+    edl = make_edl([0.0, 0.4])
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "enabled": False, "mode": "fixe", "text": "X"}}
+    out = apply_subtitles(edl, config, seed=1)
+    assert all("caption" not in e for e in out)
+
+
+def test_unknown_mode_degrades_to_llm(monkeypatch):
+    """Dégradation sûre : une valeur inattendue ne fait pas planter la génération."""
+    monkeypatch.setattr(beatsync, "_call_llm", lambda *a, **k: ["A", "B", "C", "D"])
+    edl = make_edl([0.0, 0.4, 1.8, 3.4])
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"],
+                                       "enabled": True, "mode": "n'importe quoi",
+                                       "preprompt": "test"}}
+    out = apply_subtitles(edl, config, seed=1)
+    assert all(e["caption"] for e in out)
+
+
+# --- Échappement drawtext ---------------------------------------------------
+
+
+def test_drawtext_escape_handles_newlines():
+    """Un retour à la ligne réel casserait le parseur de filtergraph ; drawtext
+    attend la séquence à deux caractères."""
+    assert beatsync._drawtext_escape("HAUT\nBAS") == "HAUT\\nBAS"
+
+
+def test_drawtext_escape_handles_quotes_and_specials():
+    escaped = beatsync._drawtext_escape("c'est 100% : oui")
+    for ch in ("'", "%", ":"):
+        assert f"\\{ch}" in escaped

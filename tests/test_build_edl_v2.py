@@ -88,12 +88,20 @@ def test_sections_split_at_drop():
 
 
 def test_gasp_slowmo_on_last_buildup_segment():
-    edl = build_edl(make_analysis(), make_clips(), make_config(), seed=42)
+    """Le gasp avant le drop survit aux ramps : le drop est un impact, donc le
+    segment qui s'y termine ralentit (gasp) et celui qui commence dessus
+    accélère (relance) — c'est la règle générale, symétrique par construction.
+    Avec impact_beats très grand, ce sont les deux SEULS segments ramp-és
+    (le gasp est le comportement historique, la relance en est le pendant)."""
+    config = make_config(speed_ramp={**DEFAULT_CONFIG["speed_ramp"], "impact_beats": 10_000})
+    edl = build_edl(make_analysis(), make_clips(), config, seed=42)
     before_drop = [e for e in edl if e["section"] == "buildup"]
     gasp = before_drop[-1]
     assert gasp["speed"] == pytest.approx(0.5)
+    relance = drop_entries(edl)[0]
+    assert relance["speed"] == pytest.approx(1.4)
     for entry in edl:
-        if entry is not gasp:
+        if entry is not gasp and entry is not relance:
             assert entry["speed"] == pytest.approx(1.0)
 
 
@@ -127,7 +135,9 @@ def test_all_effects_disabled():
 
 
 def test_no_drop_time_means_no_drop_section():
-    config = make_config(drop_time=None)
+    # Ramps neutralisés : ce test porte sur les sections, pas sur la vitesse.
+    config = make_config(drop_time=None,
+                         speed_ramp={**DEFAULT_CONFIG["speed_ramp"], "impact_beats": 0})
     edl = build_edl(make_analysis(), make_clips(), config, seed=42)
     assert all(e["section"] == "main" for e in edl)
     assert all(e["speed"] == pytest.approx(1.0) for e in edl)
