@@ -18,6 +18,11 @@ import numpy as np
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+# Plafond de durée d'une image au montage : au-delà, un fixe casse le rythme.
+# Constante de module, pas un réglage : le catalogue d'images ne s'expose pas.
+IMAGE_MAX_DUR = 0.6
+
 DEFAULT_CONFIG = {
     "width": 1080,
     "height": 1920,
@@ -142,10 +147,15 @@ def analyze_audio(track_path: Path) -> dict:
 
 
 def load_clips(folder: Path) -> list[dict]:
-    """Métadonnées des clips vidéo du dossier, triés par nom (déterminisme)."""
+    """Métadonnées des clips vidéo et images du dossier, triés par nom (déterminisme)."""
     clips = []
     for path in sorted(Path(folder).iterdir()):
-        if path.suffix.lower() not in VIDEO_EXTENSIONS:
+        suffix = path.suffix.lower()
+        if suffix in IMAGE_EXTENSIONS:
+            kind = "image"
+        elif suffix in VIDEO_EXTENSIONS:
+            kind = "video"
+        else:
             continue
         probe = subprocess.run(
             [
@@ -161,14 +171,20 @@ def load_clips(folder: Path) -> list[dict]:
         clips.append(
             {
                 "path": path,
-                "duration": float(info["format"]["duration"]),
+                "kind": kind,
+                # Une image n'a pas de durée : ffprobe n'en donne pas et le
+                # montage la boucle sur la durée du segment.
+                "duration": None if kind == "image" else float(info["format"]["duration"]),
                 "width": width,
                 "height": height,
                 "ratio": width / height,
             }
         )
     if not clips:
-        raise ValueError(f"aucun clip vidéo ({', '.join(sorted(VIDEO_EXTENSIONS))}) dans {folder}")
+        raise ValueError(
+            f"aucun clip ni image ({', '.join(sorted(VIDEO_EXTENSIONS | IMAGE_EXTENSIONS))}) "
+            f"dans {folder}"
+        )
     return clips
 
 
@@ -336,6 +352,8 @@ def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
     Avec cache par fichier (clé md5 du chemin, invalidé par mtime) quand
     cache_dir est fourni — on ne re-décode pas 30 clips à chaque génération."""
     for clip in clips:
+        if clip.get("kind") == "image":
+            continue  # rien à décoder ; sans clé `intervals` l'image est utilisable en entier
         cache_path = None
         if cache_dir is not None:
             digest = hashlib.md5(str(clip["path"]).encode()).hexdigest()
