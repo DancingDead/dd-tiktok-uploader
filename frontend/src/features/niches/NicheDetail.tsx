@@ -29,6 +29,11 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
   const [presetIds, setPresetIds] = useState<number[]>(niche.preset_ids)
   const [subsEnabled, setSubsEnabled] = useState(niche.subtitles?.enabled ?? false)
   const [preprompt, setPreprompt] = useState(niche.subtitles?.preprompt ?? "")
+  const [subsMode, setSubsMode] = useState<"llm" | "fixe">(niche.subtitles?.mode ?? "llm")
+  const [fixedText, setFixedText] = useState(niche.subtitles?.text ?? "")
+  const [capX, setCapX] = useState(niche.subtitles?.x ?? 0.5)
+  const [capY, setCapY] = useState(niche.subtitles?.y ?? 0.74)
+  const [capSize, setCapSize] = useState(niche.subtitles?.size ?? 64)
   const [count, setCount] = useState(niche.cadence || 1)
   const [jobId, setJobId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -42,6 +47,11 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
     presetIds.slice().sort().join(",") !== niche.preset_ids.slice().sort().join(",") ||
     subsEnabled !== (niche.subtitles?.enabled ?? false) ||
     preprompt !== (niche.subtitles?.preprompt ?? "") ||
+    subsMode !== (niche.subtitles?.mode ?? "llm") ||
+    fixedText !== (niche.subtitles?.text ?? "") ||
+    capX !== (niche.subtitles?.x ?? 0.5) ||
+    capY !== (niche.subtitles?.y ?? 0.74) ||
+    capSize !== (niche.subtitles?.size ?? 64) ||
     count !== (niche.cadence || 1)
 
   useEffect(() => {
@@ -80,7 +90,15 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
           .map((s) => s.trim())
           .filter(Boolean),
         preset_ids: presetIds,
-        subtitles: { enabled: subsEnabled, preprompt },
+        subtitles: {
+          enabled: subsEnabled,
+          mode: subsMode,
+          preprompt,
+          text: fixedText,
+          x: capX,
+          y: capY,
+          size: capSize,
+        },
       })
       await refresh()
       toast.success("niche enregistrée")
@@ -182,29 +200,97 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
 
           {/* Section à part entière : sans séparation, la case « Punchlines »
               se lisait comme un preset de plus dans la liste au-dessus. */}
-          <div className="space-y-2 border-t pt-4">
-            <Label>Punchlines</Label>
+          <div className="space-y-3 border-t pt-4">
+            <Label>Texte incrusté</Label>
             <label className="flex items-center gap-3 text-sm">
               <Checkbox
                 checked={subsEnabled}
                 onCheckedChange={(v) => setSubsEnabled(v === true)}
               />
-              Incruster des punchlines générées
+              Incruster du texte dans la vidéo
             </label>
-            <div className="space-y-1">
-              <Label htmlFor="preprompt">Consigne de style</Label>
-              <Textarea
-                id="preprompt"
-                value={preprompt}
-                onChange={(e) => setPreprompt(e.target.value)}
-                placeholder="motivation gym, français, percutant, 4 mots max"
-              />
-              {/* L'exemple vit sous le champ, pas dans le placeholder : il doit
-                  rester lisible pendant la saisie. */}
-              <p className="text-xs text-muted-foreground">
-                Guide le ton des punchlines. Ex. « motivation gym, français, percutant, 4 mots max ».
-              </p>
-            </div>
+
+            {subsEnabled && (
+              <>
+                {/* Les deux modes s'excluent : soit le LLM écrit et le texte
+                    change au fil de la vidéo, soit on fige une caption unique. */}
+                <div className="flex gap-4 text-sm">
+                  {(["llm", "fixe"] as const).map((m) => (
+                    <label key={m} className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="subs-mode"
+                        checked={subsMode === m}
+                        onChange={() => setSubsMode(m)}
+                      />
+                      {m === "llm" ? "Punchlines générées" : "Texte fixe"}
+                    </label>
+                  ))}
+                </div>
+
+                {subsMode === "llm" ? (
+                  <div className="space-y-1">
+                    <Label htmlFor="preprompt">Consigne de style</Label>
+                    <Textarea
+                      id="preprompt"
+                      value={preprompt}
+                      onChange={(e) => setPreprompt(e.target.value)}
+                      placeholder="motivation gym, français, percutant, 4 mots max"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Guide le ton des punchlines. Ex. « motivation gym, français, percutant, 4 mots max ».
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <Label htmlFor="fixed-text">Texte</Label>
+                    <Textarea
+                      id="fixed-text"
+                      value={fixedText}
+                      onChange={(e) => setFixedText(e.target.value)}
+                      placeholder="LIEN EN BIO"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Affiché à l'identique du début à la fin. Les retours à la ligne sont conservés.
+                    </p>
+                  </div>
+                )}
+
+                {/* Le placement vaut pour les deux modes. */}
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="cap-x">Position horizontale — {Math.round(capX * 100)} %</Label>
+                    <input
+                      id="cap-x" type="range" min={0} max={100} step={1}
+                      value={Math.round(capX * 100)}
+                      onChange={(e) => setCapX(Number(e.target.value) / 100)}
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cap-y">Position verticale — {Math.round(capY * 100)} %</Label>
+                    <input
+                      id="cap-y" type="range" min={0} max={100} step={1}
+                      value={Math.round(capY * 100)}
+                      onChange={(e) => setCapY(Number(e.target.value) / 100)}
+                      className="w-full"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="cap-size">Taille — {capSize} px</Label>
+                    <input
+                      id="cap-size" type="range" min={24} max={140} step={2}
+                      value={capSize}
+                      onChange={(e) => setCapSize(Number(e.target.value))}
+                      className="w-full"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  0 % = gauche / haut, 100 % = droite / bas. Le texte est centré sur ce point.
+                </p>
+              </>
+            )}
           </div>
 
           <div className="flex items-center justify-end gap-3">
