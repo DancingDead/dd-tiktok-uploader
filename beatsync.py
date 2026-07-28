@@ -1244,15 +1244,24 @@ def glitch_amount(accents: dict) -> float:
 def _segment_input_args(entry: dict) -> list[str]:
     """Arguments d'entrée FFmpeg d'un segment. Une image est bouclée (`-loop 1`)
     et n'a pas de point d'entrée ; une vidéo est seekée AVANT `-i` (seek rapide).
-    Le rab de 0,5 s absorbe l'imprécision du seek : `-frames:v` coupe pile."""
+    Le rab de 0,5 s absorbe l'imprécision du seek : `-frames:v` coupe pile.
+
+    Un segment à figé (`freeze > 0`) veut au contraire manquer de source par
+    construction — c'est ce que `tpad=stop_mode=clone` comble. Lui laisser le
+    rab de seek reviendrait à amputer le figé (le rab, étiré par `1/speed`,
+    peut annuler tout le budget de figé) : on ne l'applique donc qu'aux
+    segments ordinaires. Un seek légèrement imprécis sur un segment à figé
+    ne fait qu'allonger le figé de quelques frames clonées en plus —
+    imperceptible."""
     # Le figé de fin ne consomme pas de source : `tpad=stop_mode=clone` clone la
     # dernière image et `-frames:v` garde le compte exact. Pas de filtre dédié.
     freeze = float(entry.get("freeze", 0.0))
     source_needed = max(0.0, entry["duration"] - freeze) * entry.get("speed", 1.0)
+    margin = 0.0 if freeze > 0.0 else 0.5
     path = str(entry["clip_path"])
     if entry.get("kind") == "image":
-        return ["-loop", "1", "-t", f"{source_needed + 0.5:.6f}", "-i", path]
-    return ["-ss", f"{entry['clip_in']:.6f}", "-t", f"{source_needed + 0.5:.6f}",
+        return ["-loop", "1", "-t", f"{source_needed + margin:.6f}", "-i", path]
+    return ["-ss", f"{entry['clip_in']:.6f}", "-t", f"{source_needed + margin:.6f}",
             "-i", path]
 
 

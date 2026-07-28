@@ -217,14 +217,31 @@ def final_entry(**overrides):
 
 def test_freeze_shortens_the_source_consumed():
     """4 s de timeline dont 1 s figée, à 0.5x → (4-1)*0.5 = 1.5 s de source.
-    tpad clone la dernière image pendant la seconde restante."""
+    tpad clone la dernière image pendant la seconde restante. Pas de rab de
+    seek ici : un segment à figé veut délibérément manquer de source."""
     args = _segment_input_args(final_entry())
-    assert float(args[3]) == pytest.approx(1.5 + 0.5)  # + le rab de seek
+    assert float(args[3]) == pytest.approx(1.5)
 
 
 def test_no_freeze_leaves_the_source_untouched():
     args = _segment_input_args(final_entry(freeze=0.0))
     assert float(args[3]) == pytest.approx(4.0 * 0.5 + 0.5)
+
+
+def test_freeze_drops_the_seek_margin_exactly():
+    """Verrou : un segment à figé ne doit JAMAIS regagner le rab de seek, même
+    « pour cohérence » avec les segments ordinaires — le rab, étiré par
+    1/speed, peut annuler tout le budget de figé (freeze=1.0, speed=0.5 :
+    0,5 s de rab devient 1,0 s de trop-plein réel, exactement le budget de
+    figé). Seule une entrée SANS freeze garde les 0,5 s de marge."""
+    with_freeze = _segment_input_args(final_entry(freeze=1.0, speed=0.5))
+    assert float(with_freeze[3]) == pytest.approx(1.5)
+
+    without_freeze = final_entry(speed=0.5)
+    del without_freeze["freeze"]
+    del without_freeze["end_scene"]
+    no_freeze = _segment_input_args(without_freeze)
+    assert float(no_freeze[3]) == pytest.approx(4.0 * 0.5 + 0.5)
 
 
 def test_ordinary_entries_are_unaffected():
