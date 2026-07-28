@@ -3,7 +3,7 @@ import io
 import pytest
 
 from db import add_member, connect
-from webui import coerce_overrides, create_app
+from webui import coerce_overrides, coerce_subtitles, create_app
 
 
 @pytest.fixture
@@ -274,3 +274,46 @@ def test_create_preset_duplicate_name_conflicts(client):
     r = client.post("/api/presets", json={"name": "strobo", "overrides": {}})
     assert r.status_code == 409
     assert "existe déjà" in r.get_json()["error"]
+
+
+def test_coerce_subtitles_forces_numeric_fields():
+    out = coerce_subtitles({"mode": "fixe", "text": "SALUT", "x": "0.25",
+                            "y": "0.1", "size": "80"})
+    assert out["x"] == pytest.approx(0.25)
+    assert out["y"] == pytest.approx(0.1)
+    assert out["size"] == 80
+
+
+def test_coerce_subtitles_clamps_out_of_range_values():
+    out = coerce_subtitles({"x": 5.0, "y": -2.0, "size": 10_000})
+    assert out["x"] == pytest.approx(1.0)
+    assert out["y"] == pytest.approx(0.0)
+    assert out["size"] == 200
+
+
+def test_coerce_subtitles_rejects_unknown_mode():
+    with pytest.raises(ValueError):
+        coerce_subtitles({"mode": "magique"})
+
+
+def test_coerce_subtitles_rejects_non_numeric():
+    with pytest.raises(ValueError):
+        coerce_subtitles({"size": "gros"})
+
+
+def test_patch_niche_rejects_invalid_subtitles(client):
+    nid = client.post("/api/niches", json={"name": "Test", "cadence": 1}).get_json()["id"]
+    bad = client.patch(f"/api/niches/{nid}", json={"subtitles": {"size": "gros"}})
+    assert bad.status_code == 400
+
+
+def test_patch_niche_stores_a_fixed_caption(client):
+    nid = client.post("/api/niches", json={"name": "Test", "cadence": 1}).get_json()["id"]
+    ok = client.patch(f"/api/niches/{nid}", json={"subtitles": {
+        "enabled": True, "mode": "fixe", "text": "LIEN EN BIO",
+        "x": 0.5, "y": 0.2, "size": 72}})
+    assert ok.status_code == 200
+    subs = client.get("/api/state").get_json()["niches"][0]["subtitles"]
+    assert subs["mode"] == "fixe"
+    assert subs["text"] == "LIEN EN BIO"
+    assert subs["size"] == 72

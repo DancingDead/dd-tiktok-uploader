@@ -78,6 +78,28 @@ def coerce_overrides(overrides: dict) -> dict:
     return coerced
 
 
+ALLOWED_SUBTITLE_MODES = {"llm", "fixe"}
+SUBTITLE_RANGES = {"x": (0.0, 1.0), "y": (0.0, 1.0), "size": (8, 200)}
+
+
+def coerce_subtitles(subtitles: dict) -> dict:
+    """Force et borne les champs de placement du texte. Le bloc `subtitles` de la
+    niche est un blob JSON écrit tel quel : une valeur non numérique ne casserait
+    qu'au rendu FFmpeg, loin de la saisie. ValueError si non convertible."""
+    coerced = dict(subtitles)
+    for key, (lo, hi) in SUBTITLE_RANGES.items():
+        if key in coerced:
+            value = coerced[key]
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                value = float(value)
+            coerced[key] = max(lo, min(hi, value))
+    if "size" in coerced:
+        coerced["size"] = int(coerced["size"])
+    if "mode" in coerced and coerced["mode"] not in ALLOWED_SUBTITLE_MODES:
+        raise ValueError(f"mode de sous-titres inconnu : {coerced['mode']!r}")
+    return coerced
+
+
 # --- Jobs en arrière-plan (téléchargements, génération) --------------------------
 
 _jobs: dict = {}
@@ -513,9 +535,12 @@ def create_app(root: Path | None = None):
 
     @app.patch("/api/niches/<int:niche_id>")
     def update_niche_ep(niche_id):
+        fields = dict(request.json or {})
         conn = get_conn()
         try:
-            dbmod.update_niche(conn, niche_id, **(request.json or {}))
+            if isinstance(fields.get("subtitles"), dict):
+                fields["subtitles"] = coerce_subtitles(fields["subtitles"])
+            dbmod.update_niche(conn, niche_id, **fields)
         except (TypeError, ValueError) as exc:
             return jsonify({"error": f"champ invalide : {exc}"}), 400
         finally:

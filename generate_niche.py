@@ -93,7 +93,12 @@ def main() -> None:
             file=str(out.relative_to(root)),
             preset_id=(preset["id"] if preset else None),
             caption=niche["caption_template"],
-            subtitles={"lines": info["captions"]},
+            # En mode fixe le LLM n'est pas appelé : on stocke le texte saisi pour
+            # que la bibliothèque affiche la même caption que la vidéo.
+            subtitles={"lines": info["captions"] or (
+                [niche["subtitles"]["text"]]
+                if niche["subtitles"].get("mode") == "fixe"
+                and niche["subtitles"].get("text") else [])},
             created_at=datetime.now().isoformat(timespec="seconds"))
         produced += 1
     # Compte réel (≠ tentées) : un échec par variante était silencieux, la sortie
