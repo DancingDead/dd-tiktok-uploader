@@ -201,3 +201,47 @@ def test_end_scene_is_reproducible():
     a = build_edl(make_analysis(), catalog(), end_cfg(), seed=7)
     b = build_edl(make_analysis(), catalog(), end_cfg(), seed=7)
     assert a == b
+
+
+# --- Rendu du figé ----------------------------------------------------------
+
+from beatsync import _segment_filters, _segment_input_args  # noqa: E402
+
+
+def final_entry(**overrides):
+    return {"timeline_start": 0.0, "duration": 4.0, "clip_path": Path("/clips/b.mp4"),
+            "kind": "video", "clip_in": 10.0, "speed": 0.5, "ramp_slow": True,
+            "end_scene": True, "freeze": 1.0, "effects": [], "layout": "crop",
+            "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080, **overrides}
+
+
+def test_freeze_shortens_the_source_consumed():
+    """4 s de timeline dont 1 s figée, à 0.5x → (4-1)*0.5 = 1.5 s de source.
+    tpad clone la dernière image pendant la seconde restante."""
+    args = _segment_input_args(final_entry())
+    assert float(args[3]) == pytest.approx(1.5 + 0.5)  # + le rab de seek
+
+
+def test_no_freeze_leaves_the_source_untouched():
+    args = _segment_input_args(final_entry(freeze=0.0))
+    assert float(args[3]) == pytest.approx(4.0 * 0.5 + 0.5)
+
+
+def test_ordinary_entries_are_unaffected():
+    entry = final_entry()
+    del entry["freeze"]
+    del entry["end_scene"]
+    args = _segment_input_args(entry)
+    assert float(args[3]) == pytest.approx(4.0 * 0.5 + 0.5)
+
+
+def test_tpad_gets_room_for_the_freeze():
+    joined = " ".join(_segment_filters(final_entry(freeze=1.5), DEFAULT_CONFIG))
+    assert "tpad=stop_mode=clone:stop_duration=2.5" in joined
+
+
+def test_tpad_default_is_unchanged_without_freeze():
+    entry = final_entry()
+    del entry["freeze"]
+    joined = " ".join(_segment_filters(entry, DEFAULT_CONFIG))
+    assert "tpad=stop_mode=clone:stop_duration=1" in joined

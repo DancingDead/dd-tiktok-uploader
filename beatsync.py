@@ -1245,7 +1245,10 @@ def _segment_input_args(entry: dict) -> list[str]:
     """Arguments d'entrée FFmpeg d'un segment. Une image est bouclée (`-loop 1`)
     et n'a pas de point d'entrée ; une vidéo est seekée AVANT `-i` (seek rapide).
     Le rab de 0,5 s absorbe l'imprécision du seek : `-frames:v` coupe pile."""
-    source_needed = entry["duration"] * entry.get("speed", 1.0)
+    # Le figé de fin ne consomme pas de source : `tpad=stop_mode=clone` clone la
+    # dernière image et `-frames:v` garde le compte exact. Pas de filtre dédié.
+    freeze = float(entry.get("freeze", 0.0))
+    source_needed = max(0.0, entry["duration"] - freeze) * entry.get("speed", 1.0)
     path = str(entry["clip_path"])
     if entry.get("kind") == "image":
         return ["-loop", "1", "-t", f"{source_needed + 0.5:.6f}", "-i", path]
@@ -1349,7 +1352,9 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
             f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
         )
     post.append("setsar=1,format=yuv420p")
-    post.append("tpad=stop_mode=clone:stop_duration=1")
+    # 1 s de marge pour l'imprécision de seek, plus la durée du figé de fin.
+    freeze = float(entry.get("freeze", 0.0))
+    post.append(f"tpad=stop_mode=clone:stop_duration={1 + freeze:g}")
     post_chain = ",".join(post)
 
     if layout == "split":
