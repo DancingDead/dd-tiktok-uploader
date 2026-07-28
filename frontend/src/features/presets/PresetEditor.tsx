@@ -141,6 +141,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const [endSpeed, setEndSpeed] = useState(o.end_scene?.speed ?? 0.5)
   const [grain, setGrain] = useState(o.grain ?? 0)
   const [clipSpeed, setClipSpeed] = useState(o.clip_speed ?? 1)
+  const [interpolate, setInterpolate] = useState(o.speed_ramp?.interpolate ?? true)
   const glitchInit =
     typeof o.accents?.glitch === "number"
       ? o.accents.glitch
@@ -169,6 +170,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
     subtitles: { font },
     format,
     end_scene: { enabled: endScene, beats: endBeats, freeze: endFreeze, speed: endSpeed },
+    speed_ramp: { interpolate },
   })
 
   // Modifications non enregistrées : snapshot pris au montage (l'éditeur est
@@ -385,6 +387,18 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
             min={0.5}
             max={1.5}
           />
+          <div className="grid gap-1.5 sm:col-span-2">
+            <label className="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={interpolate}
+                onCheckedChange={(v) => setInterpolate(v === true)}
+              />
+              Ralentis fluides (flux optique)
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Désactiver accélère beaucoup la génération, au prix d'un ralenti moins fluide.
+            </p>
+          </div>
           <div className="grid gap-3 border-t pt-4">
             <Label>Scène de fin</Label>
             <label className="flex items-center gap-3 text-sm">

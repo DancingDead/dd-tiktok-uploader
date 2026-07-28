@@ -93,6 +93,11 @@ def coerce_overrides(overrides: dict) -> dict:
         if "beats" in end_scene:
             end_scene["beats"] = int(end_scene["beats"])
         coerced["end_scene"] = end_scene
+    speed_ramp = coerced.get("speed_ramp")
+    if isinstance(speed_ramp, dict) and "interpolate" in speed_ramp:
+        speed_ramp = dict(speed_ramp)
+        speed_ramp["interpolate"] = bool(speed_ramp["interpolate"])
+        coerced["speed_ramp"] = speed_ramp
     return coerced
 
 

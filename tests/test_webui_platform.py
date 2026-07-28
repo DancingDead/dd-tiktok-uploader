@@ -258,6 +258,20 @@ def test_coerce_overrides_rejects_non_numeric_end_scene():
         coerce_overrides({"end_scene": {"beats": "beaucoup"}})
 
 
+def test_coerce_overrides_speed_ramp_interpolate_stays_boolean():
+    """`interpolate` est un booléen : il ne doit pas être converti en nombre,
+    contrairement aux autres clés numériques du bloc."""
+    out = coerce_overrides({"speed_ramp": {"interpolate": False}})
+    assert out["speed_ramp"]["interpolate"] is False
+    out2 = coerce_overrides({"speed_ramp": {"interpolate": True}})
+    assert out2["speed_ramp"]["interpolate"] is True
+
+
+def test_coerce_overrides_speed_ramp_without_interpolate_is_untouched():
+    out = coerce_overrides({"speed_ramp": {"slow": 0.5}})
+    assert out["speed_ramp"] == {"slow": 0.5}
+
+
 def test_coerce_overrides_leaves_end_scene_absent_alone():
     assert "end_scene" not in coerce_overrides({"grain": 0.2})
 
