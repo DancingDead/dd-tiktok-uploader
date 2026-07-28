@@ -234,6 +234,67 @@ def test_coerce_rejects_unknown_section():
         coerce_overrides({"section": "chill"})
 
 
+def test_coerce_overrides_accepts_known_formats():
+    for fmt in ("vertical", "carre"):
+        assert coerce_overrides({"format": fmt})["format"] == fmt
+
+
+def test_coerce_overrides_rejects_unknown_format():
+    with pytest.raises(ValueError):
+        coerce_overrides({"format": "panoramique"})
+
+
+def test_coerce_overrides_clamps_end_scene_values():
+    out = coerce_overrides({"end_scene": {"enabled": True, "beats": "64",
+                                          "freeze": "9.0", "speed": "0.1"}})
+    assert out["end_scene"]["beats"] == 32
+    assert out["end_scene"]["freeze"] == pytest.approx(3.0)
+    assert out["end_scene"]["speed"] == pytest.approx(0.5)
+    assert out["end_scene"]["enabled"] is True
+
+
+def test_coerce_overrides_rejects_non_numeric_end_scene():
+    with pytest.raises(ValueError):
+        coerce_overrides({"end_scene": {"beats": "beaucoup"}})
+
+
+def test_coerce_overrides_speed_ramp_interpolate_stays_boolean():
+    """`interpolate` est un booléen : il ne doit pas être converti en nombre,
+    contrairement aux autres clés numériques du bloc."""
+    out = coerce_overrides({"speed_ramp": {"interpolate": False}})
+    assert out["speed_ramp"]["interpolate"] is False
+    out2 = coerce_overrides({"speed_ramp": {"interpolate": True}})
+    assert out2["speed_ramp"]["interpolate"] is True
+
+
+def test_coerce_overrides_speed_ramp_without_interpolate_is_untouched():
+    out = coerce_overrides({"speed_ramp": {"slow": 0.5}})
+    assert out["speed_ramp"] == {"slow": 0.5}
+
+
+def test_coerce_overrides_leaves_end_scene_absent_alone():
+    assert "end_scene" not in coerce_overrides({"grain": 0.2})
+
+
+def test_preset_with_format_and_end_scene_round_trips(client):
+    created = client.post("/api/presets", json={
+        "name": "Carré cinéma",
+        "overrides": {"format": "carre",
+                      "end_scene": {"enabled": True, "beats": 8,
+                                    "freeze": 1.0, "speed": 0.5}}})
+    assert created.status_code == 200
+    presets = client.get("/api/state").get_json()["presets"]
+    saved = next(p for p in presets if p["name"] == "Carré cinéma")
+    assert saved["overrides"]["format"] == "carre"
+    assert saved["overrides"]["end_scene"]["beats"] == 8
+
+
+def test_preset_with_unknown_format_is_rejected(client):
+    bad = client.post("/api/presets", json={
+        "name": "Cassé", "overrides": {"format": "panoramique"}})
+    assert bad.status_code == 400
+
+
 def test_serve_catalog_asset_for_preview(client, tmp_path):
     client.post("/api/clips", data={"file": (io.BytesIO(b"fake video"), "extrait.mp4")},
                 content_type="multipart/form-data")

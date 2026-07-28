@@ -195,3 +195,106 @@ def test_delogo_still_applies_to_video_segments():
     config = {**DEFAULT_CONFIG, "delogo": True}
     joined = " ".join(_segment_filters(entry, config))
     assert "delogo" in joined
+
+
+# --- Fusion des coupes avant un impact -------------------------------------
+
+from beatsync import merge_boundaries_before_impacts  # noqa: E402
+
+
+def cuts(*beat_indices):
+    """cut_beats factices : le timestamp n'entre pas dans la décision."""
+    return [(float(b) * 0.5, b) for b in beat_indices]
+
+
+def ramp_cfg(**ramp):
+    return {
+        **DEFAULT_CONFIG,
+        "effects": {**DEFAULT_CONFIG["effects"], "speed": True},
+        "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], **ramp},
+    }
+
+
+def test_cuts_inside_the_slow_window_are_removed():
+    """anchor=0, impact_beats=8 → impacts sur 0, 8, 16. `slow_beats` est la
+    LONGUEUR voulue du segment ralenti : à 2, on retire la seule coupe qui le
+    couperait en deux (le beat 7 avant l'impact 8, le beat 15 avant le 16)."""
+    kept = merge_boundaries_before_impacts(
+        cuts(0, 4, 6, 7, 8, 12, 14, 15, 16), anchor=0, config=ramp_cfg(slow_beats=2))
+    assert [b for _, b in kept] == [0, 4, 6, 8, 12, 14, 16]
+
+
+def test_slow_beats_three_merges_two_cuts():
+    """À 3, le segment ralenti couvre trois beats : on retire 6 ET 7."""
+    kept = merge_boundaries_before_impacts(
+        cuts(0, 4, 5, 6, 7, 8), anchor=0, config=ramp_cfg(slow_beats=3))
+    assert [b for _, b in kept] == [0, 4, 5, 8]
+
+
+def test_impact_beats_are_never_removed():
+    kept = merge_boundaries_before_impacts(
+        cuts(0, 8, 16), anchor=0, config=ramp_cfg(slow_beats=4))
+    assert [b for _, b in kept] == [0, 8, 16]
+
+
+def test_cuts_far_from_an_impact_are_kept():
+    kept = merge_boundaries_before_impacts(
+        cuts(1, 2, 3, 4, 5), anchor=0, config=ramp_cfg(slow_beats=2))
+    assert [b for _, b in kept] == [1, 2, 3, 4, 5]
+
+
+def test_slow_beats_zero_or_one_is_a_no_op():
+    """1 = « le segment ralenti fait un beat », soit la grille actuelle."""
+    original = cuts(0, 6, 7, 8)
+    for slow_beats in (0, 1):
+        assert merge_boundaries_before_impacts(
+            original, anchor=0, config=ramp_cfg(slow_beats=slow_beats)) == original
+
+
+def test_speed_effect_disabled_is_a_no_op():
+    """Sans ramps, il n'y a pas de ralenti à allonger."""
+    original = cuts(0, 6, 7, 8)
+    config = {**ramp_cfg(slow_beats=2),
+              "effects": {**DEFAULT_CONFIG["effects"], "speed": False}}
+    assert merge_boundaries_before_impacts(original, anchor=0, config=config) == original
+
+
+def test_never_returns_an_empty_list():
+    """Fenêtre sans aucun impact et slow_beats couvrant tout l'intervalle :
+    tout serait retiré. On rend l'original plutôt qu'un montage d'un seul plan."""
+    original = cuts(1, 2, 3, 4, 5, 6, 7)
+    assert merge_boundaries_before_impacts(
+        original, anchor=0, config=ramp_cfg(slow_beats=8)) == original
+
+
+def test_anchor_shifts_the_impact_grid():
+    """anchor=3 → impacts sur 3, 11, 19. slow_beats=2 retire le beat 10."""
+    kept = merge_boundaries_before_impacts(
+        cuts(3, 5, 9, 10, 11), anchor=3, config=ramp_cfg(slow_beats=2))
+    assert [b for _, b in kept] == [3, 5, 9, 11]
+
+
+# --- Intégration dans build_edl --------------------------------------------
+
+
+def test_slowed_segment_is_longer_than_a_strobe_segment():
+    """Avec slow_beats=2, le segment ralenti dure au moins deux beats de
+    timeline, là où le strobo coupe à chaque beat."""
+    config = {**DEFAULT_CONFIG, "start": 0.0, "end": DURATION, "drop_time": 30.0,
+              "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "slow_beats": 2}}
+    edl = build_edl(make_analysis(), make_clips(), config, seed=42)
+    slowed = [e for e in edl if e["speed"] == pytest.approx(0.5)]
+    assert slowed, "aucun segment ralenti"
+    assert all(e["duration"] >= BEAT * 1.5 for e in slowed)
+
+
+def test_slow_beats_zero_reproduces_the_previous_grid():
+    """Non-régression : slow_beats=0 rend exactement l'EDL d'avant ce volet."""
+    base = {**DEFAULT_CONFIG, "start": 0.0, "end": DURATION, "drop_time": 30.0}
+    a = build_edl(make_analysis(), make_clips(),
+                  {**base, "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "slow_beats": 0}},
+                  seed=42)
+    b = build_edl(make_analysis(), make_clips(),
+                  {**base, "speed_ramp": {**DEFAULT_CONFIG["speed_ramp"], "slow_beats": 1}},
+                  seed=42)
+    assert a == b  # slow_beats=1 ne retire rien non plus (fenêtre vide)

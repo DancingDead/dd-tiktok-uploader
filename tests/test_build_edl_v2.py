@@ -70,7 +70,10 @@ def test_cut_lands_exactly_on_drop():
 
 
 def test_strobe_one_beat_cuts_after_drop():
-    edl = build_edl(make_analysis(), make_clips(), make_config(), seed=42)
+    """Porte sur la grille de coupe du strobo, pas sur les ramps : on désactive
+    la fusion des coupes avant impact pour l'isoler."""
+    config = make_config(speed_ramp={**DEFAULT_CONFIG["speed_ramp"], "slow_beats": 0})
+    edl = build_edl(make_analysis(), make_clips(), config, seed=42)
     strobe_zone = [
         e for e in edl if DROP - EPS <= e["timeline_start"] < DROP + 16 * BEAT - BEAT / 2
     ]

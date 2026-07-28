@@ -37,6 +37,11 @@ const TRACK_SECTIONS = [
   { value: "calm", label: "Calme (passage planant)" },
 ]
 
+const OUTPUT_FORMATS = [
+  { value: "vertical", label: "Vertical 9:16" },
+  { value: "carre", label: "Carré 1:1" },
+] as const
+
 type Props = {
   preset: Preset | null
   template?: Overrides // pré-remplissage à la création (modèles Doux/Énergique)
@@ -129,8 +134,14 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const [font, setFont] = useState(o.subtitles?.font ?? "impact")
   const [colorGrade, setColorGrade] = useState(o.color_grade ?? "neutre")
   const [section, setSection] = useState(o.section ?? "drop")
+  const [format, setFormat] = useState(o.format ?? "vertical")
+  const [endScene, setEndScene] = useState(o.end_scene?.enabled ?? false)
+  const [endBeats, setEndBeats] = useState(o.end_scene?.beats ?? 8)
+  const [endFreeze, setEndFreeze] = useState(o.end_scene?.freeze ?? 1)
+  const [endSpeed, setEndSpeed] = useState(o.end_scene?.speed ?? 0.5)
   const [grain, setGrain] = useState(o.grain ?? 0)
   const [clipSpeed, setClipSpeed] = useState(o.clip_speed ?? 1)
+  const [interpolate, setInterpolate] = useState(o.speed_ramp?.interpolate ?? true)
   const glitchInit =
     typeof o.accents?.glitch === "number"
       ? o.accents.glitch
@@ -157,6 +168,9 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
     grain,
     clip_speed: clipSpeed,
     subtitles: { font },
+    format,
+    end_scene: { enabled: endScene, beats: endBeats, freeze: endFreeze, speed: endSpeed },
+    speed_ramp: { interpolate },
   })
 
   // Modifications non enregistrées : snapshot pris au montage (l'éditeur est
@@ -337,6 +351,24 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
               </SelectContent>
             </Select>
           </div>
+          <div className="grid gap-1.5">
+            <Label>Format de sortie</Label>
+            <Select value={format} onValueChange={(v) => setFormat(v as "vertical" | "carre")}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {OUTPUT_FORMATS.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Le carré recadre beaucoup moins un rush 16:9 — souvent meilleur pour l'animé.
+            </p>
+          </div>
           <NumberField
             id="grain"
             label="Grain / VHS"
@@ -355,6 +387,43 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
             min={0.5}
             max={1.5}
           />
+          <div className="grid gap-1.5 sm:col-span-2">
+            <label className="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={interpolate}
+                onCheckedChange={(v) => setInterpolate(v === true)}
+              />
+              Ralentis fluides (flux optique)
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Désactiver accélère beaucoup la génération, au prix d'un ralenti moins fluide.
+            </p>
+          </div>
+          <div className="grid gap-3 border-t pt-4">
+            <Label>Scène de fin</Label>
+            <label className="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={endScene}
+                onCheckedChange={(v) => setEndScene(v === true)}
+              />
+              Terminer par un ralenti figé sur le climax
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Cherche le plan le plus intense de la fin de chaque clip (duel, personnages,
+              mouvement) et le monte au ralenti, figé sur la dernière image. Prend son sens
+              avec le mode chronologique.
+            </p>
+            {endScene && (
+              <div className="grid gap-3 sm:grid-cols-3">
+                <NumberField id="end-beats" label="Durée (beats)" value={endBeats}
+                  onChange={setEndBeats} step={1} min={2} max={32} />
+                <NumberField id="end-freeze" label="Figé (s)" value={endFreeze}
+                  onChange={setEndFreeze} step={0.5} min={0} max={3} />
+                <NumberField id="end-speed" label="Vitesse" value={endSpeed}
+                  onChange={setEndSpeed} step={0.05} min={0.5} max={1.5} />
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
