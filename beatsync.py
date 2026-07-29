@@ -781,6 +781,10 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # Portions déjà montrées, par clip : le montage ne rejoue jamais un passage
+    # (l'effet de retour en arrière que ça produisait cassait la fluidité).
+    consumed: dict = {}
+
     # --- Scène de fin : un seul segment sur les N derniers beats -------------
     es_cfg = config.get("end_scene") or {}
     end_scene, es_start = None, None
@@ -802,7 +806,15 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             es_source = (scene_duration - freeze) * es_speed
             scene = find_final_scene(clips, min_source=es_source)
             if scene is not None:
-                end_scene, es_start = scene, candidate
+                # Le climax est calculable dès maintenant : on le réserve pour
+                # qu'aucun segment ordinaire ne le montre par avance.
+                es_interval = scene["interval"]
+                es_clip_in = max(es_interval["start"], es_interval["end"] - es_source)
+                consumed.setdefault(scene["clip"]["path"], []).append(
+                    (es_clip_in, es_clip_in + es_source))
+                end_scene = {**scene, "clip_in": es_clip_in, "speed": es_speed,
+                             "freeze": freeze, "source": es_source}
+                es_start = candidate
                 # On POSE la frontière : sans elle le segment final commencerait
                 # à la dernière coupe existante, d'une durée arbitraire.
                 boundaries = [b for b in boundaries if b[0] < es_start - 1e-9]
@@ -826,7 +838,6 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     edl: list[dict] = []
     prev_path = None
     drop_seg_count = 0
-    last_clip_in: dict = {}  # par clip : dernier point d'entrée (mode chrono)
     for seg_index, ((seg_start, beat_index), (seg_end, end_beat)) in enumerate(
             zip(boundaries, boundaries[1:])):
         duration = seg_end - seg_start
@@ -844,12 +855,10 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             # Conclusion : ralenti long sur le climax, figé sur la dernière
             # image. Pas de tirage — la scène a été choisie hors du rng.
             clip = end_scene["clip"]
-            interval = end_scene["interval"]
-            es_speed = _clamp_speed(es_cfg.get("speed", 0.5))
-            freeze = max(0.0, min(duration, float(es_cfg.get("freeze", 1.0))))
-            es_source = (duration - freeze) * es_speed
-            # Le climax est la conclusion du plan : on cale l'entrée sur sa fin.
-            clip_in = max(interval["start"], interval["end"] - es_source)
+            es_speed = end_scene["speed"]
+            freeze = end_scene["freeze"]
+            es_source = end_scene["source"]
+            clip_in = end_scene["clip_in"]
             focus_x, layout = frame_extract(clip, clip_in, es_source, config)
             edl.append(
                 {
@@ -894,10 +903,26 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             effects.append("shake")
 
         source_needed = duration * speed
-        usable = [
-            c for c in video_clips
-            if any(iv["end"] - iv["start"] >= source_needed for iv in intervals_of(c))
-        ]
+        chrono_mode = config.get("chrono", False)
+        free = {}
+        for c in video_clips:
+            windows = free_windows(intervals_of(c), consumed.get(c["path"], []), source_needed)
+            if chrono_mode:
+                # Un clip qui a atteint son propre plafond (plus de plage libre
+                # au-delà de ce qui a déjà servi) doit sortir du tirage ICI :
+                # une fois choisi, Step 6 n'aurait d'autre choix que de revenir
+                # en arrière dans son histoire, ce que le plancher interdit.
+                floor = max((e for _, e in consumed.get(c["path"], [])), default=0.0)
+                windows = [w for w in windows if w["end"] - source_needed >= floor - 1e-9]
+            free[c["path"]] = windows
+        usable = [c for c in video_clips if free[c["path"]]]
+        if not usable:
+            # Catalogue épuisé : plutôt que de faire échouer le lot, on rouvre
+            # les plages entières. Mieux vaut un plan revu qu'une variante perdue.
+            free = {c["path"]: [iv for iv in intervals_of(c)
+                                if iv["end"] - iv["start"] >= source_needed]
+                    for c in video_clips}
+            usable = [c for c in video_clips if free[c["path"]]]
         if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
                 and seg_index - last_image_seg >= IMAGE_MIN_GAP:
             usable = usable + image_clips
@@ -943,34 +968,54 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             )
             continue
 
-        candidates = [iv for iv in intervals_of(clip) if iv["end"] - iv["start"] >= source_needed]
+        candidates = free[clip["path"]]
         # Personnages à l'écran : écarte les plages quasi vides (fallback si toutes le sont).
         min_presence = config.get("min_presence", 0.0)
-        candidates = [iv for iv in candidates if iv.get("presence", 1.0) >= min_presence] or candidates
+        candidates = [iv for iv in candidates if iv.get("presence", 1.0) >= min_presence] \
+            or candidates
 
         if config.get("chrono", False):
             # Position dans la vidéo ≈ position dans l'histoire : le montage
             # avance dans le clip au rythme de la timeline (climax au drop).
+            # Le point « voulu » se calcule sur la plage COMPLÈTE du clip
+            # (stable), jamais sur les fenêtres libres : celles-ci rétrécissent
+            # à chaque consommation, et faire porter la même fraction de
+            # progression sur un total qui rapetisse fait s'emballer la
+            # position vers la fin du clip bien avant la fin de la timeline.
+            full = [iv for iv in intervals_of(clip)
+                    if iv["end"] - iv["start"] >= source_needed] or intervals_of(clip)
             progress = seg_start / out_end if out_end > 0 else 0.0
-            slacks = [iv["end"] - iv["start"] - source_needed for iv in candidates]
-            target = progress * sum(slacks)
-            interval, offset = candidates[-1], slacks[-1]
-            for iv, slack in zip(candidates, slacks):
+            full_slacks = [iv["end"] - iv["start"] - source_needed for iv in full]
+            target = progress * sum(full_slacks)
+            desired_iv, desired_offset = full[-1], full_slacks[-1]
+            for iv, slack in zip(full, full_slacks):
                 if target <= slack:
-                    interval, offset = iv, target
+                    desired_iv, desired_offset = iv, target
                     break
                 target -= slack
-            clip_in = interval["start"] + offset + rng.uniform(0.0, 1.0)
-            clip_in = max(clip_in, last_clip_in.get(clip["path"], 0.0) + 0.1)
-            clip_in = min(max(clip_in, interval["start"]), interval["end"] - source_needed)
-            last_clip_in[clip["path"]] = clip_in
+            desired = desired_iv["start"] + desired_offset
+
+            # Les fenêtres antérieures à ce qui a déjà servi sont écartées :
+            # libres ou non, y revenir romprait la chronologie.
+            floor = max((end for _, end in consumed.get(clip["path"], [])), default=0.0)
+            ordered = [w for w in candidates
+                       if w["end"] - source_needed >= floor - 1e-9] or candidates
+            # Fenêtre libre la plus proche de la position voulue.
+            window = min(
+                ordered,
+                key=lambda w: abs(min(max(desired, w["start"]), w["end"] - source_needed) - desired),
+            )
+            clip_in = min(max(desired, window["start"]), window["end"] - source_needed) \
+                + rng.uniform(0.0, 1.0)
+            clip_in = min(max(clip_in, window["start"]), window["end"] - source_needed)
         else:
             if (section == "drop" or tier == "intense") and len(candidates) > 1:
                 # Les moments intenses piochent dans les plages les plus nerveuses.
                 median_motion = float(np.median([iv["motion"] for iv in candidates]))
-                candidates = [iv for iv in candidates if iv["motion"] >= median_motion] or candidates
-            interval = rng.choice(candidates)
-            clip_in = rng.uniform(interval["start"], interval["end"] - source_needed)
+                candidates = [iv for iv in candidates if iv["motion"] >= median_motion] \
+                    or candidates
+            window = rng.choice(candidates)
+            clip_in = rng.uniform(window["start"], window["end"] - source_needed)
         prev_path = clip["path"]
 
         # Cadrage : centre d'intérêt et layout, moyennés sur l'extrait choisi.
@@ -994,6 +1039,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "clip_h": clip["height"],
             }
         )
+        consumed.setdefault(clip["path"], []).append((clip_in, clip_in + source_needed))
     return edl
 
 
