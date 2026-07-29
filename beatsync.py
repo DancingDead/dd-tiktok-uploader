@@ -668,6 +668,34 @@ def frame_extract(clip: dict, clip_in: float, source_needed: float,
     return focus_x, "crop"
 
 
+def free_windows(intervals: list[dict], consumed: list[tuple[float, float]],
+                 source_needed: float, margin: float = 0.5) -> list[dict]:
+    """Portions des plages exploitables qui n'ont pas encore été montrées.
+
+    Les portions consommées sont élargies de `margin` de chaque côté : sans
+    cette marge, un nouvel extrait pourrait coller au précédent et rester
+    visuellement identique — c'est précisément l'effet de répétition qu'on
+    cherche à supprimer. Seules les fenêtres au moins aussi longues que
+    `source_needed` sont retournées.
+
+    Les dicts rendus ont la même forme que les plages d'entrée : `motion` et
+    `presence` sont hérités du parent (ce sont déjà des moyennes, et on n'a pas
+    les données par échantillon pour les recalculer sur une portion). Pure."""
+    blocked = sorted((start - margin, end + margin) for start, end in consumed)
+    windows: list[dict] = []
+    for interval in intervals:
+        cursor = interval["start"]
+        for block_start, block_end in blocked:
+            if block_end <= cursor or block_start >= interval["end"]:
+                continue  # hors de cette plage
+            if block_start - cursor >= source_needed:
+                windows.append({**interval, "start": cursor, "end": block_start})
+            cursor = max(cursor, block_end)
+        if interval["end"] - cursor >= source_needed:
+            windows.append({**interval, "start": cursor, "end": interval["end"]})
+    return windows
+
+
 def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> list[dict]:
     """Construit l'Edit Decision List. Logique pure : aucun I/O, déterministe à seed égal.
 
