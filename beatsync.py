@@ -274,6 +274,53 @@ def classify_frames(frames: np.ndarray, sample_dt: float) -> dict:
     return {"orange": orange, "black": black, "motion": motion}
 
 
+# Détection des bandes noires (letterbox / pillarbox). Un extrait de film
+# récupéré sur YouTube arrive souvent avec deux bandes : sans rognage, elles
+# survivent au cadrage 9:16 et le ratio du conteneur fausse le choix du layout.
+BAR_LUMA_MAX = 16.0        # une bande reste sous cette luminance (0-255)
+BAR_MIN_FRACTION = 0.015   # en dessous, c'est du bruit de bord, pas une bande
+BAR_MAX_TOTAL = 0.30       # au-delà, c'est une scène sombre : on ne rogne pas
+
+
+def _edge_runs(profile: np.ndarray) -> tuple[int, int]:
+    """Longueurs des segments SOMBRES CONTINUS en tête et en queue d'un profil.
+    Une ligne sombre isolée au milieu n'est pas une bande et ne compte pas."""
+    lit = np.flatnonzero(profile >= BAR_LUMA_MAX)
+    if not len(lit):
+        return len(profile), len(profile)   # tout est sombre : refusé en amont
+    return int(lit[0]), int(len(profile) - 1 - lit[-1])
+
+
+def content_rect(frames: np.ndarray) -> dict | None:
+    """Rectangle utile d'un clip, en fractions du cadre, ou None si aucune bande.
+
+    Le 95e percentile sur l'ensemble des frames — et non le maximum — évite
+    qu'un sous-titre incrusté dans la bande ou un flash isolé masque la
+    détection. Pure."""
+    if not len(frames):
+        return None
+    luma = np.asarray(frames, dtype=np.float32).mean(axis=3)
+    rows = np.percentile(luma.mean(axis=2), 95, axis=0)
+    cols = np.percentile(luma.mean(axis=1), 95, axis=0)
+    height, width = len(rows), len(cols)
+
+    def keep(run: int, size: int) -> int:
+        return run if run >= BAR_MIN_FRACTION * size else 0
+
+    top, bottom = (keep(r, height) for r in _edge_runs(rows))
+    left, right = (keep(c, width) for c in _edge_runs(cols))
+    if top + bottom > BAR_MAX_TOTAL * height or left + right > BAR_MAX_TOTAL * width:
+        return None
+    if not (top or bottom or left or right):
+        return None
+    return {
+        "x": left / width,
+        "y": top / height,
+        "w": (width - left - right) / width,
+        "h": (height - top - bottom) / height,
+    }
+
+
 def usable_intervals(classification: dict, duration: float, sample_dt: float,
                      min_len: float = 1.0, margin: float = 0.5, motion_min: float = 0.008,
                      interval_motion_min: float = 0.05) -> list[dict]:
@@ -390,6 +437,9 @@ def find_final_scene(clips: list[dict], min_source: float = 0.0) -> dict | None:
 
 
 SCAN_FPS = 2.0
+# Version du cache de scan : incrémentée quand le format du payload change,
+# pour que les entrées antérieures soient re-calculées et non lues à moitié.
+SCAN_CACHE_VERSION = 2
 SCAN_W, SCAN_H = 640, 360        # résolution de détection (visages + contours)
 SMALL_W, SMALL_H = 32, 18        # résolution des heuristiques couleur/mouvement
 CASCADE_PATH = Path(__file__).parent / "assets" / "lbpcascade_animeface.xml"
@@ -469,6 +519,12 @@ def _scan_one(clip: dict) -> None:
     clip["interest_x"] = interest_x
     clip["dual"] = dual
     clip["scan_dt"] = 1.0 / SCAN_FPS
+    # Bandes noires : un extrait de film letterboxé doit être rogné avant tout
+    # cadrage, et son ratio décrire le contenu, pas le conteneur.
+    clip["crop"] = content_rect(frames)
+    if clip["crop"] is not None:
+        clip["ratio"] = ((clip["crop"]["w"] * clip["width"])
+                         / (clip["crop"]["h"] * clip["height"]))
 
 
 def _scan_payload(clip: dict) -> dict:
@@ -477,6 +533,8 @@ def _scan_payload(clip: dict) -> dict:
         "interest_x": [float(x) for x in clip["interest_x"]],
         "dual": [bool(d) for d in clip["dual"]],
         "scan_dt": clip["scan_dt"],
+        "crop": clip.get("crop"),
+        "version": SCAN_CACHE_VERSION,
     }
 
 
@@ -485,6 +543,10 @@ def _apply_scan_payload(clip: dict, payload: dict) -> None:
     clip["interest_x"] = np.array(payload["interest_x"], dtype=float)
     clip["dual"] = np.array(payload["dual"], dtype=bool)
     clip["scan_dt"] = payload["scan_dt"]
+    clip["crop"] = payload.get("crop")
+    if clip["crop"] is not None:
+        clip["ratio"] = ((clip["crop"]["w"] * clip["width"])
+                         / (clip["crop"]["h"] * clip["height"]))
 
 
 def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
@@ -504,7 +566,8 @@ def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
                 # traité comme un miss, on re-scanne et on réécrit le cache.
                 try:
                     cached = json.loads(cache_path.read_text())
-                    if cached.get("mtime") == clip["path"].stat().st_mtime:
+                    if cached.get("version") == SCAN_CACHE_VERSION \
+                            and cached.get("mtime") == clip["path"].stat().st_mtime:
                         _apply_scan_payload(clip, cached)
                         continue
                 except (json.JSONDecodeError, OSError, KeyError):
@@ -654,6 +717,12 @@ def frame_extract(clip: dict, clip_in: float, source_needed: float,
     if not len(window_x):
         return 0.5, "crop"
     focus_x = float(np.clip(window_x.mean(), 0.0, 1.0))
+    # `interest_x` est mesuré sur le cadre ENTIER, bandes comprises. Après
+    # rognage, un clip à bandes latérales verrait son centre d'intérêt pointer
+    # à côté : on remappe vers le contenu.
+    crop = clip.get("crop")
+    if crop and crop["w"] > 0:
+        focus_x = float(np.clip((focus_x - crop["x"]) / crop["w"], 0.0, 1.0))
     # Les deux cadrages de secours dépendent du format de sortie. En 9:16 un
     # duel empilé fonctionne ; en 1:1 chaque moitié deviendrait une bande 2:1,
     # et le crop tient déjà les deux personnages.
@@ -666,6 +735,34 @@ def frame_extract(clip: dict, clip_in: float, source_needed: float,
     if float(window_x.std()) >= 0.18 and clip.get("ratio", 1.0) >= 2.0 * out_ratio:
         return focus_x, "blur"
     return focus_x, "crop"
+
+
+def free_windows(intervals: list[dict], consumed: list[tuple[float, float]],
+                 source_needed: float, margin: float = 0.5) -> list[dict]:
+    """Portions des plages exploitables qui n'ont pas encore été montrées.
+
+    Les portions consommées sont élargies de `margin` de chaque côté : sans
+    cette marge, un nouvel extrait pourrait coller au précédent et rester
+    visuellement identique — c'est précisément l'effet de répétition qu'on
+    cherche à supprimer. Seules les fenêtres au moins aussi longues que
+    `source_needed` sont retournées.
+
+    Les dicts rendus ont la même forme que les plages d'entrée : `motion` et
+    `presence` sont hérités du parent (ce sont déjà des moyennes, et on n'a pas
+    les données par échantillon pour les recalculer sur une portion). Pure."""
+    blocked = sorted((start - margin, end + margin) for start, end in consumed)
+    windows: list[dict] = []
+    for interval in intervals:
+        cursor = interval["start"]
+        for block_start, block_end in blocked:
+            if block_end <= cursor or block_start >= interval["end"]:
+                continue  # hors de cette plage
+            if block_start - cursor >= source_needed:
+                windows.append({**interval, "start": cursor, "end": block_start})
+            cursor = max(cursor, block_end)
+        if interval["end"] - cursor >= source_needed:
+            windows.append({**interval, "start": cursor, "end": interval["end"]})
+    return windows
 
 
 def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> list[dict]:
@@ -753,6 +850,10 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # Portions déjà montrées, par clip : le montage ne rejoue jamais un passage
+    # (l'effet de retour en arrière que ça produisait cassait la fluidité).
+    consumed: dict = {}
+
     # --- Scène de fin : un seul segment sur les N derniers beats -------------
     es_cfg = config.get("end_scene") or {}
     end_scene, es_start = None, None
@@ -774,7 +875,15 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             es_source = (scene_duration - freeze) * es_speed
             scene = find_final_scene(clips, min_source=es_source)
             if scene is not None:
-                end_scene, es_start = scene, candidate
+                # Le climax est calculable dès maintenant : on le réserve pour
+                # qu'aucun segment ordinaire ne le montre par avance.
+                es_interval = scene["interval"]
+                es_clip_in = max(es_interval["start"], es_interval["end"] - es_source)
+                consumed.setdefault(scene["clip"]["path"], []).append(
+                    (es_clip_in, es_clip_in + es_source))
+                end_scene = {**scene, "clip_in": es_clip_in, "speed": es_speed,
+                             "freeze": freeze, "source": es_source}
+                es_start = candidate
                 # On POSE la frontière : sans elle le segment final commencerait
                 # à la dernière coupe existante, d'une durée arbitraire.
                 boundaries = [b for b in boundaries if b[0] < es_start - 1e-9]
@@ -798,7 +907,6 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     edl: list[dict] = []
     prev_path = None
     drop_seg_count = 0
-    last_clip_in: dict = {}  # par clip : dernier point d'entrée (mode chrono)
     for seg_index, ((seg_start, beat_index), (seg_end, end_beat)) in enumerate(
             zip(boundaries, boundaries[1:])):
         duration = seg_end - seg_start
@@ -816,13 +924,19 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             # Conclusion : ralenti long sur le climax, figé sur la dernière
             # image. Pas de tirage — la scène a été choisie hors du rng.
             clip = end_scene["clip"]
-            interval = end_scene["interval"]
-            es_speed = _clamp_speed(es_cfg.get("speed", 0.5))
-            freeze = max(0.0, min(duration, float(es_cfg.get("freeze", 1.0))))
-            es_source = (duration - freeze) * es_speed
-            # Le climax est la conclusion du plan : on cale l'entrée sur sa fin.
-            clip_in = max(interval["start"], interval["end"] - es_source)
+            es_speed = end_scene["speed"]
+            freeze = end_scene["freeze"]
+            es_source = end_scene["source"]
+            clip_in = end_scene["clip_in"]
             focus_x, layout = frame_extract(clip, clip_in, es_source, config)
+            entry_crop, clip_w, clip_h = None, clip["width"], clip["height"]
+            rect = clip.get("crop")
+            if rect is not None:
+                clip_w = int(clip["width"] * rect["w"]) & ~1
+                clip_h = int(clip["height"] * rect["h"]) & ~1
+                entry_crop = {"x": int(clip["width"] * rect["x"]),
+                              "y": int(clip["height"] * rect["y"]),
+                              "w": clip_w, "h": clip_h}
             edl.append(
                 {
                     "timeline_start": seg_start,
@@ -839,8 +953,9 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                     "effects": [],       # la scène se suffit ; pas de shake ni de glitch
                     "focus_x": focus_x,
                     "layout": layout,
-                    "clip_w": clip["width"],
-                    "clip_h": clip["height"],
+                    "clip_w": clip_w,
+                    "clip_h": clip_h,
+                    "crop": entry_crop,
                 }
             )
             continue
@@ -866,10 +981,26 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             effects.append("shake")
 
         source_needed = duration * speed
-        usable = [
-            c for c in video_clips
-            if any(iv["end"] - iv["start"] >= source_needed for iv in intervals_of(c))
-        ]
+        chrono_mode = config.get("chrono", False)
+        free = {}
+        for c in video_clips:
+            windows = free_windows(intervals_of(c), consumed.get(c["path"], []), source_needed)
+            if chrono_mode:
+                # Un clip qui a atteint son propre plafond (plus de plage libre
+                # au-delà de ce qui a déjà servi) doit sortir du tirage ICI :
+                # une fois choisi, Step 6 n'aurait d'autre choix que de revenir
+                # en arrière dans son histoire, ce que le plancher interdit.
+                floor = max((e for _, e in consumed.get(c["path"], [])), default=0.0)
+                windows = [w for w in windows if w["end"] - source_needed >= floor - 1e-9]
+            free[c["path"]] = windows
+        usable = [c for c in video_clips if free[c["path"]]]
+        if not usable:
+            # Catalogue épuisé : plutôt que de faire échouer le lot, on rouvre
+            # les plages entières. Mieux vaut un plan revu qu'une variante perdue.
+            free = {c["path"]: [iv for iv in intervals_of(c)
+                                if iv["end"] - iv["start"] >= source_needed]
+                    for c in video_clips}
+            usable = [c for c in video_clips if free[c["path"]]]
         if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
                 and seg_index - last_image_seg >= IMAGE_MIN_GAP:
             usable = usable + image_clips
@@ -880,7 +1011,26 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "catalogue composé uniquement d'images — une image ne peut tenir "
                 f"qu'un segment de {IMAGE_MAX_DUR:.2f}s au plus)"
             )
-        pool = [c for c in usable if c["path"] != prev_path] or usable
+        pool = [c for c in usable if c["path"] != prev_path]
+        if not pool:
+            # Écarter le clip précédent viderait le pool : la coupure entre
+            # deux plans du MÊME clip est ce que l'œil remarque le plus —
+            # bien plus qu'un passage déjà montré revu ailleurs, plus tard.
+            # On rouvre donc d'abord les plages entières des AUTRES clips
+            # vidéo (repli différent de celui du catalogue globalement épuisé
+            # ci-dessus, qui se déclenche plus tôt, sur un critère distinct).
+            others = [c for c in video_clips if c["path"] != prev_path]
+            for c in others:
+                reopened = [iv for iv in intervals_of(c)
+                            if iv["end"] - iv["start"] >= source_needed]
+                if reopened:
+                    free[c["path"]] = reopened
+            pool = [c for c in others if free.get(c["path"])]
+            pool += [c for c in usable if c.get("kind") == "image" and c["path"] != prev_path]
+            if not pool:
+                # Un seul clip vidéo exploitable dans tout le catalogue :
+                # le repeat immédiat reste permis, faute d'alternative.
+                pool = usable
         clip = rng.choice(pool)
 
         if clip.get("kind") == "image":
@@ -915,38 +1065,70 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             )
             continue
 
-        candidates = [iv for iv in intervals_of(clip) if iv["end"] - iv["start"] >= source_needed]
+        candidates = free[clip["path"]]
         # Personnages à l'écran : écarte les plages quasi vides (fallback si toutes le sont).
         min_presence = config.get("min_presence", 0.0)
-        candidates = [iv for iv in candidates if iv.get("presence", 1.0) >= min_presence] or candidates
+        candidates = [iv for iv in candidates if iv.get("presence", 1.0) >= min_presence] \
+            or candidates
 
         if config.get("chrono", False):
             # Position dans la vidéo ≈ position dans l'histoire : le montage
             # avance dans le clip au rythme de la timeline (climax au drop).
+            # Le point « voulu » se calcule sur la plage COMPLÈTE du clip
+            # (stable), jamais sur les fenêtres libres : celles-ci rétrécissent
+            # à chaque consommation, et faire porter la même fraction de
+            # progression sur un total qui rapetisse fait s'emballer la
+            # position vers la fin du clip bien avant la fin de la timeline.
+            full = [iv for iv in intervals_of(clip)
+                    if iv["end"] - iv["start"] >= source_needed] or intervals_of(clip)
             progress = seg_start / out_end if out_end > 0 else 0.0
-            slacks = [iv["end"] - iv["start"] - source_needed for iv in candidates]
-            target = progress * sum(slacks)
-            interval, offset = candidates[-1], slacks[-1]
-            for iv, slack in zip(candidates, slacks):
+            full_slacks = [iv["end"] - iv["start"] - source_needed for iv in full]
+            target = progress * sum(full_slacks)
+            desired_iv, desired_offset = full[-1], full_slacks[-1]
+            for iv, slack in zip(full, full_slacks):
                 if target <= slack:
-                    interval, offset = iv, target
+                    desired_iv, desired_offset = iv, target
                     break
                 target -= slack
-            clip_in = interval["start"] + offset + rng.uniform(0.0, 1.0)
-            clip_in = max(clip_in, last_clip_in.get(clip["path"], 0.0) + 0.1)
-            clip_in = min(max(clip_in, interval["start"]), interval["end"] - source_needed)
-            last_clip_in[clip["path"]] = clip_in
+            desired = desired_iv["start"] + desired_offset
+
+            # Les fenêtres antérieures à ce qui a déjà servi sont écartées :
+            # libres ou non, y revenir romprait la chronologie.
+            floor = max((end for _, end in consumed.get(clip["path"], [])), default=0.0)
+            ordered = [w for w in candidates
+                       if w["end"] - source_needed >= floor - 1e-9] or candidates
+            # Fenêtre libre la plus proche de la position voulue.
+            window = min(
+                ordered,
+                key=lambda w: abs(min(max(desired, w["start"]), w["end"] - source_needed) - desired),
+            )
+            clip_in = min(max(desired, window["start"]), window["end"] - source_needed) \
+                + rng.uniform(0.0, 1.0)
+            clip_in = min(max(clip_in, window["start"]), window["end"] - source_needed)
         else:
             if (section == "drop" or tier == "intense") and len(candidates) > 1:
                 # Les moments intenses piochent dans les plages les plus nerveuses.
                 median_motion = float(np.median([iv["motion"] for iv in candidates]))
-                candidates = [iv for iv in candidates if iv["motion"] >= median_motion] or candidates
-            interval = rng.choice(candidates)
-            clip_in = rng.uniform(interval["start"], interval["end"] - source_needed)
+                candidates = [iv for iv in candidates if iv["motion"] >= median_motion] \
+                    or candidates
+            window = rng.choice(candidates)
+            clip_in = rng.uniform(window["start"], window["end"] - source_needed)
         prev_path = clip["path"]
 
         # Cadrage : centre d'intérêt et layout, moyennés sur l'extrait choisi.
         focus_x, layout = frame_extract(clip, clip_in, source_needed, config)
+
+        # Rectangle utile en pixels. Les dimensions passées à l'entrée sont
+        # celles du CONTENU : le delogo, exprimé en fractions de clip_w/clip_h,
+        # se recale ainsi tout seul sur le vrai coin de l'image.
+        entry_crop, clip_w, clip_h = None, clip["width"], clip["height"]
+        rect = clip.get("crop")
+        if rect is not None:
+            clip_w = int(clip["width"] * rect["w"]) & ~1   # dimensions paires
+            clip_h = int(clip["height"] * rect["h"]) & ~1
+            entry_crop = {"x": int(clip["width"] * rect["x"]),
+                          "y": int(clip["height"] * rect["y"]),
+                          "w": clip_w, "h": clip_h}
 
         edl.append(
             {
@@ -962,10 +1144,12 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "effects": effects,
                 "focus_x": focus_x,
                 "layout": layout,
-                "clip_w": clip["width"],
-                "clip_h": clip["height"],
+                "clip_w": clip_w,
+                "clip_h": clip_h,
+                "crop": entry_crop,
             }
         )
+        consumed.setdefault(clip["path"], []).append((clip_in, clip_in + source_needed))
     return edl
 
 
@@ -1342,6 +1526,11 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     speed = entry.get("speed", 1.0)
 
     pre = ""
+    crop = entry.get("crop")
+    if crop:
+        # Bandes noires retirées AVANT tout le reste : sans ça elles survivent
+        # au cadrage 9:16 et se retrouvent dans la vidéo finale.
+        pre += f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']},"
     if config.get("delogo") and "clip_w" in entry and entry.get("kind") != "image":
         # Gomme le logo de chaîne (coin haut-gauche) AVANT recadrage : le
         # recadrage intelligent ou le fond flouté peuvent le faire entrer au champ.
