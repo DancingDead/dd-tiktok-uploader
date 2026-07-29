@@ -717,6 +717,12 @@ def frame_extract(clip: dict, clip_in: float, source_needed: float,
     if not len(window_x):
         return 0.5, "crop"
     focus_x = float(np.clip(window_x.mean(), 0.0, 1.0))
+    # `interest_x` est mesuré sur le cadre ENTIER, bandes comprises. Après
+    # rognage, un clip à bandes latérales verrait son centre d'intérêt pointer
+    # à côté : on remappe vers le contenu.
+    crop = clip.get("crop")
+    if crop and crop["w"] > 0:
+        focus_x = float(np.clip((focus_x - crop["x"]) / crop["w"], 0.0, 1.0))
     # Les deux cadrages de secours dépendent du format de sortie. En 9:16 un
     # duel empilé fonctionne ; en 1:1 chaque moitié deviendrait une bande 2:1,
     # et le crop tient déjà les deux personnages.

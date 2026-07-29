@@ -191,3 +191,46 @@ def test_build_edl_puts_content_dimensions_on_the_entry(monkeypatch):
     assert entry["clip_h"] == 816
     assert entry["clip_w"] == 1920
     assert entry["crop"] == {"x": 0, "y": 132, "w": 1920, "h": 816}
+
+
+# --- Recalage du centre d'intérêt -------------------------------------------
+
+from beatsync import apply_format, frame_extract  # noqa: E402
+
+
+def scanned(interest, crop=None):
+    n = 40
+    clip = {"path": Path("/clips/f.mp4"), "kind": "video", "duration": 100.0,
+            "width": 1920, "height": 1080, "ratio": 16 / 9,
+            "interest_x": np.full(n, interest), "dual": np.zeros(n, dtype=bool),
+            "scan_dt": 0.5}
+    if crop is not None:
+        clip["crop"] = crop
+    return clip
+
+
+def test_focus_x_is_remapped_onto_the_content():
+    """Bandes latérales de 25 % : le centre du cadre entier (0.5) est aussi le
+    centre du contenu (0.5), mais un point à 0.375 du cadre est à 0.25 du
+    contenu. Sans remappage, le cadrage viserait à côté après rognage."""
+    crop = {"x": 0.25, "y": 0.0, "w": 0.5, "h": 1.0}
+    focus_x, _ = frame_extract(scanned(0.375, crop), 1.0, 2.0, apply_format(DEFAULT_CONFIG))
+    assert focus_x == pytest.approx(0.25)
+
+
+def test_focus_x_is_clamped_when_the_point_falls_in_a_bar():
+    crop = {"x": 0.25, "y": 0.0, "w": 0.5, "h": 1.0}
+    focus_x, _ = frame_extract(scanned(0.05, crop), 1.0, 2.0, apply_format(DEFAULT_CONFIG))
+    assert focus_x == pytest.approx(0.0)
+
+
+def test_focus_x_is_untouched_without_a_crop():
+    focus_x, _ = frame_extract(scanned(0.3), 1.0, 2.0, apply_format(DEFAULT_CONFIG))
+    assert focus_x == pytest.approx(0.3)
+
+
+def test_a_letterbox_does_not_move_focus_x():
+    """Bandes haut/bas : rien ne change horizontalement."""
+    crop = {"x": 0.0, "y": 0.12, "w": 1.0, "h": 0.76}
+    focus_x, _ = frame_extract(scanned(0.3, crop), 1.0, 2.0, apply_format(DEFAULT_CONFIG))
+    assert focus_x == pytest.approx(0.3)
