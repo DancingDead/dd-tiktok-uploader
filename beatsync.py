@@ -437,6 +437,9 @@ def find_final_scene(clips: list[dict], min_source: float = 0.0) -> dict | None:
 
 
 SCAN_FPS = 2.0
+# Version du cache de scan : incrémentée quand le format du payload change,
+# pour que les entrées antérieures soient re-calculées et non lues à moitié.
+SCAN_CACHE_VERSION = 2
 SCAN_W, SCAN_H = 640, 360        # résolution de détection (visages + contours)
 SMALL_W, SMALL_H = 32, 18        # résolution des heuristiques couleur/mouvement
 CASCADE_PATH = Path(__file__).parent / "assets" / "lbpcascade_animeface.xml"
@@ -516,6 +519,12 @@ def _scan_one(clip: dict) -> None:
     clip["interest_x"] = interest_x
     clip["dual"] = dual
     clip["scan_dt"] = 1.0 / SCAN_FPS
+    # Bandes noires : un extrait de film letterboxé doit être rogné avant tout
+    # cadrage, et son ratio décrire le contenu, pas le conteneur.
+    clip["crop"] = content_rect(frames)
+    if clip["crop"] is not None:
+        clip["ratio"] = ((clip["crop"]["w"] * clip["width"])
+                         / (clip["crop"]["h"] * clip["height"]))
 
 
 def _scan_payload(clip: dict) -> dict:
@@ -524,6 +533,8 @@ def _scan_payload(clip: dict) -> dict:
         "interest_x": [float(x) for x in clip["interest_x"]],
         "dual": [bool(d) for d in clip["dual"]],
         "scan_dt": clip["scan_dt"],
+        "crop": clip.get("crop"),
+        "version": SCAN_CACHE_VERSION,
     }
 
 
@@ -532,6 +543,10 @@ def _apply_scan_payload(clip: dict, payload: dict) -> None:
     clip["interest_x"] = np.array(payload["interest_x"], dtype=float)
     clip["dual"] = np.array(payload["dual"], dtype=bool)
     clip["scan_dt"] = payload["scan_dt"]
+    clip["crop"] = payload.get("crop")
+    if clip["crop"] is not None:
+        clip["ratio"] = ((clip["crop"]["w"] * clip["width"])
+                         / (clip["crop"]["h"] * clip["height"]))
 
 
 def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
@@ -551,7 +566,8 @@ def scan_clips(clips: list[dict], cache_dir: Path | None = None) -> list[dict]:
                 # traité comme un miss, on re-scanne et on réécrit le cache.
                 try:
                     cached = json.loads(cache_path.read_text())
-                    if cached.get("mtime") == clip["path"].stat().st_mtime:
+                    if cached.get("version") == SCAN_CACHE_VERSION \
+                            and cached.get("mtime") == clip["path"].stat().st_mtime:
                         _apply_scan_payload(clip, cached)
                         continue
                 except (json.JSONDecodeError, OSError, KeyError):

@@ -104,3 +104,34 @@ def test_no_cache_dir_means_always_scan(tmp_path, monkeypatch):
     scan_clips([dict(clip)])
     scan_clips([dict(clip)])
     assert len(calls) == 2
+
+
+def test_a_cache_entry_without_version_is_a_miss(tmp_path, monkeypatch):
+    """Les caches écrits avant la détection des bandes n'ont pas de `crop` :
+    il faut re-scanner, pas les lire à moitié."""
+    import json
+
+    from beatsync import SCAN_CACHE_VERSION
+
+    path = tmp_path / "a.mp4"
+    path.write_bytes(b"x")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    digest = beatsync.hashlib.md5(str(path).encode()).hexdigest()
+    (cache_dir / f"{digest}.json").write_text(json.dumps({
+        "mtime": path.stat().st_mtime,
+        "intervals": [{"start": 0.0, "end": 5.0, "motion": 0.5, "presence": 1.0}],
+        "interest_x": [0.5], "dual": [False], "scan_dt": 0.5,
+    }))
+
+    scanned = []
+    monkeypatch.setattr(beatsync, "_scan_one",
+                        lambda clip: (scanned.append(clip["path"].name),
+                                      clip.update(intervals=[], interest_x=np.array([0.5]),
+                                                  dual=np.array([False]), scan_dt=0.5,
+                                                  crop=None)))
+    clip = {"path": path, "kind": "video", "duration": 10.0,
+            "width": 1920, "height": 1080, "ratio": 16 / 9}
+    beatsync.scan_clips([clip], cache_dir=cache_dir)
+    assert scanned == ["a.mp4"], "l'entrée sans version aurait dû être ignorée"
+    assert SCAN_CACHE_VERSION >= 2

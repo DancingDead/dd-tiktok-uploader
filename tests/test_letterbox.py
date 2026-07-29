@@ -96,3 +96,48 @@ def test_a_dark_line_in_the_middle_is_not_a_bar():
 
 def test_no_frames_yields_none():
     assert content_rect(np.zeros((0, 360, 640, 3), dtype=np.uint8)) is None
+
+
+# --- Intégration au scan ----------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+import beatsync  # noqa: E402
+from beatsync import SCAN_CACHE_VERSION, _scan_payload, scan_clips  # noqa: E402
+
+
+def letterboxed_clip(tmp_path):
+    return {"path": tmp_path / "film.mp4", "kind": "video", "duration": 100.0,
+            "width": 1920, "height": 1080, "ratio": 1920 / 1080}
+
+
+def stub_scan(monkeypatch, rect):
+    """Remplace le décodage réel par un scan qui pose un rectangle donné."""
+    def fake(clip):
+        clip["intervals"] = [{"start": 1.0, "end": 99.0, "motion": 0.5, "presence": 0.9}]
+        clip["interest_x"] = np.full(200, 0.5)
+        clip["dual"] = np.zeros(200, dtype=bool)
+        clip["scan_dt"] = 0.5
+        clip["crop"] = rect
+        if rect is not None:
+            clip["ratio"] = (rect["w"] * clip["width"]) / (rect["h"] * clip["height"])
+    monkeypatch.setattr(beatsync, "_scan_one", fake)
+
+
+def test_scan_stores_the_crop_and_fixes_the_ratio(tmp_path, monkeypatch):
+    """Un film 2.35:1 letterboxé dans du 16:9 doit être vu comme du 2.35:1,
+    sinon les règles de layout du format carré restent fausses."""
+    rect = {"x": 0.0, "y": 0.118, "w": 1.0, "h": 0.764}
+    stub_scan(monkeypatch, rect)
+    clip = letterboxed_clip(tmp_path)
+    scan_clips([clip])
+    assert clip["crop"] == rect
+    assert clip["ratio"] == pytest.approx(2.33, abs=0.05)
+
+
+def test_payload_carries_the_crop_and_a_version():
+    clip = {"intervals": [], "interest_x": np.array([0.5]), "dual": np.array([False]),
+            "scan_dt": 0.5, "crop": {"x": 0.0, "y": 0.1, "w": 1.0, "h": 0.8}}
+    payload = _scan_payload(clip)
+    assert payload["crop"] == clip["crop"]
+    assert payload["version"] == SCAN_CACHE_VERSION
