@@ -274,6 +274,53 @@ def classify_frames(frames: np.ndarray, sample_dt: float) -> dict:
     return {"orange": orange, "black": black, "motion": motion}
 
 
+# Détection des bandes noires (letterbox / pillarbox). Un extrait de film
+# récupéré sur YouTube arrive souvent avec deux bandes : sans rognage, elles
+# survivent au cadrage 9:16 et le ratio du conteneur fausse le choix du layout.
+BAR_LUMA_MAX = 16.0        # une bande reste sous cette luminance (0-255)
+BAR_MIN_FRACTION = 0.015   # en dessous, c'est du bruit de bord, pas une bande
+BAR_MAX_TOTAL = 0.30       # au-delà, c'est une scène sombre : on ne rogne pas
+
+
+def _edge_runs(profile: np.ndarray) -> tuple[int, int]:
+    """Longueurs des segments SOMBRES CONTINUS en tête et en queue d'un profil.
+    Une ligne sombre isolée au milieu n'est pas une bande et ne compte pas."""
+    lit = np.flatnonzero(profile >= BAR_LUMA_MAX)
+    if not len(lit):
+        return len(profile), len(profile)   # tout est sombre : refusé en amont
+    return int(lit[0]), int(len(profile) - 1 - lit[-1])
+
+
+def content_rect(frames: np.ndarray) -> dict | None:
+    """Rectangle utile d'un clip, en fractions du cadre, ou None si aucune bande.
+
+    Le 95e percentile sur l'ensemble des frames — et non le maximum — évite
+    qu'un sous-titre incrusté dans la bande ou un flash isolé masque la
+    détection. Pure."""
+    if not len(frames):
+        return None
+    luma = np.asarray(frames, dtype=np.float32).mean(axis=3)
+    rows = np.percentile(luma.mean(axis=2), 95, axis=0)
+    cols = np.percentile(luma.mean(axis=1), 95, axis=0)
+    height, width = len(rows), len(cols)
+
+    def keep(run: int, size: int) -> int:
+        return run if run >= BAR_MIN_FRACTION * size else 0
+
+    top, bottom = (keep(r, height) for r in _edge_runs(rows))
+    left, right = (keep(c, width) for c in _edge_runs(cols))
+    if top + bottom > BAR_MAX_TOTAL * height or left + right > BAR_MAX_TOTAL * width:
+        return None
+    if not (top or bottom or left or right):
+        return None
+    return {
+        "x": left / width,
+        "y": top / height,
+        "w": (width - left - right) / width,
+        "h": (height - top - bottom) / height,
+    }
+
+
 def usable_intervals(classification: dict, duration: float, sample_dt: float,
                      min_len: float = 1.0, margin: float = 0.5, motion_min: float = 0.008,
                      interval_motion_min: float = 0.05) -> list[dict]:
