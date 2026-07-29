@@ -933,7 +933,26 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "catalogue composé uniquement d'images — une image ne peut tenir "
                 f"qu'un segment de {IMAGE_MAX_DUR:.2f}s au plus)"
             )
-        pool = [c for c in usable if c["path"] != prev_path] or usable
+        pool = [c for c in usable if c["path"] != prev_path]
+        if not pool:
+            # Écarter le clip précédent viderait le pool : la coupure entre
+            # deux plans du MÊME clip est ce que l'œil remarque le plus —
+            # bien plus qu'un passage déjà montré revu ailleurs, plus tard.
+            # On rouvre donc d'abord les plages entières des AUTRES clips
+            # vidéo (repli différent de celui du catalogue globalement épuisé
+            # ci-dessus, qui se déclenche plus tôt, sur un critère distinct).
+            others = [c for c in video_clips if c["path"] != prev_path]
+            for c in others:
+                reopened = [iv for iv in intervals_of(c)
+                            if iv["end"] - iv["start"] >= source_needed]
+                if reopened:
+                    free[c["path"]] = reopened
+            pool = [c for c in others if free.get(c["path"])]
+            pool += [c for c in usable if c.get("kind") == "image" and c["path"] != prev_path]
+            if not pool:
+                # Un seul clip vidéo exploitable dans tout le catalogue :
+                # le repeat immédiat reste permis, faute d'alternative.
+                pool = usable
         clip = rng.choice(pool)
 
         if clip.get("kind") == "image":

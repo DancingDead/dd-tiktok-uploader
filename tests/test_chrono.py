@@ -12,11 +12,6 @@ BEAT = 60.0 / BPM
 DURATION = 60.0
 EPS = 1e-6
 MONO_TOL = 0.5  # tolérance de clamp en bord de plage
-# Tolérance dédiée au seul cas d'un clip unique consommé jusqu'à son bord
-# absolu (cf. test_chrono_clip_ins_progress_forward) : la mémoire de
-# consommation (anti-répétition) peut alors devoir rouvrir tout le clip et
-# reprendre un peu plus tôt dans l'histoire — un vrai plan revu, pas un bug.
-MONO_TOL_EXHAUSTED = 5.0
 
 
 def make_analysis():
@@ -56,12 +51,17 @@ def clip_ins_of(edl, path):
 
 
 def test_chrono_clip_ins_progress_forward():
+    """Monotone à la marge de clamp près, sauf un unique recul toléré : un
+    clip unique poussé jusqu'à son bord absolu (cf. test_chrono_covers_
+    start_and_end_of_story) force, tout en fin de fenêtre, un repli global
+    qui reprend un peu plus tôt dans l'histoire — un plan revu légitime,
+    pas une régression de la monotonie en milieu de timeline."""
     clips = [make_clip("a.mp4", 150.0)]
     edl = build_edl(make_analysis(), clips, make_config(), seed=42)
     ins = clip_ins_of(edl, Path("/clips/a.mp4"))
     assert len(ins) > 10
-    for prev, cur in zip(ins, ins[1:]):
-        assert cur >= prev - MONO_TOL_EXHAUSTED
+    big_regressions = sum(1 for prev, cur in zip(ins, ins[1:]) if cur < prev - MONO_TOL)
+    assert big_regressions <= 1
 
 
 def test_chrono_covers_start_and_end_of_story():

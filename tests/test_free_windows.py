@@ -157,6 +157,24 @@ def test_a_poor_catalog_degrades_to_reuse_instead_of_raising():
     assert len(edl) > 10
 
 
+def test_a_poor_catalog_degrades_globally_even_with_a_long_clip_available():
+    """Deux clips, l'un court (épuisé tôt) et l'autre long : la dégradation
+    doit rester GLOBALE (le lot ne s'arrête pas quand le clip court ne peut
+    plus fournir, il continue avec le long, comme le ferait n'importe quel
+    tirage normal). Un repli fait clip par clip passerait ce test à
+    l'identique d'un repli global (la contrainte de spec n'est testée que
+    par sa conséquence observable : le lot va à son terme sans erreur, y
+    compris longtemps après l'épuisement du clip court)."""
+    clips = [clip("short.mp4", duration=12.0, intervals=[iv(1.0, 11.0)]),
+             clip("long.mp4")]
+    edl = build_edl(make_analysis(), clips, config(), seed=42)
+    assert len(edl) > 10
+    short_uses = sum(1 for e in edl if e["clip_path"].name == "short.mp4")
+    long_uses = sum(1 for e in edl if e["clip_path"].name == "long.mp4")
+    assert short_uses >= 1
+    assert long_uses >= 1
+
+
 def test_the_end_scene_extract_is_reserved_before_the_loop():
     """Le climax ne doit pas avoir été montré par un segment antérieur."""
     clips = [clip("a.mp4"), clip("b.mp4")]
@@ -177,3 +195,17 @@ def test_still_reproducible():
     a = build_edl(make_analysis(), clips, config(), seed=7)
     b = build_edl(make_analysis(), clips, config(), seed=7)
     assert a == b
+
+
+def test_short_clip_exhaustion_never_forces_an_immediate_repeat():
+    """Quand le clip court s'épuise, le pool ne doit pas retomber sur lui
+    faute d'alternative : la coupure entre deux plans du MÊME clip se voit
+    plus qu'un passage déjà montré revu ailleurs — on rouvre d'abord les
+    plages du clip long plutôt que d'enchaîner deux plans du clip court."""
+    clips = [clip("short.mp4", duration=8.0, intervals=[iv(0.5, 7.5)]),
+             clip("long.mp4")]
+    edl = build_edl(make_analysis(), clips, config(), seed=42)
+    short_uses = sum(1 for e in edl if e["clip_path"].name == "short.mp4")
+    assert short_uses >= 2, "le clip court doit être épuisé pour que le test prouve quelque chose"
+    for prev, cur in zip(edl, edl[1:]):
+        assert prev["clip_path"] != cur["clip_path"]
