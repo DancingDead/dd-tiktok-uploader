@@ -491,13 +491,18 @@ def test_a_clean_frame_has_no_crop():
 
 
 def test_letterbox_is_detected():
-    """Bandes de 60 px en haut et en bas d'un cadre de 360 : contenu 240/360."""
+    """Bandes de 45 px en haut et en bas d'un cadre de 360 : contenu 270/360.
+
+    Ce n'est pas un chiffre rond arbitraire — 90/360 = 25 %, soit exactement ce
+    que donne un 2.37:1 dans un conteneur 16:9. Les letterbox réels tournent
+    tous autour de 25 % (2.35:1 → 24,3 %, 2.39:1 → 25,6 %, pillarbox 4:3 →
+    25 %), ce qui laisse de la marge sous BAR_MAX_TOTAL."""
     f = frames()
-    f[:, :60] = 0
-    f[:, -60:] = 0
+    f[:, :45] = 0
+    f[:, -45:] = 0
     rect = content_rect(f)
-    assert rect["y"] == pytest.approx(60 / 360)
-    assert rect["h"] == pytest.approx(240 / 360)
+    assert rect["y"] == pytest.approx(45 / 360)
+    assert rect["h"] == pytest.approx(270 / 360)
     assert rect["x"] == pytest.approx(0.0)
     assert rect["w"] == pytest.approx(1.0)
 
@@ -555,12 +560,12 @@ def test_a_bright_subtitle_in_the_bar_does_not_hide_it():
     95e percentile — le test échouerait pour une raison qui n'existe pas en
     production."""
     f = frames(n=40)
-    f[:, :60] = 0
-    f[:, -60:] = 0
-    f[0, -40:-20, 200:400] = 255
+    f[:, :45] = 0
+    f[:, -45:] = 0
+    f[0, -40:-20, 200:400] = 255   # lignes 320-340, dans la bande basse (315-360)
     rect = content_rect(f)
     assert rect is not None
-    assert rect["h"] == pytest.approx(240 / 360)
+    assert rect["h"] == pytest.approx(270 / 360)
 
 
 def test_a_dark_line_in_the_middle_is_not_a_bar():
