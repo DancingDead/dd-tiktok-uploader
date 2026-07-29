@@ -923,6 +923,14 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             es_source = end_scene["source"]
             clip_in = end_scene["clip_in"]
             focus_x, layout = frame_extract(clip, clip_in, es_source, config)
+            entry_crop, clip_w, clip_h = None, clip["width"], clip["height"]
+            rect = clip.get("crop")
+            if rect is not None:
+                clip_w = int(clip["width"] * rect["w"]) & ~1
+                clip_h = int(clip["height"] * rect["h"]) & ~1
+                entry_crop = {"x": int(clip["width"] * rect["x"]),
+                              "y": int(clip["height"] * rect["y"]),
+                              "w": clip_w, "h": clip_h}
             edl.append(
                 {
                     "timeline_start": seg_start,
@@ -939,8 +947,9 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                     "effects": [],       # la scène se suffit ; pas de shake ni de glitch
                     "focus_x": focus_x,
                     "layout": layout,
-                    "clip_w": clip["width"],
-                    "clip_h": clip["height"],
+                    "clip_w": clip_w,
+                    "clip_h": clip_h,
+                    "crop": entry_crop,
                 }
             )
             continue
@@ -1103,6 +1112,18 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         # Cadrage : centre d'intérêt et layout, moyennés sur l'extrait choisi.
         focus_x, layout = frame_extract(clip, clip_in, source_needed, config)
 
+        # Rectangle utile en pixels. Les dimensions passées à l'entrée sont
+        # celles du CONTENU : le delogo, exprimé en fractions de clip_w/clip_h,
+        # se recale ainsi tout seul sur le vrai coin de l'image.
+        entry_crop, clip_w, clip_h = None, clip["width"], clip["height"]
+        rect = clip.get("crop")
+        if rect is not None:
+            clip_w = int(clip["width"] * rect["w"]) & ~1   # dimensions paires
+            clip_h = int(clip["height"] * rect["h"]) & ~1
+            entry_crop = {"x": int(clip["width"] * rect["x"]),
+                          "y": int(clip["height"] * rect["y"]),
+                          "w": clip_w, "h": clip_h}
+
         edl.append(
             {
                 "timeline_start": seg_start,
@@ -1117,8 +1138,9 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 "effects": effects,
                 "focus_x": focus_x,
                 "layout": layout,
-                "clip_w": clip["width"],
-                "clip_h": clip["height"],
+                "clip_w": clip_w,
+                "clip_h": clip_h,
+                "crop": entry_crop,
             }
         )
         consumed.setdefault(clip["path"], []).append((clip_in, clip_in + source_needed))
@@ -1498,6 +1520,11 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     speed = entry.get("speed", 1.0)
 
     pre = ""
+    crop = entry.get("crop")
+    if crop:
+        # Bandes noires retirées AVANT tout le reste : sans ça elles survivent
+        # au cadrage 9:16 et se retrouvent dans la vidéo finale.
+        pre += f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']},"
     if config.get("delogo") and "clip_w" in entry and entry.get("kind") != "image":
         # Gomme le logo de chaîne (coin haut-gauche) AVANT recadrage : le
         # recadrage intelligent ou le fond flouté peuvent le faire entrer au champ.

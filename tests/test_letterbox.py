@@ -141,3 +141,53 @@ def test_payload_carries_the_crop_and_a_version():
     payload = _scan_payload(clip)
     assert payload["crop"] == clip["crop"]
     assert payload["version"] == SCAN_CACHE_VERSION
+
+
+# --- Rendu ------------------------------------------------------------------
+
+from beatsync import DEFAULT_CONFIG, _segment_filters  # noqa: E402
+
+
+def cropped_entry(**overrides):
+    return {"timeline_start": 0.0, "duration": 1.0, "clip_path": Path("/clips/f.mp4"),
+            "kind": "video", "clip_in": 5.0, "speed": 1.0, "effects": [],
+            "layout": "crop", "focus_x": 0.5,
+            "crop": {"x": 0, "y": 132, "w": 1920, "h": 816},
+            "clip_w": 1920, "clip_h": 816, **overrides}
+
+
+def test_crop_comes_first_in_the_filter_chain():
+    args = _segment_filters(cropped_entry(), DEFAULT_CONFIG)
+    # Le graphe est le dernier argument, quel que soit le drapeau (-vf ou
+    # -filter_complex) : on travaille dessus, pas sur la liste aplatie.
+    graph = args[1]
+    assert "crop=1920:816:0:132" in graph
+    assert graph.index("crop=1920:816:0:132") < graph.index("delogo="), \
+        "le delogo compte en fractions du contenu : il doit venir après le rognage"
+
+
+def test_an_entry_without_crop_is_unchanged():
+    entry = cropped_entry(crop=None)
+    joined = " ".join(_segment_filters(entry, DEFAULT_CONFIG))
+    assert "crop=1920:816" not in joined
+
+
+def test_the_crop_applies_to_every_layout():
+    for layout in ("crop", "split", "blur"):
+        joined = " ".join(_segment_filters(cropped_entry(layout=layout), DEFAULT_CONFIG))
+        assert "crop=1920:816:0:132" in joined
+
+
+def test_build_edl_puts_content_dimensions_on_the_entry(monkeypatch):
+    """clip_w/clip_h décrivent le contenu : c'est ce qui recale le delogo."""
+    from tests.test_free_windows import clip as make_clip, config, make_analysis
+
+    from beatsync import build_edl
+
+    c = make_clip("f.mp4")
+    c["crop"] = {"x": 0.0, "y": 132 / 1080, "w": 1.0, "h": 816 / 1080}
+    edl = build_edl(make_analysis(), [c], config(), seed=42)
+    entry = next(e for e in edl if e["kind"] == "video")
+    assert entry["clip_h"] == 816
+    assert entry["clip_w"] == 1920
+    assert entry["crop"] == {"x": 0, "y": 132, "w": 1920, "h": 816}
