@@ -19,7 +19,8 @@ Le premier tourne une fois par vidéo, le second une fois par segment.
 ## `apply_format(config)` — l.107
 
 ```python
-FORMATS = {"vertical": (1080, 1920), "carre": (1080, 1080)}
+FORMATS = {"vertical": (1080, 1920), "carre": (1080, 1080),
+           "horizontal": (1920, 1080)}
 ```
 
 Pose `width` / `height` à partir de `format`. Trois lignes, trois décisions.

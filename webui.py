@@ -46,7 +46,7 @@ OVERRIDE_RANGES = {
     "blackout_beats": (0.25, 2.0),
 }
 ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
-ALLOWED_FORMATS = ("vertical", "carre")
+ALLOWED_FORMATS = ("vertical", "carre", "horizontal")
 # Bornes des champs de la scène de fin : au-delà, la scène avale la vidéo ou
 # le figé dépasse le segment.
 END_SCENE_RANGES = {"beats": (2, 32), "freeze": (0.0, 3.0), "speed": (0.5, 1.5)}

@@ -101,7 +101,8 @@ def merge_settings(base: dict, overrides: dict) -> dict:
 
 # Formats de sortie. Le carré recadre beaucoup moins un rush 16:9 (44 % de la
 # largeur jetée contre 68 % en vertical), ce qui sert notamment l'animé.
-FORMATS = {"vertical": (1080, 1920), "carre": (1080, 1080)}
+FORMATS = {"vertical": (1080, 1920), "carre": (1080, 1080),
+           "horizontal": (1920, 1080)}
 
 
 def apply_format(config: dict) -> dict:
@@ -1819,8 +1820,9 @@ def main() -> None:
     parser.add_argument("--duration", default="30", help='durée de la fenêtre en s, ou "full" (défaut : 30)')
     parser.add_argument("--section", choices=["drop", "calm"], default=None,
                         help='passage ciblé : "drop" (moment fort, défaut) ou "calm" (passage calme)')
-    parser.add_argument("--format", choices=["vertical", "carre"], default=None,
-                        help="format de sortie : vertical 9:16 (défaut) ou carré 1:1")
+    parser.add_argument("--format", choices=list(FORMATS), default=None,
+                        help="format de sortie : vertical 9:16 (défaut), carré 1:1 "
+                             "ou horizontal 16:9")
     parser.add_argument("--cut-every", type=int, default=None, metavar="N",
                         help="force le mode fixe : coupe tous les N beats (défaut : coupes pilotées par l'énergie)")
     parser.add_argument("--subtitles", metavar="PREPROMPT", default=None,

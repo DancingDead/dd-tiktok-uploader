@@ -16,6 +16,11 @@ def test_square_gives_square_dimensions():
     assert (out["width"], out["height"]) == (1080, 1080)
 
 
+def test_horizontal_gives_landscape_dimensions():
+    out = apply_format({**DEFAULT_CONFIG, "format": "horizontal"})
+    assert (out["width"], out["height"]) == (1920, 1080)
+
+
 def test_unknown_format_degrades_to_vertical():
     """Dégradation sûre, comme section et subtitles.mode."""
     out = apply_format({**DEFAULT_CONFIG, "format": "n'importe quoi"})
@@ -100,6 +105,26 @@ def test_sixteen_nine_is_cropped_in_square():
 def test_scope_source_still_blurs_in_square():
     _, layout = frame_extract(spread_clip(2.35), 1.0, 2.0, cfg("carre"))
     assert layout == "blur"
+
+
+def test_duel_is_cropped_in_horizontal():
+    """`split` exige width/height <= 0.75 ; en 16:9 on est à 1.78, donc jamais.
+    Empiler deux plans côte à côte n'a de sens que dans un cadre étroit."""
+    _, layout = frame_extract(duel_clip(), 1.0, 2.0, cfg("horizontal"))
+    assert layout == "crop"
+
+
+def test_sixteen_nine_fills_the_frame_in_horizontal():
+    """Un rush 16:9 dans une sortie 16:9 remplit le cadre : rien à combler."""
+    _, layout = frame_extract(spread_clip(16 / 9), 1.0, 2.0, cfg("horizontal"))
+    assert layout == "crop"
+
+
+def test_even_a_scope_source_is_cropped_in_horizontal():
+    """Seuil `blur` en 16:9 : ratio >= 2 x 1.78 = 3.55. Aucun format réel ne
+    l'atteint — le scope 2.35 compris. L'horizontal ne floute jamais."""
+    _, layout = frame_extract(spread_clip(2.35), 1.0, 2.0, cfg("horizontal"))
+    assert layout == "crop"
 
 
 def test_focus_x_is_unchanged_by_the_format():

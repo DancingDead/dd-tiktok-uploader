@@ -40,6 +40,7 @@ const TRACK_SECTIONS = [
 const OUTPUT_FORMATS = [
   { value: "vertical", label: "Vertical 9:16" },
   { value: "carre", label: "Carré 1:1" },
+  { value: "horizontal", label: "Horizontal 16:9" },
 ] as const
 
 type Props = {
@@ -374,7 +375,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
           </div>
           <div className="grid gap-1.5">
             <Label>Format de sortie</Label>
-            <Select value={format} onValueChange={(v) => setFormat(v as "vertical" | "carre")}>
+            <Select value={format} onValueChange={(v) => setFormat(v as (typeof OUTPUT_FORMATS)[number]["value"])}>
               <SelectTrigger className="w-40">
                 <SelectValue />
               </SelectTrigger>
