@@ -40,7 +40,9 @@ DEFAULT_CONFIG = {
     # NB : distinct du champ "section" des entrées d'EDL (buildup/drop) construit dans build_edl.
     "section": "drop",
     "strobe_beats": 16,                 # coupes forcées à 1 beat après le drop
-    "effects": {"zoom": True, "flash": True, "shake": True, "speed": True},
+    "effects": {"zoom": True, "flash": True, "shake": True, "speed": True,
+                "blackout": False},     # strobe de build-up, opt-in
+    "blackout_beats": 0.5,              # durée d'un éclair ET d'un noir, en beats
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
@@ -181,6 +183,51 @@ def merge_boundaries_before_impacts(cut_beats: list[tuple[float, int]], anchor: 
     # Une fenêtre sans aucun impact verrait tout disparaître : on préfère la
     # grille d'origine à un montage d'un seul plan.
     return kept or cut_beats
+
+
+def blackout_boundaries(boundaries: list[tuple[float, int]], drop_out: float,
+                        beat_dur: float, config: dict,
+                        fps: float) -> tuple[list[tuple[float, int]], set[int]]:
+    """Remplace la grille du build-up par une alternance éclair / noir.
+
+    Le comptage part **du drop et remonte** : c'est ce qui garantit que le
+    segment se terminant sur le drop est un éclair d'image et non un noir —
+    l'impact tombe donc sur une image. Compter depuis le début de la fenêtre
+    laisserait la parité au hasard de la durée du build-up.
+
+    La frontière du drop garde son indice de beat (voir `kept_after` ci-dessous)
+    pour que la relance accélérée (`speed_ramp.fast`) reste calculable APRÈS le
+    drop — pas pour le ralenti d'anticipation qui le précède : ce « gasp » ne
+    s'applique plus une fois le strobe actif, remplacé par l'éclair qui termine
+    le build-up.
+
+    Retourne les frontières réécrites et l'ensemble des **indices de frame** où
+    commence un segment noir. Pure."""
+    step = float(config.get("blackout_beats", 0.5)) * beat_dur
+    frame = 1.0 / fps
+    if step < frame or drop_out <= frame:
+        return boundaries, set()          # rien à strober
+
+    # Points de coupe à rebours depuis le drop, exclus.
+    cuts: list[float] = []
+    t = drop_out - step
+    while t > frame - 1e-9:
+        cuts.append(round(t * fps) / fps)
+        t -= step
+    cuts.reverse()
+    # Doublons possibles après quantification si `step` est très court.
+    cuts = [c for i, c in enumerate(cuts) if i == 0 or c - cuts[i - 1] >= frame - 1e-9]
+
+    kept_after = [(t, b) for t, b in boundaries if t >= drop_out - 1e-9]
+    rebuilt = [(0.0, -1)] + [(c, -1) for c in cuts if c >= frame - 1e-9] + kept_after
+
+    # Un segment d'indice k compté à rebours depuis le drop (k=0 pour celui qui
+    # s'y termine) est noir quand k est impair. Le segment de tête fait
+    # exception : une vidéo qui s'ouvre sur du noir ressemble à un bug.
+    starts_before = [t for t, _ in rebuilt if t < drop_out - 1e-9]
+    black = {round(t * fps) for k, t in enumerate(reversed(starts_before))
+             if k % 2 == 1 and k != len(starts_before) - 1}
+    return rebuilt, black
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
@@ -850,6 +897,14 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # Strobe de build-up : la grille d'avant le drop devient une alternance
+    # éclair / noir. Comptée à rebours depuis le drop, donc l'impact tombe
+    # sur une image.
+    black_frames: set = set()
+    if effects_cfg.get("blackout") and drop_out is not None and len(beats) >= 2:
+        boundaries, black_frames = blackout_boundaries(
+            boundaries, drop_out, float(np.median(np.diff(beats))), config, fps)
+
     # Portions déjà montrées, par clip : le montage ne rejoue jamais un passage
     # (l'effet de retour en arrière que ça produisait cassait la fluidité).
     consumed: dict = {}
@@ -902,6 +957,18 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     image_clips = [c for c in clips if c.get("kind") == "image"]
     IMAGE_MIN_GAP = 3          # segments entre deux images (anti-diaporama)
     last_image_seg = -IMAGE_MIN_GAP
+    # Compte les segments VISIBLES seulement (pas les noirs du strobe) : un
+    # écart de MIN_GAP doit correspondre à MIN_GAP plans montrés, pas à
+    # MIN_GAP frontières dont la moitié n'affiche rien.
+    visible_seg_index = -1
+    # Le strobe (quand il s'est vraiment déclenché — `black_frames` non vide,
+    # donc pas juste `effects.blackout` coché sans drop exploitable) remplace
+    # TOUT le build-up par une alternance éclair/noir : un segment de
+    # build-up y est alors toujours un éclair, jamais un plan normal. Les
+    # images n'ont pas leur place dans cette alternance (« un plan différent
+    # à chaque éclair » ne veut pas dire un diaporama) — c'est ce que ce
+    # booléen sert à exclure du tirage.
+    strobe_in_buildup = bool(black_frames)
 
     # --- Attribution des clips : tirage seedé dans les plages exploitables ---
     edl: list[dict] = []
@@ -919,6 +986,23 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         # Ramps : ralenti avant un impact, accéléré après. Le « gasp » historique
         # avant le drop en est un cas particulier — le drop est un impact.
         speed, ramp_slow = _ramp_decision(beat_index, end_beat, duration, impact_anchor, config)
+
+        if round(seg_start * fps) in black_frames:
+            # Écran noir : rien à montrer, donc rien à tirer et rien à
+            # consommer au catalogue. FFmpeg génère la matière au rendu.
+            edl.append(
+                {
+                    "timeline_start": seg_start,
+                    "duration": duration,
+                    "kind": "black",
+                    "beat_index": beat_index,
+                    "section": section,
+                    "speed": 1.0,
+                    "effects": [],
+                }
+            )
+            continue
+        visible_seg_index += 1
 
         if end_scene is not None and seg_start >= es_start - 1e-9:
             # Conclusion : ralenti long sur le climax, figé sur la dernière
@@ -1002,7 +1086,8 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                     for c in video_clips}
             usable = [c for c in video_clips if free[c["path"]]]
         if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
-                and seg_index - last_image_seg >= IMAGE_MIN_GAP:
+                and not (strobe_in_buildup and section == "buildup") \
+                and visible_seg_index - last_image_seg >= IMAGE_MIN_GAP:
             usable = usable + image_clips
         if not usable:
             raise ValueError(
@@ -1037,7 +1122,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             # Flash court : pas de plage à choisir, pas de ralenti sur un fixe.
             # Le Ken Burns (sens tirés à la seed) évite l'image figée ; le zoom
             # ordinaire serait redondant avec lui.
-            last_image_seg = seg_index
+            last_image_seg = visible_seg_index
             prev_path = clip["path"]
             edl.append(
                 {
@@ -1477,7 +1562,7 @@ def glitch_amount(accents: dict) -> float:
         return 0.0
 
 
-def _segment_input_args(entry: dict) -> list[str]:
+def _segment_input_args(entry: dict, config: dict | None = None) -> list[str]:
     """Arguments d'entrée FFmpeg d'un segment. Une image est bouclée (`-loop 1`)
     et n'a pas de point d'entrée ; une vidéo est seekée AVANT `-i` (seek rapide).
     Le rab de 0,5 s absorbe l'imprécision du seek : `-frames:v` coupe pile.
@@ -1489,6 +1574,11 @@ def _segment_input_args(entry: dict) -> list[str]:
     segments ordinaires. Un seek légèrement imprécis sur un segment à figé
     ne fait qu'allonger le figé de quelques frames clonées en plus —
     imperceptible."""
+    if entry.get("kind") == "black":
+        # Écran noir : FFmpeg génère la matière, aucun fichier n'est ouvert.
+        cfg = config or DEFAULT_CONFIG
+        return ["-f", "lavfi", "-i",
+                f"color=c=black:s={cfg['width']}x{cfg['height']}:r={cfg['fps']}"]
     # Le figé de fin ne consomme pas de source : `tpad=stop_mode=clone` clone la
     # dernière image et `-frames:v` garde le compte exact. Pas de filtre dédié.
     freeze = float(entry.get("freeze", 0.0))
@@ -1514,12 +1604,54 @@ def kenburns_filter(entry: dict, config: dict) -> str:
             f":d=1:s={width}x{height}:fps={fps}")
 
 
+def _caption_filter(entry: dict, config: dict) -> str | None:
+    """Fragment `drawtext` d'un segment, ou None sans punchline ni police.
+    Extrait pour être partagé par les segments ordinaires et les écrans noirs,
+    qui gardent leur texte."""
+    cap = entry.get("caption")
+    subs = config.get("subtitles", {})
+    font = resolve_caption_font(subs.get("font", "impact"))
+    if not (cap and font):
+        return None
+
+    # Dernière ligne de défense avant le rendu : une valeur absente, `None`
+    # ou non convertible (ex. formulaire vidé, JSON malformé) retombe sur
+    # le défaut au lieu de faire planter le rendu — même principe que
+    # generate_punchlines qui dégrade en `[]` plutôt que de bloquer l'usine.
+    def _coerce(value, cast, default):
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            return default
+
+    cap_x = max(0.0, min(1.0, _coerce(subs.get("x", 0.5), float, 0.5)))
+    cap_y = max(0.0, min(1.0, _coerce(subs.get("y", 0.74), float, 0.74)))
+    cap_size = max(8, _coerce(subs.get("size", 64), int, 64))
+    return (
+        f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
+        f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"
+        f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
+    )
+
+
 def _segment_filters(entry: dict, config: dict) -> list[str]:
     """Arguments FFmpeg de filtrage d'un segment : ["-vf", ...] pour un cadrage
     simple, ["-filter_complex", ..., "-map", "[v]"] pour split-screen et fond
     flouté. Ordre : slow-mo → layout → fps → punch-zoom → flash → RGB/glitch →
     normalisation → tpad (complété par -frames:v)."""
     width, height, fps = config["width"], config["height"], config["fps"]
+    if entry.get("kind") == "black":
+        # La source lavfi est déjà aux bonnes dimensions : ni recadrage, ni
+        # layout, ni effets. Seules la normalisation, le tpad et la punchline
+        # ont un sens — le texte reste lisible sur le noir, et le faire
+        # clignoter à 2 Hz serait pire que l'afficher.
+        chain = [f"fps={fps}"]
+        caption = _caption_filter(entry, config)
+        if caption:
+            chain.append(caption)
+        chain.append("setsar=1,format=yuv420p")
+        chain.append("tpad=stop_mode=clone:stop_duration=1")
+        return ["-vf", ",".join(chain)]
     effects = entry.get("effects", [])
     layout = entry.get("layout", "crop")
     focus_x = entry.get("focus_x", 0.5)
@@ -1579,28 +1711,9 @@ def _segment_filters(entry: dict, config: dict) -> list[str]:
     # Punchline incrustée (après les accents pour rester nette). Position et
     # taille réglables : le texte est centré sur le point d'ancrage (x, y),
     # exprimé en fraction d'écran. Vaut pour les deux modes, généré et fixe.
-    cap = entry.get("caption")
-    subs = config.get("subtitles", {})
-    font = resolve_caption_font(subs.get("font", "impact"))
-    if cap and font:
-        # Dernière ligne de défense avant le rendu : une valeur absente, `None`
-        # ou non convertible (ex. formulaire vidé, JSON malformé) retombe sur
-        # le défaut au lieu de faire planter le rendu — même principe que
-        # generate_punchlines qui dégrade en `[]` plutôt que de bloquer l'usine.
-        def _coerce(value, cast, default):
-            try:
-                return cast(value)
-            except (TypeError, ValueError):
-                return default
-
-        cap_x = max(0.0, min(1.0, _coerce(subs.get("x", 0.5), float, 0.5)))
-        cap_y = max(0.0, min(1.0, _coerce(subs.get("y", 0.74), float, 0.74)))
-        cap_size = max(8, _coerce(subs.get("size", 64), int, 64))
-        post.append(
-            f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
-            f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"
-            f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
-        )
+    caption = _caption_filter(entry, config)
+    if caption:
+        post.append(caption)
     post.append("setsar=1,format=yuv420p")
     # 1 s de marge pour l'imprécision de seek, plus la durée du figé de fin.
     freeze = float(entry.get("freeze", 0.0))
@@ -1665,7 +1778,7 @@ def render(edl: list[dict], audio_path: Path, output_path: Path, config: dict) -
             n_frames = round(entry["duration"] * fps)
             _run_ffmpeg(
                 [
-                    *_segment_input_args(entry),
+                    *_segment_input_args(entry, config),
                     *_segment_filters(entry, config),
                     "-frames:v", str(n_frames),
                     "-an",

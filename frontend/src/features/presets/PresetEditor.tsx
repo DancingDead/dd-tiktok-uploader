@@ -123,6 +123,8 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const [flash, setFlash] = useState(o.effects?.flash ?? false)
   const [shake, setShake] = useState(o.effects?.shake ?? false)
   const [speed, setSpeed] = useState(o.effects?.speed ?? false)
+  const [blackout, setBlackout] = useState(o.effects?.blackout ?? false)
+  const [blackoutBeats, setBlackoutBeats] = useState(o.blackout_beats ?? 0.5)
   const [rgb, setRgb] = useState(o.accents?.rgb ?? false)
   const [delogo, setDelogo] = useState(o.delogo ?? false)
   const [chrono, setChrono] = useState(o.chrono ?? false)
@@ -155,7 +157,8 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const isNew = preset === null
 
   const buildOverrides = (): Overrides => ({
-    effects: { zoom, flash, shake, speed },
+    effects: { zoom, flash, shake, speed, blackout },
+    blackout_beats: blackoutBeats,
     accents: { rgb, glitch },
     delogo,
     chrono,
@@ -279,6 +282,23 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
           <Toggle checked={speed} onChange={setSpeed}>
             Slow-mo avant drop
           </Toggle>
+          <Toggle checked={blackout} onChange={setBlackout}>
+            Strobe de build-up
+          </Toggle>
+          <NumberField
+            id="blackout-beats"
+            label="Cadence du strobe (beats)"
+            value={blackoutBeats}
+            onChange={setBlackoutBeats}
+            step={0.25}
+            min={0.25}
+            max={2}
+            disabled={!blackout}
+          />
+          <p className="text-xs text-muted-foreground">
+            Alterne éclairs d'image et écrans noirs jusqu'au drop. Double le nombre de
+            segments, mais l'effet sur le temps de génération reste faible.
+          </p>
         </CardContent>
       </Card>
 
