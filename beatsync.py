@@ -40,7 +40,9 @@ DEFAULT_CONFIG = {
     # NB : distinct du champ "section" des entrées d'EDL (buildup/drop) construit dans build_edl.
     "section": "drop",
     "strobe_beats": 16,                 # coupes forcées à 1 beat après le drop
-    "effects": {"zoom": True, "flash": True, "shake": True, "speed": True},
+    "effects": {"zoom": True, "flash": True, "shake": True, "speed": True,
+                "blackout": False},     # strobe de build-up, opt-in
+    "blackout_beats": 0.5,              # durée d'un éclair ET d'un noir, en beats
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
@@ -181,6 +183,45 @@ def merge_boundaries_before_impacts(cut_beats: list[tuple[float, int]], anchor: 
     # Une fenêtre sans aucun impact verrait tout disparaître : on préfère la
     # grille d'origine à un montage d'un seul plan.
     return kept or cut_beats
+
+
+def blackout_boundaries(boundaries: list[tuple[float, int]], drop_out: float,
+                        beat_dur: float, config: dict,
+                        fps: float) -> tuple[list[tuple[float, int]], set[int]]:
+    """Remplace la grille du build-up par une alternance éclair / noir.
+
+    Le comptage part **du drop et remonte** : c'est ce qui garantit que le
+    segment se terminant sur le drop est un éclair d'image et non un noir —
+    l'impact tombe donc sur une image. Compter depuis le début de la fenêtre
+    laisserait la parité au hasard de la durée du build-up.
+
+    Retourne les frontières réécrites et l'ensemble des **indices de frame** où
+    commence un segment noir. Pure."""
+    step = float(config.get("blackout_beats", 0.5)) * beat_dur
+    frame = 1.0 / fps
+    if step < frame or drop_out <= frame:
+        return boundaries, set()          # rien à strober
+
+    # Points de coupe à rebours depuis le drop, exclus.
+    cuts: list[float] = []
+    t = drop_out - step
+    while t > frame - 1e-9:
+        cuts.append(round(t * fps) / fps)
+        t -= step
+    cuts.reverse()
+    # Doublons possibles après quantification si `step` est très court.
+    cuts = [c for i, c in enumerate(cuts) if i == 0 or c - cuts[i - 1] >= frame - 1e-9]
+
+    kept_after = [(t, b) for t, b in boundaries if t >= drop_out - 1e-9]
+    rebuilt = [(0.0, -1)] + [(c, -1) for c in cuts if c >= frame - 1e-9] + kept_after
+
+    # Un segment d'indice k compté à rebours depuis le drop (k=0 pour celui qui
+    # s'y termine) est noir quand k est impair. Le segment de tête fait
+    # exception : une vidéo qui s'ouvre sur du noir ressemble à un bug.
+    starts_before = [t for t, _ in rebuilt if t < drop_out - 1e-9]
+    black = {round(t * fps) for k, t in enumerate(reversed(starts_before))
+             if k % 2 == 1 and k != len(starts_before) - 1}
+    return rebuilt, black
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
