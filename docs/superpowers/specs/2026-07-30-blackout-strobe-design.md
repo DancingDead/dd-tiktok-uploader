@@ -81,8 +81,16 @@ sur écran noir.
 sur des beats : elles portent `-1`, la valeur qui désigne déjà « pas un beat »
 dans `boundaries`. En revanche **la frontière du drop conserve son indice de beat
 d'origine** — c'est lui qui fait du drop un impact pour `ramp_speed`, et le
-perdre casserait le ralenti d'anticipation et l'accéléré de relance qui
-l'encadrent.
+perdre supprimerait l'**accéléré de relance** qui suit le drop.
+
+**Le ralenti d'anticipation, lui, ne survit pas au strobe — et c'est voulu.**
+`merge_boundaries_before_impacts` travaille sur `cut_beats`, donc **avant** la
+construction de la grille de frontières ; `blackout_boundaries` réécrit ensuite
+tout le build-up et jette cette fusion. Le segment qui précède le drop fait alors
+`blackout_beats`, soit moins que `speed_ramp.min_dur` au-delà de 120 BPM, et
+`_ramp_decision` l'exempte. Le « gasp » disparaît donc quand le strobe est actif :
+le clignotement court jusqu'à l'impact sans interruption, ce qui est la grammaire
+de l'effet.
 
 La frontière de début de fenêtre `(0.0, -1)` est conservée telle quelle.
 
@@ -205,9 +213,13 @@ Tous purs, sans FFmpeg :
   les frontières intermédiaires portent `-1` ; les frontières restent triées,
   quantifiées et espacées d'au moins une frame ; un `blackout_beats` absurde
   (plus long que le build-up) ne produit pas de grille vide.
-- Le drop reste un impact : avec l'effet actif, le segment qui se termine sur le
-  drop reçoit toujours son ralenti d'anticipation quand `effects.speed` est actif
-  et que sa durée dépasse `min_dur`.
+- L'indice de beat du drop survit à la réécriture, donc le motif de ramp reste
+  applicable — vérifié en forçant `min_dur: 0.0`, car aux valeurs par défaut un
+  éclair est trop court pour recevoir un ralenti. Le test ne prouve donc **pas**
+  que le « gasp » s'applique en conditions réelles : il ne s'applique pas.
+- Les images du catalogue ne servent **jamais** d'éclair : un catalogue mixte
+  avec le strobe actif ne produit aucune entrée `kind == "image"` dans la section
+  `buildup`, alors qu'elles restent éligibles ailleurs.
 - `build_edl` : avec l'effet actif, le build-up alterne `video` et `black` ;
   aucune entrée noire ne porte de `clip_path` ; les entrées noires n'apparaissent
   pas dans la mémoire de consommation ; la section `drop` est inchangée.
