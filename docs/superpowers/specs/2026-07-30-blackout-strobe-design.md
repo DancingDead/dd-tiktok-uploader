@@ -177,6 +177,15 @@ un choix éditorial du propriétaire du projet, pris en connaissance de cause :
 TikTok pénalise les contenus photosensibles et l'effet peut fatiguer avant
 d'impressionner. L'option est désactivée par défaut et se juge sur pièce.
 
+**En dessous d'environ 70 s de matière scannée exploitable, la mémoire
+anti-répétition s'épuise et le strobe dégénère.** Mesuré : 12 paires d'éclairs
+démarrant à moins de 0,5 s l'une de l'autre — des images quasi identiques qui
+clignotent, exactement le « plan unique qui clignote » que la première
+décision de cadrage de ce spec écartait. Un catalogue trop pauvre ne donne
+donc pas le même strobe qu'un catalogue riche ; c'est un risque à connaître
+côté conduite du changement (niches à peu de clips), pas un bug de
+`build_edl`.
+
 ## Hors périmètre
 
 - Cadence accélérée à l'approche du drop.
