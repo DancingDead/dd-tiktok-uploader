@@ -891,6 +891,14 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
+    # Strobe de build-up : la grille d'avant le drop devient une alternance
+    # éclair / noir. Comptée à rebours depuis le drop, donc l'impact tombe
+    # sur une image.
+    black_frames: set = set()
+    if effects_cfg.get("blackout") and drop_out is not None and len(beats) >= 2:
+        boundaries, black_frames = blackout_boundaries(
+            boundaries, drop_out, float(np.median(np.diff(beats))), config, fps)
+
     # Portions déjà montrées, par clip : le montage ne rejoue jamais un passage
     # (l'effet de retour en arrière que ça produisait cassait la fluidité).
     consumed: dict = {}
@@ -960,6 +968,22 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
         # Ramps : ralenti avant un impact, accéléré après. Le « gasp » historique
         # avant le drop en est un cas particulier — le drop est un impact.
         speed, ramp_slow = _ramp_decision(beat_index, end_beat, duration, impact_anchor, config)
+
+        if round(seg_start * fps) in black_frames:
+            # Écran noir : rien à montrer, donc rien à tirer et rien à
+            # consommer au catalogue. FFmpeg génère la matière au rendu.
+            edl.append(
+                {
+                    "timeline_start": seg_start,
+                    "duration": duration,
+                    "kind": "black",
+                    "beat_index": beat_index,
+                    "section": section,
+                    "speed": 1.0,
+                    "effects": [],
+                }
+            )
+            continue
 
         if end_scene is not None and seg_start >= es_start - 1e-9:
             # Conclusion : ralenti long sur le climax, figé sur la dernière

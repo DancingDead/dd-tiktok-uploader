@@ -106,3 +106,123 @@ def test_a_drop_at_the_very_start_leaves_the_grid_alone():
     boundaries = [(0.0, -1), (0.0, 7), (4.0, -1)]
     bounds, black = blackout_boundaries(boundaries, 0.0, BEAT, cfg(), FPS)
     assert black == set()
+
+
+# --- Intégration dans build_edl --------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+from beatsync import build_edl  # noqa: E402
+
+BPM = 150.0
+DURATION = 60.0
+
+
+def make_analysis():
+    beats = np.arange(0.0, DURATION, 60.0 / BPM)
+    times = np.linspace(0.0, DURATION, 601)
+    energy = np.where(
+        times < DURATION / 2,
+        np.interp(times, [0.0, DURATION / 2], [0.05, 0.20]),
+        np.interp(times, [DURATION / 2, DURATION], [0.80, 1.00]),
+    )
+    return {"duration": DURATION, "bpm": BPM, "beats": beats,
+            "energy": energy, "energy_times": times}
+
+
+def clips():
+    n = 1201
+    return [{"path": Path(f"/clips/{name}.mp4"), "kind": "video", "duration": 600.0,
+             "width": 1920, "height": 1080, "ratio": 16 / 9,
+             "intervals": [{"start": 1.0, "end": 599.0, "motion": 0.5, "presence": 0.9}],
+             "interest_x": np.full(n, 0.5), "dual": np.zeros(n, dtype=bool),
+             "scan_dt": 0.5}
+            for name in ("a", "b", "c")]
+
+
+def edl_config(blackout=True, **overrides):
+    return {**DEFAULT_CONFIG,
+            "start": 0.0, "end": 30.0, "drop_time": 10.0,
+            "effects": {**DEFAULT_CONFIG["effects"], "blackout": blackout},
+            **overrides}
+
+
+def test_the_buildup_alternates_video_and_black():
+    edl = build_edl(make_analysis(), clips(), edl_config(), seed=42)
+    buildup = [e for e in edl if e["section"] == "buildup"]
+    kinds = [e["kind"] for e in buildup]
+    assert "black" in kinds, "aucune entrée noire produite"
+    assert kinds.count("video") >= 5
+    # Deux noirs ne peuvent pas se suivre.
+    assert not any(a == "black" and b == "black" for a, b in zip(kinds, kinds[1:]))
+
+
+def test_black_entries_carry_no_clip():
+    edl = build_edl(make_analysis(), clips(), edl_config(), seed=42)
+    for entry in edl:
+        if entry["kind"] == "black":
+            assert "clip_path" not in entry
+            assert "clip_in" not in entry
+            assert "layout" not in entry
+            assert entry["speed"] == pytest.approx(1.0)
+            assert entry["effects"] == []
+
+
+def test_the_drop_section_is_untouched():
+    edl = build_edl(make_analysis(), clips(), edl_config(), seed=42)
+    assert all(e["kind"] != "black" for e in edl if e["section"] == "drop")
+
+
+def test_black_entries_do_not_consume_the_catalog():
+    """Un noir ne montre rien : il ne doit pas retirer de matière aux clips.
+    Preuve : à catalogue et seed égaux, les points d'entrée des extraits
+    vidéo sont les mêmes que le strobe soit actif ou non... pour les
+    segments qui existent dans les deux cas — on vérifie plus simplement
+    qu'aucun extrait vidéo ne se recouvre, malgré les nombreux segments."""
+    edl = build_edl(make_analysis(), clips(), edl_config(), seed=42)
+    by_clip: dict = {}
+    for e in edl:
+        if e["kind"] != "video":
+            continue
+        by_clip.setdefault(e["clip_path"], []).append(
+            (e["clip_in"], e["clip_in"] + e["duration"] * e["speed"]))
+    for ranges in by_clip.values():
+        for i, first in enumerate(ranges):
+            for second in ranges[i + 1:]:
+                assert not (first[0] < second[1] - 1e-9 and second[0] < first[1] - 1e-9)
+
+
+def test_disabled_leaves_the_edl_identical():
+    analysis = make_analysis()
+    off = build_edl(analysis, clips(), edl_config(blackout=False), seed=42)
+    assert all(e["kind"] != "black" for e in off)
+
+
+def test_no_drop_means_no_strobe():
+    analysis = make_analysis()
+    edl = build_edl(analysis, clips(), edl_config(drop_time=None), seed=42)
+    assert all(e["kind"] != "black" for e in edl)
+
+
+def test_reproducible():
+    a = build_edl(make_analysis(), clips(), edl_config(), seed=7)
+    b = build_edl(make_analysis(), clips(), edl_config(), seed=7)
+    assert a == b
+
+
+def test_the_drop_is_still_an_impact():
+    """Le strobe ne doit pas voler au drop son statut d'impact : le segment
+    qui s'y termine garde son ralenti d'anticipation. C'est ce que la
+    conservation de l'indice de beat sur la frontière du drop protège."""
+    config = edl_config(speed_ramp={**DEFAULT_CONFIG["speed_ramp"],
+                                    "impact_beats": 8, "slow_beats": 1,
+                                    "min_dur": 0.0})
+    edl = build_edl(make_analysis(), clips(), config, seed=42)
+    drop_start = min(e["timeline_start"] for e in edl if e["section"] == "drop")
+    last_buildup = max((e for e in edl if e["section"] == "buildup"),
+                       key=lambda e: e["timeline_start"])
+    assert last_buildup["timeline_start"] + last_buildup["duration"] == pytest.approx(drop_start)
+    assert last_buildup["kind"] == "video", "l'impact doit tomber sur une image"
+    assert last_buildup["speed"] == pytest.approx(DEFAULT_CONFIG["speed_ramp"]["slow"])
