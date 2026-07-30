@@ -226,3 +226,62 @@ def test_the_drop_is_still_an_impact():
     assert last_buildup["timeline_start"] + last_buildup["duration"] == pytest.approx(drop_start)
     assert last_buildup["kind"] == "video", "l'impact doit tomber sur une image"
     assert last_buildup["speed"] == pytest.approx(DEFAULT_CONFIG["speed_ramp"]["slow"])
+
+
+# --- Rendu ------------------------------------------------------------------
+
+from beatsync import _segment_filters, _segment_input_args  # noqa: E402
+
+
+def black_entry(**overrides):
+    return {"timeline_start": 0.0, "duration": 0.25, "kind": "black",
+            "beat_index": -1, "section": "buildup", "speed": 1.0,
+            "effects": [], **overrides}
+
+
+def video_entry(**overrides):
+    return {"timeline_start": 0.0, "duration": 1.0, "clip_path": Path("/clips/a.mp4"),
+            "kind": "video", "clip_in": 5.0, "speed": 1.0, "effects": [],
+            "layout": "crop", "focus_x": 0.5, "clip_w": 1920, "clip_h": 1080,
+            **overrides}
+
+
+def test_a_black_segment_opens_no_file():
+    args = _segment_input_args(black_entry())
+    assert "-f" in args and "lavfi" in args
+    assert not any(a.endswith(".mp4") for a in args)
+    assert "-ss" not in args and "-loop" not in args
+
+
+def test_the_black_source_matches_the_output_size():
+    args = " ".join(_segment_input_args(black_entry()))
+    assert "color=c=black" in args
+    assert "1080x1920" in args
+
+
+def test_a_black_segment_has_no_crop_no_delogo_no_layout():
+    joined = " ".join(_segment_filters(black_entry(), DEFAULT_CONFIG))
+    for absent in ("delogo=", "zoompan=", "boxblur", "vstack", "minterpolate"):
+        assert absent not in joined, f"{absent} ne devrait pas être là"
+
+
+def test_a_black_segment_keeps_its_punchline():
+    """Si le texte disparaissait un demi-temps sur deux, il clignoterait à 2 Hz
+    et deviendrait illisible. Sur fond noir il est au contraire parfaitement lisible."""
+    joined = " ".join(_segment_filters(black_entry(caption="LIEN EN BIO"), DEFAULT_CONFIG))
+    assert "drawtext=" in joined
+    assert "LIEN EN BIO" in joined
+
+
+def test_a_black_segment_is_still_normalised_and_padded():
+    joined = " ".join(_segment_filters(black_entry(), DEFAULT_CONFIG))
+    assert "setsar=1,format=yuv420p" in joined
+    assert "tpad=stop_mode=clone" in joined
+
+
+def test_video_segments_are_unchanged_by_the_extraction():
+    """L'extraction de _caption_filter est un refactor pur."""
+    joined = " ".join(_segment_filters(video_entry(caption="TEST"), DEFAULT_CONFIG))
+    assert "drawtext=" in joined
+    assert "fontsize=64" in joined
+    assert "x=w*0.5000-text_w/2" in joined
