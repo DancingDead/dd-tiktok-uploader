@@ -1,0 +1,107 @@
+@startuml platform-db
+' Schéma de platform.db — à coller sur https://www.planttext.com/
+' Source : db.py, constante SCHEMA (l.14-52)
+
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+  ArrowColor #333333
+}
+
+entity "**members**" as members {
+  * id : INTEGER <<PK>>
+  --
+  * name : TEXT <<UNIQUE>>
+  * password_hash : TEXT
+  ..
+  hachage werkzeug, jamais en clair
+}
+
+entity "**presets**" as presets {
+  * id : INTEGER <<PK>>
+  --
+  * name : TEXT <<UNIQUE>>
+  * overrides : TEXT <<JSON>>
+  ..
+  overrides = ECARTS vs settings.json
+}
+
+entity "**niches**" as niches {
+  * id : INTEGER <<PK>>
+  --
+  * name : TEXT
+  * slug : TEXT <<UNIQUE>>
+  * owner : TEXT
+  * cadence : INTEGER
+  * caption_template : TEXT
+  * hashtags : TEXT <<JSON>>
+  * preset_ids : TEXT <<JSON>>
+  * tracks : TEXT <<JSON>>
+  * clips : TEXT <<JSON>>
+  * subtitles : TEXT <<JSON>>
+  ..
+  slug = nom de dossier (NFKD)
+  tracks / clips = chemins catalogue
+}
+
+entity "**videos**" as videos {
+  * id : INTEGER <<PK>>
+  --
+  * niche_id : INTEGER <<FK>>
+  preset_id : INTEGER
+  * track : TEXT
+  * seed : INTEGER
+  * file : TEXT
+  * status : TEXT <<CHECK>>
+  * caption : TEXT
+  * subtitles : TEXT <<JSON>>
+  * created_at : TEXT
+  error : TEXT
+  ..
+  status IN (proposed, approved,
+  rejected, posted, failed)
+  seed = rejouer a l'identique
+}
+
+' --- Systeme de fichiers (hors base) ---
+package "systeme de fichiers" <<Cloud>> {
+  entity "tracks/" as fs_tracks {
+    <nom>.mp3
+  }
+  entity "clips/" as fs_clips {
+    <nom>.mp4 | .jpg
+  }
+  entity "data/niches/<slug>/videos/" as fs_videos {
+    <stem>.mp4
+  }
+}
+
+' --- Relations ---
+' Trait plein = vraie cle etrangere declaree en SQL
+niches ||--o{ videos : "niche_id\nON DELETE CASCADE"
+
+' Pointilles = lien mou, aucune contrainte SQL
+presets |o..o{ videos : "preset_id\n(peut pendre)"
+presets }o..o{ niches : "preset_ids (JSON)\n(peut pendre)"
+members |o..o{ niches : "owner (par NOM)\n(peut pendre)"
+
+' Pointilles vers le disque
+niches ..> fs_tracks : "tracks (JSON)"
+niches ..> fs_clips : "clips (JSON)"
+videos ..> fs_videos : "file"
+
+legend right
+  | Trait | Signification |
+  |<#DDFFDD> plein | cle etrangere reelle (SQL) |
+  |<#FFEEDD> pointille | lien mou, coherence a la main |
+  ==
+  Une seule FK sur quatre relations.
+  Supprimer un preset ne nettoie rien :
+  generate_niche.py filtre les ids morts.
+endlegend
+
+@enduml

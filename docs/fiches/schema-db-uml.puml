@@ -1,0 +1,114 @@
+@startuml platform-uml
+' Diagramme de CLASSES UML — modele conceptuel.
+' Decrit ce que le code manipule APRES _niche_row_to_dict (db.py l.159),
+' pas ce que SQLite stocke. Pour le modele physique : schema-db.puml
+
+skinparam linetype ortho
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam class {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+  ArrowColor #333333
+}
+
+enum VideoStatus {
+  proposed
+  approved
+  rejected
+  posted
+  failed
+}
+
+class Member {
+  - id : Integer
+  - name : String {unique}
+  - passwordHash : String
+  --
+  + verify(password : String) : Boolean
+}
+
+class Preset {
+  - id : Integer
+  - name : String {unique}
+  - overrides : Map<String, Object>
+  --
+  + effectiveConfig() : Map<String, Object>
+}
+
+class Niche {
+  - id : Integer
+  - name : String
+  - slug : String {unique, derive de name}
+  - owner : String
+  - cadence : Integer
+  - captionTemplate : String
+  - hashtags : List<String>
+  - presetIds : List<Integer>
+  - tracks : List<Path>
+  - clips : List<Path>
+  - subtitles : SubtitleConfig
+  --
+  + videosDir() : Path
+}
+
+class Video {
+  - id : Integer
+  - track : Path
+  - seed : Integer
+  - file : Path
+  - status : VideoStatus
+  - caption : String
+  - subtitles : Map<String, List<String>>
+  - createdAt : DateTime
+  - error : String [0..1]
+}
+
+class SubtitleConfig <<value object>> {
+  - enabled : Boolean
+  - mode : String
+  - text : String
+  - preprompt : String
+  - x : Real
+  - y : Real
+  - size : Integer
+  - font : String
+}
+
+' --- Associations ---
+' Composition : la video n'existe pas sans sa niche (ON DELETE CASCADE)
+Niche "1" *-- "0..*" Video : produit >
+
+' Agregations faibles : aucune contrainte d'integrite, la cible peut disparaitre
+Niche "0..*" o-- "0..*" Preset : utilise >
+Video "0..*" ..> "0..1" Preset : produite avec >
+Member "1" ..> "0..*" Niche : possede (par nom) >
+
+Niche *-- "1" SubtitleConfig
+Video ..> VideoStatus
+
+note bottom of Niche
+  presetIds, tracks, clips et subtitles
+  sont stockes en TEXT/JSON dans SQLite.
+  _niche_row_to_dict les redonne
+  sous forme de vraies collections.
+end note
+
+note right of Video
+  seed + track + preset suffisent
+  a rejouer la video a l'identique.
+  file pointe hors de la base :
+  data/niches/<slug>/videos/
+end note
+
+legend right
+  |= Trait |= Signification |
+  | losange plein | composition — cascade reelle |
+  | losange creux | agregation — lien mou |
+  | pointille | dependance — aucune contrainte |
+  ==
+  Une seule relation est garantie par SQL :
+  Niche *-- Video (ON DELETE CASCADE).
+endlegend
+
+@enduml
