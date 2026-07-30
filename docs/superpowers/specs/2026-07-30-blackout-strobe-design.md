@@ -132,6 +132,20 @@ Le forçage du nombre de frames exact (`-frames:v`) reste en place : un segment
 noir compte dans le montage comme n'importe quel autre, et la dérive
 audio/vidéo ne peut pas naître de lui.
 
+### 6. Surface utilisateur
+
+`effects.blackout` rejoint les quatre bascules déjà exposées dans l'éditeur de
+preset (`Punch-zoom`, `Flash`, `Shake`, `Slow-mo`), sous le libellé
+**« Strobe de build-up »**, avec une ligne d'aide disant qu'il alterne images et
+écrans noirs jusqu'au drop et qu'il allonge sensiblement la génération.
+
+`blackout_beats` rejoint les overrides numériques bornés côté serveur
+(`NUMERIC_OVERRIDE_KEYS` / `OVERRIDE_RANGES`), dans `[0.25, 2.0]` : en dessous
+de 0,25 beat le clignotement dépasse 4 Hz, au-dessus de 2 beats ce ne sont plus
+des éclairs. Exposé comme champ numérique à côté des autres.
+
+Le type TypeScript `Overrides.effects` gagne `blackout?: boolean`.
+
 ## Ce qui s'aligne sans code
 
 Les segments de strobe durent `blackout_beats` beats, soit 0,23 s à 128 BPM —
@@ -195,3 +209,5 @@ Tous purs, sans FFmpeg :
   n'ouvre aucun fichier.
 - `_segment_filters` : une entrée noire produit une chaîne sans `crop`, sans
   `delogo` et sans layout, mais **avec** la punchline quand elle est présente.
+- `coerce_overrides` : `blackout_beats` borné à `[0.25, 2.0]`, refus d'une valeur
+  non convertible.
