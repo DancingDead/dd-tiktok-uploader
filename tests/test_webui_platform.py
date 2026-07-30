@@ -424,3 +424,32 @@ def test_patch_niche_stores_a_fixed_caption(client):
     assert subs["mode"] == "fixe"
     assert subs["text"] == "LIEN EN BIO"
     assert subs["size"] == 72
+
+
+def test_coerce_overrides_clamps_blackout_beats():
+    """En dessous de 0,25 beat le clignotement dépasse 4 Hz ; au-dessus de
+    2 beats ce ne sont plus des éclairs."""
+    assert coerce_overrides({"blackout_beats": 0.01})["blackout_beats"] == pytest.approx(0.25)
+    assert coerce_overrides({"blackout_beats": 99})["blackout_beats"] == pytest.approx(2.0)
+
+
+def test_coerce_overrides_accepts_a_numeric_string_for_blackout_beats():
+    assert coerce_overrides({"blackout_beats": "0.5"})["blackout_beats"] == pytest.approx(0.5)
+
+
+def test_coerce_overrides_rejects_a_non_numeric_blackout_beats():
+    with pytest.raises(ValueError):
+        coerce_overrides({"blackout_beats": "vite"})
+
+
+def test_preset_with_blackout_round_trips(client):
+    created = client.post("/api/presets", json={
+        "name": "Strobe montée",
+        "overrides": {"effects": {"zoom": True, "flash": True, "shake": True,
+                                  "speed": True, "blackout": True},
+                      "blackout_beats": 0.5}})
+    assert created.status_code == 200
+    presets = client.get("/api/state").get_json()["presets"]
+    saved = next(p for p in presets if p["name"] == "Strobe montée")
+    assert saved["overrides"]["effects"]["blackout"] is True
+    assert saved["overrides"]["blackout_beats"] == pytest.approx(0.5)
