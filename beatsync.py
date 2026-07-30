@@ -195,6 +195,12 @@ def blackout_boundaries(boundaries: list[tuple[float, int]], drop_out: float,
     l'impact tombe donc sur une image. Compter depuis le début de la fenêtre
     laisserait la parité au hasard de la durée du build-up.
 
+    La frontière du drop garde son indice de beat (voir `kept_after` ci-dessous)
+    pour que la relance accélérée (`speed_ramp.fast`) reste calculable APRÈS le
+    drop — pas pour le ralenti d'anticipation qui le précède : ce « gasp » ne
+    s'applique plus une fois le strobe actif, remplacé par l'éclair qui termine
+    le build-up.
+
     Retourne les frontières réécrites et l'ensemble des **indices de frame** où
     commence un segment noir. Pure."""
     step = float(config.get("blackout_beats", 0.5)) * beat_dur
@@ -951,6 +957,18 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     image_clips = [c for c in clips if c.get("kind") == "image"]
     IMAGE_MIN_GAP = 3          # segments entre deux images (anti-diaporama)
     last_image_seg = -IMAGE_MIN_GAP
+    # Compte les segments VISIBLES seulement (pas les noirs du strobe) : un
+    # écart de MIN_GAP doit correspondre à MIN_GAP plans montrés, pas à
+    # MIN_GAP frontières dont la moitié n'affiche rien.
+    visible_seg_index = -1
+    # Le strobe (quand il s'est vraiment déclenché — `black_frames` non vide,
+    # donc pas juste `effects.blackout` coché sans drop exploitable) remplace
+    # TOUT le build-up par une alternance éclair/noir : un segment de
+    # build-up y est alors toujours un éclair, jamais un plan normal. Les
+    # images n'ont pas leur place dans cette alternance (« un plan différent
+    # à chaque éclair » ne veut pas dire un diaporama) — c'est ce que ce
+    # booléen sert à exclure du tirage.
+    strobe_in_buildup = bool(black_frames)
 
     # --- Attribution des clips : tirage seedé dans les plages exploitables ---
     edl: list[dict] = []
@@ -984,6 +1002,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                 }
             )
             continue
+        visible_seg_index += 1
 
         if end_scene is not None and seg_start >= es_start - 1e-9:
             # Conclusion : ralenti long sur le climax, figé sur la dernière
@@ -1067,7 +1086,8 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                     for c in video_clips}
             usable = [c for c in video_clips if free[c["path"]]]
         if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
-                and seg_index - last_image_seg >= IMAGE_MIN_GAP:
+                and not (strobe_in_buildup and section == "buildup") \
+                and visible_seg_index - last_image_seg >= IMAGE_MIN_GAP:
             usable = usable + image_clips
         if not usable:
             raise ValueError(
@@ -1102,7 +1122,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
             # Flash court : pas de plage à choisir, pas de ralenti sur un fixe.
             # Le Ken Burns (sens tirés à la seed) évite l'image figée ; le zoom
             # ordinaire serait redondant avec lui.
-            last_image_seg = seg_index
+            last_image_seg = visible_seg_index
             prev_path = clip["path"]
             edl.append(
                 {

@@ -67,8 +67,11 @@ def test_the_head_segment_is_always_an_image():
 
 
 def test_the_drop_boundary_keeps_its_beat_index():
-    """C'est son indice qui fait du drop un impact pour ramp_speed : le perdre
-    casserait le ralenti d'anticipation qui le précède."""
+    """C'est son indice qui fait du drop un impact pour `ramp_speed` — mais
+    pour la relance accélérée (`fast`) qui SUIT le drop, pas pour le ralenti
+    d'anticipation qui le précède : celui-ci ne s'applique plus une fois le
+    strobe actif, remplacé par l'éclair qui termine le build-up. Perdre cet
+    indice casserait quand même la relance."""
     bounds, _ = grid()
     assert (4.0, 42) in [(round(t, 4), b) for t, b in bounds]
 
@@ -175,6 +178,32 @@ def test_the_drop_section_is_untouched():
     assert all(e["kind"] != "black" for e in edl if e["section"] == "drop")
 
 
+def images():
+    return [{"path": Path(f"/clips/{name}.png"), "kind": "image", "duration": None,
+             "width": 1920, "height": 1080, "ratio": 16 / 9}
+            for name in ("x", "y")]
+
+
+def test_the_strobe_excludes_images_from_the_buildup():
+    """« Un plan différent à chaque éclair » : le strobe ne doit pas piocher
+    dans les images, sans quoi un catalogue riche en images transformerait
+    une part de la montée en diaporama (mesuré : 7 éclairs sur 22 avant ce
+    correctif). Les images restent utilisables partout ailleurs (drop, ou
+    build-up sans strobe — voir le test suivant)."""
+    edl = build_edl(make_analysis(), clips() + images(), edl_config(), seed=42)
+    buildup_kinds = [e["kind"] for e in edl if e["section"] == "buildup"]
+    assert "image" not in buildup_kinds
+    assert "black" in buildup_kinds and "video" in buildup_kinds
+
+
+def test_images_stay_eligible_elsewhere_when_the_strobe_is_off():
+    """Le même catalogue mixte, strobe éteint : les images redeviennent
+    éligibles (ici dans la section drop, dont les segments d'un beat sont
+    déjà assez courts pour un flash)."""
+    edl = build_edl(make_analysis(), clips() + images(), edl_config(blackout=False), seed=42)
+    assert any(e["kind"] == "image" for e in edl)
+
+
 def test_black_entries_do_not_consume_the_catalog():
     """Un noir ne montre rien : il ne doit pas retirer de matière aux clips.
     Preuve : à catalogue et seed égaux, les points d'entrée des extraits
@@ -212,10 +241,16 @@ def test_reproducible():
     assert a == b
 
 
-def test_the_drop_is_still_an_impact():
-    """Le strobe ne doit pas voler au drop son statut d'impact : le segment
-    qui s'y termine garde son ralenti d'anticipation. C'est ce que la
-    conservation de l'indice de beat sur la frontière du drop protège."""
+def test_the_drop_beat_index_survives_so_the_ramp_pattern_still_applies():
+    """Le strobe ne doit pas voler au drop son indice de beat : le motif de
+    ramp reste calculable sur le segment qui s'y termine. `min_dur: 0.0` est
+    forcé ici pour l'observer, car à réglages par défaut l'éclair qui précède
+    le drop est plus court que `min_dur` et `_ramp_decision` l'exempte —
+    CE test ne prouve donc PAS que le « gasp » (le ralenti d'anticipation)
+    s'applique par défaut avec le strobe actif : il ne s'applique pas, le
+    strobe le remplace par un éclair. Voir `test_the_drop_boundary_keeps_its_beat_index`
+    pour ce que la conservation de l'indice protège réellement (la relance
+    accélérée après le drop)."""
     config = edl_config(speed_ramp={**DEFAULT_CONFIG["speed_ramp"],
                                     "impact_beats": 8, "slow_beats": 1,
                                     "min_dur": 0.0})
