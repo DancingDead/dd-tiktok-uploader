@@ -297,7 +297,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
           />
           <p className="text-xs text-muted-foreground">
             Alterne éclairs d'image et écrans noirs jusqu'au drop. Double le nombre de
-            segments : la génération est sensiblement plus longue.
+            segments, mais l'effet sur le temps de génération reste faible.
           </p>
         </CardContent>
       </Card>
