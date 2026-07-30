@@ -52,7 +52,9 @@ import pytest
 from beatsync import DEFAULT_CONFIG, blackout_boundaries
 
 FPS = 30.0
-BEAT = 0.5   # 120 BPM : un beat pile sur 15 frames, pas d'arrondi parasite
+BEAT = 0.4   # 150 BPM : un demi-beat = 0,2 s = PILE 6 frames à 30 fps.
+#              Un pas non entier en frames (0,25 s = 7,5 frames) rendrait
+#              l'alternance mathématiquement irrégulière après quantification.
 
 
 def cfg(**overrides):
@@ -74,12 +76,12 @@ def starts(boundaries):
 
 
 def test_the_buildup_becomes_a_regular_alternation():
-    """blackout_beats=0.5 à 120 BPM → un pas de 0,25 s. De 0 à 4 s, les
-    frontières tombent donc sur 0,25 · 0,50 · … · 3,75, plus les bornes."""
+    """blackout_beats=0.5 à 150 BPM → un pas de 0,2 s, soit 6 frames pile.
+    De 0 à 4 s, les frontières tombent donc sur 0,2 · 0,4 · … · 3,8."""
     bounds, _ = grid()
     before_drop = [t for t in starts(bounds) if t < 4.0]
     steps = [round(b - a, 4) for a, b in zip(before_drop, before_drop[1:])]
-    assert set(steps) == {0.25}, f"pas irrégulier : {steps}"
+    assert set(steps) == {0.2}, f"pas irrégulier : {steps}"
 
 
 def test_the_segment_ending_on_the_drop_is_an_image():
@@ -102,7 +104,10 @@ def test_alternation_is_image_black_image_going_back_from_the_drop():
 
 def test_the_head_segment_is_always_an_image():
     """Une vidéo qui s'ouvre sur du noir ressemble à un bug. On force l'image,
-    quitte à avoir deux éclairs d'affilée au tout début."""
+    quitte à avoir deux éclairs d'affilée au tout début.
+
+    Avec cette fixture le cas est réellement exercé : 20 segments avant le
+    drop, donc la tête est à k=19 — impaire, sa parité voudrait du noir."""
     bounds, black = grid()
     assert round(0.0 * FPS) not in black
 
@@ -135,7 +140,7 @@ def test_boundaries_stay_sorted_and_at_least_one_frame_apart():
 
 
 def test_a_step_longer_than_the_buildup_still_produces_a_grid():
-    """blackout_beats=20 à 120 BPM = 10 s de pas, pour un build-up de 4 s.
+    """blackout_beats=20 à 150 BPM = 8 s de pas, pour un build-up de 4 s.
     On ne doit pas rendre une grille vide ni perdre le drop."""
     bounds, _ = grid(blackout_beats=20.0)
     assert (0.0, -1) in [(round(t, 4), b) for t, b in bounds]
@@ -255,7 +260,7 @@ import numpy as np  # noqa: E402
 
 from beatsync import build_edl  # noqa: E402
 
-BPM = 120.0
+BPM = 150.0
 DURATION = 60.0
 
 
