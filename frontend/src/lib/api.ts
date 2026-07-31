@@ -57,6 +57,7 @@ export type Overrides = {
   grain?: number
   clip_speed?: number
   blackout_beats?: number
+  blackout_lead?: number
   subtitles?: { font?: string }
   format?: "vertical" | "carre" | "horizontal"
   end_scene?: { enabled?: boolean; beats?: number; freeze?: number; speed?: number }

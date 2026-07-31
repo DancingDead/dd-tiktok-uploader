@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
     "effects": {"zoom": True, "flash": True, "shake": True, "speed": True,
                 "blackout": False},     # strobe de build-up, opt-in
     "blackout_beats": 0.5,              # durée d'un éclair ET d'un noir, en beats
+    "blackout_lead": 2,                 # beats strobés avant chaque impact, SANS drop
     "chrono": True,                     # extraits en ordre chronologique dans l'histoire du clip
     "min_presence": 0.3,                # score minimal « personnages à l'écran » d'une plage
     "accents": {"rgb": True, "glitch": True},  # RGB split à l'impact, micro-glitch temps forts
@@ -186,49 +187,96 @@ def merge_boundaries_before_impacts(cut_beats: list[tuple[float, int]], anchor: 
     return kept or cut_beats
 
 
-def blackout_boundaries(boundaries: list[tuple[float, int]], drop_out: float,
+def strobe_zones(drop_out: float | None, impacts: list[float], beat_dur: float,
+                 limit: float, config: dict) -> list[tuple[float, float]]:
+    """Portions de la fenêtre à strober, sous forme de couples `(début, ancre)`.
+
+    Deux régimes, une seule mécanique en aval :
+      - **avec drop** : une zone unique, tout le build-up (`0 → drop`). C'est le
+        comportement d'origine, inchangé.
+      - **sans drop** (preset chill, `section: "calm"`) : une zone par impact,
+        couvrant les `blackout_lead` beats qui le précèdent. Sans le drop comme
+        point d'accroche, ce sont les impacts de `speed_ramp` qui donnent le
+        rythme — les mêmes que ceux des ralentis, donc le montage reste cohérent.
+
+    `limit` borne la dernière ancre acceptée : la scène de fin réécrit les
+    frontières APRÈS le strobe, et une zone qui empiéterait dessus laisserait un
+    long écran noir en guise de conclusion.
+
+    Zones disjointes et ordonnées par construction. Pure."""
+    if drop_out is not None:
+        return [(0.0, drop_out)] if drop_out > 0.0 else []
+    lead = int(config.get("blackout_lead", 2))
+    if lead <= 0:
+        return []
+    span = lead * beat_dur
+    zones = [(max(0.0, t - span), t) for t in impacts if 0.0 < t <= limit + 1e-9]
+    return [z for z in zones if z[1] - z[0] > 0.0]
+
+
+def blackout_boundaries(boundaries: list[tuple[float, int]],
+                        zones: list[tuple[float, float]],
                         beat_dur: float, config: dict,
-                        fps: float) -> tuple[list[tuple[float, int]], set[int]]:
-    """Remplace la grille du build-up par une alternance éclair / noir.
+                        fps: float) -> tuple[list[tuple[float, int]], set[int], set[int]]:
+    """Remplace la grille de chaque zone par une alternance éclair / noir.
 
-    Le comptage part **du drop et remonte** : c'est ce qui garantit que le
-    segment se terminant sur le drop est un éclair d'image et non un noir —
-    l'impact tombe donc sur une image. Compter depuis le début de la fenêtre
-    laisserait la parité au hasard de la durée du build-up.
+    Dans une zone, le comptage part **de l'ancre et remonte** : c'est ce qui
+    garantit que le segment se terminant sur l'ancre est un éclair d'image et
+    non un noir — l'impact tombe donc sur une image. Compter depuis le début
+    laisserait la parité au hasard de la durée de la zone.
 
-    La frontière du drop garde son indice de beat (voir `kept_after` ci-dessous)
-    pour que la relance accélérée (`speed_ramp.fast`) reste calculable APRÈS le
-    drop — pas pour le ralenti d'anticipation qui le précède : ce « gasp » ne
-    s'applique plus une fois le strobe actif, remplacé par l'éclair qui termine
-    le build-up.
+    La frontière de l'ancre garde son indice de beat (les frontières hors zone
+    sont conservées telles quelles) pour que la relance accélérée
+    (`speed_ramp.fast`) reste calculable APRÈS elle — pas pour le ralenti
+    d'anticipation qui la précède : ce « gasp » ne s'applique plus une fois le
+    strobe actif, remplacé par l'éclair qui termine la zone.
 
-    Retourne les frontières réécrites et l'ensemble des **indices de frame** où
-    commence un segment noir. Pure."""
+    Retourne les frontières réécrites, les **indices de frame** où commence un
+    segment noir, et ceux où commence un segment de strobe (noirs ET éclairs).
+    Ce second ensemble sert à tenir les images hors de l'alternance. Pure."""
     step = float(config.get("blackout_beats", 0.5)) * beat_dur
     frame = 1.0 / fps
-    if step < frame or drop_out <= frame:
-        return boundaries, set()          # rien à strober
+    if step < frame or not zones:
+        return boundaries, set(), set()   # rien à strober
 
-    # Points de coupe à rebours depuis le drop, exclus.
-    cuts: list[float] = []
-    t = drop_out - step
-    while t > frame - 1e-9:
-        cuts.append(round(t * fps) / fps)
-        t -= step
-    cuts.reverse()
-    # Doublons possibles après quantification si `step` est très court.
-    cuts = [c for i, c in enumerate(cuts) if i == 0 or c - cuts[i - 1] >= frame - 1e-9]
+    # On ne retire que ce qui est STRICTEMENT à l'intérieur d'une zone : la
+    # frontière qui l'ouvre reste, sinon une zone plus courte que le pas (aucun
+    # cut à l'intérieur) perdrait son début.
+    rebuilt = [b for b in boundaries
+               if not any(z0 + 1e-9 < b[0] < z1 - 1e-9 for z0, z1 in zones)]
+    black: set[int] = set()
+    strobe: set[int] = set()
 
-    kept_after = [(t, b) for t, b in boundaries if t >= drop_out - 1e-9]
-    rebuilt = [(0.0, -1)] + [(c, -1) for c in cuts if c >= frame - 1e-9] + kept_after
+    for z_start, z_end in zones:
+        # Points de coupe à rebours depuis l'ancre, exclue.
+        cuts: list[float] = []
+        t = z_end - step
+        while t > z_start + frame - 1e-9:
+            cuts.append(round(t * fps) / fps)
+            t -= step
+        cuts.reverse()
+        # Doublons possibles après quantification si `step` est très court.
+        cuts = [c for i, c in enumerate(cuts)
+                if i == 0 or c - cuts[i - 1] >= frame - 1e-9]
+        rebuilt += [(c, -1) for c in cuts] + [(z_start, -1)]
 
-    # Un segment d'indice k compté à rebours depuis le drop (k=0 pour celui qui
-    # s'y termine) est noir quand k est impair. Le segment de tête fait
-    # exception : une vidéo qui s'ouvre sur du noir ressemble à un bug.
-    starts_before = [t for t, _ in rebuilt if t < drop_out - 1e-9]
-    black = {round(t * fps) for k, t in enumerate(reversed(starts_before))
-             if k % 2 == 1 and k != len(starts_before) - 1}
-    return rebuilt, black
+        # Un segment d'indice k compté à rebours depuis l'ancre (k=0 pour celui
+        # qui s'y termine) est noir quand k est impair. Le tout premier segment
+        # de la vidéo fait exception : s'ouvrir sur du noir ressemble à un bug.
+        starts = [s for s in [z_start] + cuts if s < z_end - 1e-9]
+        strobe |= {round(s * fps) for s in starts}
+        head_exempt = len(starts) - 1 if z_start <= 1e-9 else -1
+        black |= {round(s * fps) for k, s in enumerate(reversed(starts))
+                  if k % 2 == 1 and k != head_exempt}
+
+    # Une frontière ouvrant une zone peut retomber sur une frontière existante.
+    # On dédoublonne par frame en gardant l'indice de beat réel : le perdre
+    # rendrait la relance accélérée incalculable sur cette frontière.
+    by_frame: dict[int, int] = {}
+    for t, b in rebuilt:
+        key = round(t * fps)
+        by_frame[key] = max(by_frame.get(key, -1), b)
+    return ([(k / fps, b) for k, b in sorted(by_frame.items())], black, strobe)
 
 
 SETTINGS_PATH = Path(__file__).parent / "settings.json"
@@ -898,13 +946,28 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     if drop_idx is not None:
         drop_out = round((float(beats[drop_idx]) - start) * fps) / fps
 
-    # Strobe de build-up : la grille d'avant le drop devient une alternance
-    # éclair / noir. Comptée à rebours depuis le drop, donc l'impact tombe
-    # sur une image.
+    # Strobe : la grille des zones de montée devient une alternance éclair /
+    # noir, comptée à rebours depuis l'ancre, donc l'impact tombe sur une image.
+    # Avec un drop, la zone est tout le build-up ; sans drop (preset chill), ce
+    # sont les quelques beats précédant chaque impact.
     black_frames: set = set()
-    if effects_cfg.get("blackout") and drop_out is not None and len(beats) >= 2:
-        boundaries, black_frames = blackout_boundaries(
-            boundaries, drop_out, float(np.median(np.diff(beats))), config, fps)
+    strobe_frames: set = set()
+    if effects_cfg.get("blackout") and len(beats) >= 2:
+        beat_dur = float(np.median(np.diff(beats)))
+        # Borne haute des zones : la scène de fin réécrit les frontières plus
+        # bas et laisserait un long noir si une zone empiétait dessus. Le
+        # candidat se calcule sans scanner les clips, donc dès ici.
+        es_cfg0 = config.get("end_scene") or {}
+        limit = out_end
+        if es_cfg0.get("enabled"):
+            limit = max(0.0, out_end - int(es_cfg0.get("beats", 8)) * beat_dur)
+        impacts = [round((float(beats[i]) - start) * fps) / fps
+                   for i in in_window
+                   if is_impact(int(i), impact_anchor,
+                                int((config.get("speed_ramp") or {}).get("impact_beats", 8)))]
+        zones = strobe_zones(drop_out, impacts, beat_dur, limit, config)
+        boundaries, black_frames, strobe_frames = blackout_boundaries(
+            boundaries, zones, beat_dur, config, fps)
 
     # Portions déjà montrées, par clip : le montage ne rejoue jamais un passage
     # (l'effet de retour en arrière que ça produisait cassait la fluidité).
@@ -962,14 +1025,11 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
     # écart de MIN_GAP doit correspondre à MIN_GAP plans montrés, pas à
     # MIN_GAP frontières dont la moitié n'affiche rien.
     visible_seg_index = -1
-    # Le strobe (quand il s'est vraiment déclenché — `black_frames` non vide,
-    # donc pas juste `effects.blackout` coché sans drop exploitable) remplace
-    # TOUT le build-up par une alternance éclair/noir : un segment de
-    # build-up y est alors toujours un éclair, jamais un plan normal. Les
-    # images n'ont pas leur place dans cette alternance (« un plan différent
-    # à chaque éclair » ne veut pas dire un diaporama) — c'est ce que ce
-    # booléen sert à exclure du tirage.
-    strobe_in_buildup = bool(black_frames)
+    # Une zone de strobe est une alternance éclair/noir : un segment qui s'y
+    # trouve est toujours un éclair, jamais un plan normal. Les images n'y ont
+    # pas leur place (« un plan différent à chaque éclair » ne veut pas dire un
+    # diaporama), et `strobe_frames` le dit exactement — là où l'ancien test sur
+    # la section « buildup » ratait le cas sans drop, où tout vaut « main ».
 
     # --- Attribution des clips : tirage seedé dans les plages exploitables ---
     edl: list[dict] = []
@@ -1087,7 +1147,7 @@ def build_edl(analysis: dict, clips: list[dict], config: dict, seed: int) -> lis
                     for c in video_clips}
             usable = [c for c in video_clips if free[c["path"]]]
         if image_clips and duration <= IMAGE_MAX_DUR + 1e-9 \
-                and not (strobe_in_buildup and section == "buildup") \
+                and round(seg_start * fps) not in strobe_frames \
                 and visible_seg_index - last_image_seg >= IMAGE_MIN_GAP:
             usable = usable + image_clips
         if not usable:

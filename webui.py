@@ -30,7 +30,7 @@ EDITABLE_SETTINGS = [
 ]
 # Clés d'overrides de preset qui doivent être numériques (défense XSS : jamais de HTML stocké)
 NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
-                         "grain", "clip_speed", "blackout_beats")
+                         "grain", "clip_speed", "blackout_beats", "blackout_lead")
 # Plages valides : au-delà, le rendu casse en silence (min_presence trop haut =
 # plus aucun clip retenu → montage vide). On borne à la source, pour tous les
 # clients (UI + API), plutôt que de compter sur des bornes UI.
@@ -44,6 +44,10 @@ OVERRIDE_RANGES = {
     # En dessous de 0,25 beat le clignotement dépasse 4 Hz ; au-dessus de
     # 2 beats ce ne sont plus des éclairs.
     "blackout_beats": (0.25, 2.0),
+    # Beats strobés avant chaque impact, quand le morceau n'a pas de drop.
+    # 0 = repli désactivé ; au-delà d'`impact_beats` (8) les zones se
+    # rejoindraient et le montage entier passerait sous strobe.
+    "blackout_lead": (0, 8),
 }
 ALLOWED_COLOR_GRADES = ("neutre", "chaud", "froid", "delave")
 ALLOWED_FORMATS = ("vertical", "carre", "horizontal")

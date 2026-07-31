@@ -126,6 +126,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const [speed, setSpeed] = useState(o.effects?.speed ?? false)
   const [blackout, setBlackout] = useState(o.effects?.blackout ?? false)
   const [blackoutBeats, setBlackoutBeats] = useState(o.blackout_beats ?? 0.5)
+  const [blackoutLead, setBlackoutLead] = useState(o.blackout_lead ?? 2)
   const [rgb, setRgb] = useState(o.accents?.rgb ?? false)
   const [delogo, setDelogo] = useState(o.delogo ?? false)
   const [chrono, setChrono] = useState(o.chrono ?? false)
@@ -160,6 +161,7 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
   const buildOverrides = (): Overrides => ({
     effects: { zoom, flash, shake, speed, blackout },
     blackout_beats: blackoutBeats,
+    blackout_lead: blackoutLead,
     accents: { rgb, glitch },
     delogo,
     chrono,
@@ -296,9 +298,24 @@ export function PresetEditor({ preset, template, existingNames, onSaved, onDelet
             max={2}
             disabled={!blackout}
           />
+          <NumberField
+            id="blackout-lead"
+            label="Montée sans drop (beats)"
+            value={blackoutLead}
+            onChange={setBlackoutLead}
+            step={1}
+            min={0}
+            max={8}
+            disabled={!blackout}
+          />
           <p className="text-xs text-muted-foreground">
             Alterne éclairs d'image et écrans noirs jusqu'au drop. Double le nombre de
             segments, mais l'effet sur le temps de génération reste faible.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Sur un morceau sans drop net (passage calme), le strobe se rabat sur les
+            impacts du montage et monte pendant ce nombre de beats avant chacun.
+            0 désactive ce repli.
           </p>
         </CardContent>
       </Card>

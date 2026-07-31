@@ -19,10 +19,15 @@ def cfg(**overrides):
 
 
 def grid(drop_out=4.0, window_end=8.0, **overrides):
-    """Frontières d'origine : début de fenêtre, le drop, la fin. La fonction
-    ne doit toucher qu'à ce qui précède le drop."""
+    """Frontières d'origine : début de fenêtre, le drop, la fin. Avec un drop,
+    la zone unique couvre tout le build-up ; la fonction ne doit donc toucher
+    qu'à ce qui précède le drop. Renvoie `(frontières, noirs)` — l'ensemble des
+    segments de strobe n'intéresse que les tests d'images."""
     boundaries = [(0.0, -1), (2.0, -1), (drop_out, 42), (6.0, -1), (window_end, -1)]
-    return blackout_boundaries(boundaries, drop_out, BEAT, cfg(**overrides), FPS)
+    bounds, black, _ = blackout_boundaries(
+        boundaries, [(0.0, drop_out)] if drop_out > 0.0 else [],
+        BEAT, cfg(**overrides), FPS)
+    return bounds, black
 
 
 def starts(boundaries):
@@ -107,8 +112,9 @@ def test_a_step_longer_than_the_buildup_still_produces_a_grid():
 def test_a_drop_at_the_very_start_leaves_the_grid_alone():
     """Pas de build-up à strober : rien à faire."""
     boundaries = [(0.0, -1), (0.0, 7), (4.0, -1)]
-    bounds, black = blackout_boundaries(boundaries, 0.0, BEAT, cfg(), FPS)
-    assert black == set()
+    bounds, black, strobe = blackout_boundaries(boundaries, [], BEAT, cfg(), FPS)
+    assert black == set() and strobe == set()
+    assert bounds == boundaries
 
 
 # --- Intégration dans build_edl --------------------------------------------
@@ -229,9 +235,26 @@ def test_disabled_leaves_the_edl_identical():
     assert all(e["kind"] != "black" for e in off)
 
 
-def test_no_drop_means_no_strobe():
-    analysis = make_analysis()
-    edl = build_edl(analysis, clips(), edl_config(drop_time=None), seed=42)
+def test_without_a_drop_the_strobe_falls_back_on_the_impacts():
+    """Preset chill (`section: "calm"`) : `resolve_window` ne cherche pas de
+    drop, donc le strobe n'a pas d'ancre. Il se rabat sur les impacts de
+    `speed_ramp` — sans quoi cocher la case ne produisait rien du tout."""
+    edl = build_edl(make_analysis(), clips(), edl_config(drop_time=None), seed=42)
+    assert any(e["kind"] == "black" for e in edl)
+
+
+def test_without_a_drop_the_strobe_stays_a_minority_of_the_montage():
+    """`blackout_lead=2` sur des impacts tous les 8 beats : la montée ne couvre
+    qu'une fraction du montage, sinon ce n'est plus une ponctuation."""
+    edl = build_edl(make_analysis(), clips(), edl_config(drop_time=None), seed=42)
+    total = sum(e["duration"] for e in edl)
+    black = sum(e["duration"] for e in edl if e["kind"] == "black")
+    assert 0.0 < black < 0.25 * total
+
+
+def test_a_lead_of_zero_disables_the_fallback():
+    edl = build_edl(make_analysis(), clips(),
+                    edl_config(drop_time=None, blackout_lead=0), seed=42)
     assert all(e["kind"] != "black" for e in edl)
 
 

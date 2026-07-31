@@ -433,6 +433,13 @@ def test_coerce_overrides_clamps_blackout_beats():
     assert coerce_overrides({"blackout_beats": 99})["blackout_beats"] == pytest.approx(2.0)
 
 
+def test_coerce_overrides_clamps_blackout_lead():
+    """Au-delà d'`impact_beats` (8) les zones de strobe se rejoindraient et tout
+    le montage passerait sous strobe ; 0 désactive proprement le repli."""
+    assert coerce_overrides({"blackout_lead": 99})["blackout_lead"] == 8
+    assert coerce_overrides({"blackout_lead": -3})["blackout_lead"] == 0
+
+
 def test_coerce_overrides_accepts_a_numeric_string_for_blackout_beats():
     assert coerce_overrides({"blackout_beats": "0.5"})["blackout_beats"] == pytest.approx(0.5)
 
