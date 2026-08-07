@@ -53,6 +53,11 @@ export function ClipperTab({
   const [selectedId, setSelectedId] = useState<number | null>(null)
   // Un job d'analyse à la fois par source, indexé par id.
   const [analyzeJobs, setAnalyzeJobs] = useState<Record<number, string | null>>({})
+  // Garde posée AU CLIC, avant la réponse serveur : `source.status` ne passe
+  // à transcribing/analyzing/rendering qu'après refresh(), donc entre le clic
+  // et ce refresh, `busy` (dérivé du statut serveur) vaut encore false et un
+  // second clic partirait — même motif que `busyId` dans SourceDetail/VideoLibrary.
+  const [analyzeClicked, setAnalyzeClicked] = useState<Set<number>>(new Set())
 
   const loadInbox = useCallback(async () => {
     try {
@@ -119,18 +124,39 @@ export function ClipperTab({
   const toggle = (id: number) => setSelectedId((cur) => (cur === id ? null : id))
 
   const analyze = async (id: number) => {
+    if (analyzeClicked.has(id)) return
+    setAnalyzeClicked((ids) => new Set(ids).add(id))
     try {
       const { job_id } = await api.runClipperSource(id)
       setAnalyzeJobs((jobs) => ({ ...jobs, [id]: job_id }))
       setSelectedId(id)
     } catch (e) {
+      setAnalyzeClicked((ids) => {
+        const next = new Set(ids)
+        next.delete(id)
+        return next
+      })
       toast.error((e as Error).message)
     }
   }
 
   const onAnalyzeDone = useCallback(
-    (status: "done" | "failed") => {
+    (id: number, status: "done" | "failed") => {
       refresh()
+      // Le JobLog est démonté/remonté à chaque pliage de la ligne (il n'est
+      // rendu que quand `expanded`) : un jobId laissé en place se rejouerait
+      // en entier — nouveau tick, nouveau "done", nouveau toast — à chaque
+      // réouverture. Un job terminé n'a plus de journal à suivre.
+      setAnalyzeJobs((jobs) => {
+        const next = { ...jobs }
+        delete next[id]
+        return next
+      })
+      setAnalyzeClicked((ids) => {
+        const next = new Set(ids)
+        next.delete(id)
+        return next
+      })
       if (status === "failed") toast.error("l'analyse a échoué — voir le journal")
       else toast.success("analyse terminée")
     },
@@ -260,7 +286,7 @@ export function ClipperTab({
                   <IconButton
                     tip="Analyser"
                     className="text-muted-foreground"
-                    disabled={busy}
+                    disabled={busy || analyzeClicked.has(source.id)}
                     onClick={(e) => {
                       e.stopPropagation()
                       analyze(source.id)
@@ -282,7 +308,10 @@ export function ClipperTab({
 
                 {expanded && (
                   <div className="space-y-3 border-t px-4 py-3">
-                    <JobLog jobId={analyzeJobs[source.id] ?? null} onDone={onAnalyzeDone} />
+                    <JobLog
+                      jobId={analyzeJobs[source.id] ?? null}
+                      onDone={(status) => onAnalyzeDone(source.id, status)}
+                    />
                     <SourceDetail clips={source.clips} refresh={refresh} />
                   </div>
                 )}
