@@ -236,3 +236,73 @@ def crop_expr(track: list[float], sample_fps: float, crop_w: int,
                                       reversed(merged[1:])):
         expr = f"if(lt(t,{next_time:g}),{x},{expr})"
     return expr
+
+
+# Rouge Dancing Dead #ff1e46. ASS code la couleur en BGR, pas en RGB : R=ff,
+# G=1e, B=46 s'écrit &H461EFF&. Inverser donne du bleu, pas une erreur visible
+# au test — d'où le commentaire.
+ASS_HIGHLIGHT = "&H461EFF&"
+ASS_BASE = "&HFFFFFF&"
+# 4 mots tiennent sur une ligne en Impact 64 px sur 1080 de large, et c'est la
+# fenêtre de lecture d'un spectateur qui scrolle.
+ASS_WORDS_PER_LINE = 4
+
+
+def ass_time(seconds: float) -> str:
+    """Horodatage ASS : H:MM:SS.cc (centièmes, pas millièmes)."""
+    seconds = max(0.0, seconds)
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    # Troncature et non arrondi : round() ferait passer 1,999 s à « .100 »,
+    # trois chiffres là où ASS en attend deux, et le sous-titre disparaît.
+    return f"{hours}:{minutes:02d}:{secs:02d}.{int((seconds % 1) * 100):02d}"
+
+
+def _ass_escape(text: str) -> str:
+    """Neutralise ce qui pilote le rendu ASS. Sans ça, un orateur qui dit
+    « accolade » — ou Whisper qui hallucine une — injecte une balise."""
+    return (text.replace("\\", "\\\\").replace("{", r"\{").replace("}", r"\}")
+                .replace("\n", " "))
+
+
+def build_ass(words: list[dict], start: float, end: float, *,
+              y: float = 0.74, size: int = 64) -> str:
+    """Sous-titres karaoké : la ligne entière s'affiche, le mot en cours d'être
+    prononcé passe en rouge. Temps rebasés sur `start`. Pure."""
+    inside = [x for x in words if x["end"] > start and x["start"] < end]
+    margin = int(round((1 - y) * OUT_H))
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {OUT_W}\nPlayResY: {OUT_H}\n"
+        "WrapStyle: 2\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour,"
+        " BackColour, Bold, BorderStyle, Outline, Shadow, Alignment,"
+        " MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: DD,Impact,{size},{ASS_BASE},&H000000&,&H000000&,-1,1,4,0,2,"
+        f"60,60,{margin},1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR,"
+        " MarginV, Effect, Text\n"
+    )
+    lines = []
+    for i in range(0, len(inside), ASS_WORDS_PER_LINE):
+        group = inside[i:i + ASS_WORDS_PER_LINE]
+        texts = [_ass_escape(x["word"].strip()) for x in group]
+        for j, word in enumerate(group):
+            rendered = " ".join(
+                f"{{\\c{ASS_HIGHLIGHT}}}{t}{{\\c{ASS_BASE}}}" if k == j else t
+                for k, t in enumerate(texts))
+            lines.append(
+                f"Dialogue: 0,{ass_time(word['start'] - start)},"
+                f"{ass_time(word['end'] - start)},DD,,0,0,0,,{rendered}")
+    return header + "\n".join(lines) + ("\n" if lines else "")
+
+
+def ffmpeg_path(path) -> str:
+    """Chemin utilisable À L'INTÉRIEUR d'une chaîne de filtre ffmpeg. Sur
+    Windows, `C:\\data\\x.ass` casse le parseur : le `:` y sépare les arguments
+    du filtre et `\\` y ouvre une séquence d'échappement. On normalise en `/` et
+    on échappe le `:` de la lettre de lecteur."""
+    return str(path).replace("\\", "/").replace(":", "\\:")
