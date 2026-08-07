@@ -55,10 +55,18 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
     # disque : relancer une analyse après un changement de réglage ne doit pas
     # repayer une heure de Whisper.
     cache = folder / "transcript.json"
+    words = None
     if cache.is_file():
-        log("Transcript en cache.")
-        words = json.loads(cache.read_text(encoding="utf-8"))
-    else:
+        try:
+            words = json.loads(cache.read_text(encoding="utf-8"))
+            log("Transcript en cache.")
+        except (json.JSONDecodeError, OSError):
+            # Un processus tué en pleine écriture laisse un JSON tronqué : un
+            # cache illisible vaut cache absent, sinon la source est condamnée
+            # (cache.is_file() resterait vrai pour toujours et on ne
+            # retranscrirait plus jamais).
+            log("Transcript en cache corrompu, retranscription.")
+    if words is None:
         dbmod.set_clipper_source_status(conn, source_id, "transcribing")
         log("Transcription en cours (c'est long, ~1x la durée de la vidéo)…")
         words = clipper.transcribe(video, config["whisper_model"])
@@ -97,8 +105,24 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
     best = clipper.rank_moments(candidates, count)
     log(f"{len(best)} clip(s) retenu(s).")
 
+    # Sortie anticipée AVANT toute suppression : si rien n'est retenu, les
+    # clips d'un run précédent doivent rester intacts. Sans ça, relancer une
+    # analyse avec le LLM éteint effaçait un bon lot et affichait « done ».
+    if not best:
+        reason = ("aucun candidat proposé par le LLM" if not raw else
+                  "aucun candidat n'a survécu au recalage")
+        dbmod.set_clipper_source_status(conn, source_id, "failed", reason)
+        log(f"Échec : {reason}.")
+        return 0
+
     # 6. Rendu. Les clips d'une analyse précédente sont remplacés : relancer une
     # source doit donner son résultat courant, pas s'y accumuler.
+    # Cas accepté : si TOUS les rendus échouent plus bas, ces clips précédents
+    # sont perdus quand même. On ne peut pas s'en protéger proprement sans
+    # complexifier (il faudrait rendre dans un dossier temporaire puis
+    # basculer) — et une source dont tous les rendus échouent est de toute
+    # façon dans un état cassé ; le statut `failed` posé juste après le
+    # dit clairement, au lieu de laisser croire à un succès silencieux.
     for old in dbmod.list_clipper_clips(conn, source_id):
         dbmod.delete_clipper_clip(conn, old["id"])
         old_file = root / old["file"]
@@ -126,8 +150,14 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
             file=str(out.relative_to(root)))
         produced += 1
 
-    dbmod.set_clipper_source_status(conn, source_id, "done")
-    log(f"OK — {produced}/{len(best)} clip(s) produit(s)")
+    if produced > 0:
+        dbmod.set_clipper_source_status(conn, source_id, "done")
+        log(f"OK — {produced}/{len(best)} clip(s) produit(s)")
+    else:
+        dbmod.set_clipper_source_status(
+            conn, source_id, "failed",
+            "tous les rendus ont échoué : voir le journal")
+        log("Échec : tous les rendus ont échoué.")
     return produced
 
 

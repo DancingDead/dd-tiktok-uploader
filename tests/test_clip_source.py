@@ -142,3 +142,59 @@ def test_relancer_une_source_remplace_les_clips(source, monkeypatch):
     clip_source.process(conn, root, sid, clipper.DEFAULTS, log=lambda m: None)
     clip_source.process(conn, root, sid, clipper.DEFAULTS, log=lambda m: None)
     assert len(list_clipper_clips(conn, sid)) == 1
+
+
+def test_llm_muet_ne_detruit_pas_les_clips_precedents(source, monkeypatch):
+    """LM Studio éteint au second passage : la source passe en echec et les
+    clips du premier passage survivent. Sans ca, relancer une analyse pouvait
+    effacer un bon lot et annoncer un succes."""
+    conn, root, sid = source
+    _mock_all(monkeypatch, root, [{"start": 0.0, "end": 40.0, "title": "M"}])
+    clip_source.process(conn, root, sid, clipper.DEFAULTS, log=lambda m: None)
+    garde = list_clipper_clips(conn, sid)
+    assert len(garde) == 1
+    fichier = root / garde[0]["file"]
+    assert fichier.is_file()
+
+    monkeypatch.setattr(clipper, "propose_moments", lambda *a, **k: [])
+    assert clip_source.process(conn, root, sid, clipper.DEFAULTS,
+                               log=lambda m: None) == 0
+    assert get_clipper_source(conn, sid)["status"] == "failed"
+    assert list_clipper_clips(conn, sid) == garde
+    assert fichier.is_file()
+
+
+def test_tous_les_candidats_rejetes_au_recalage(source, monkeypatch):
+    conn, root, sid = source
+    _mock_all(monkeypatch, root, [{"start": 62.0, "end": 64.0, "title": "trop court"}])
+    assert clip_source.process(conn, root, sid, clipper.DEFAULTS,
+                               log=lambda m: None) == 0
+    assert get_clipper_source(conn, sid)["status"] == "failed"
+
+
+def test_tous_les_rendus_echouent(source, monkeypatch):
+    conn, root, sid = source
+    _mock_all(monkeypatch, root, [{"start": 0.0, "end": 40.0, "title": "M"}])
+
+    def toujours_casse(*a, **k):
+        raise RuntimeError("ffmpeg a plante")
+    monkeypatch.setattr(clipper, "render_clip", toujours_casse)
+
+    assert clip_source.process(conn, root, sid, clipper.DEFAULTS,
+                               log=lambda m: None) == 0
+    assert get_clipper_source(conn, sid)["status"] == "failed"
+
+
+def test_un_cache_de_transcript_corrompu_est_ignore(source, monkeypatch):
+    """Un processus tue en pleine ecriture laisse un JSON tronque. Il doit
+    valoir cache absent, sinon la source est condamnee : cache.is_file()
+    reste vrai et on ne retranscrit jamais."""
+    conn, root, sid = source
+    _mock_all(monkeypatch, root, [{"start": 0.0, "end": 40.0, "title": "M"}])
+    cache = root / "data" / "clipper" / "essai" / "transcript.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text('[{"word": "tron')
+
+    assert clip_source.process(conn, root, sid, clipper.DEFAULTS,
+                               log=lambda m: None) == 1
+    assert json.loads(cache.read_text())[0]["word"] == "phrase"
