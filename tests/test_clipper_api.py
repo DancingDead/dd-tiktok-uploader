@@ -184,3 +184,33 @@ def test_import_youtube_accepte_une_url_normale(client, tmp_path, monkeypatch):
     assert reponse.get_json()["job_id"] == "job42"
     liens = (tmp_path / "data" / "clipper" / "_inbox" / "links.txt").read_text()
     assert liens.strip() == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+def test_promotion_refuse_un_fichier_sans_piste_audio(client, tmp_path, monkeypatch):
+    """Une source muette est condamnée d'avance : mieux vaut refuser à la
+    promotion que créer une source qui échouera à l'analyse en accusant le
+    contenu alors que le problème est le téléchargement."""
+    import clipper
+
+    inbox = tmp_path / "data" / "clipper" / "_inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "muet.mp4").write_bytes(b"faux")
+    monkeypatch.setattr(clipper, "has_audio", lambda p: False)
+
+    reponse = client.post("/api/clipper/inbox/muet.mp4")
+    assert reponse.status_code == 400
+    assert "audio" in reponse.get_json()["error"]
+    assert client.get("/api/state").get_json()["clipper_sources"] == []
+
+
+def test_promotion_accepte_un_fichier_avec_audio(client, tmp_path, monkeypatch):
+    import clipper
+
+    inbox = tmp_path / "data" / "clipper" / "_inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "parle.mp4").write_bytes(b"faux")
+    monkeypatch.setattr(clipper, "has_audio", lambda p: True)
+    monkeypatch.setattr(clipper, "probe_duration", lambda p: 120.0)
+
+    assert client.post("/api/clipper/inbox/parle.mp4").status_code == 200
+    assert (tmp_path / "data/clipper/parle/source.mp4").is_file()

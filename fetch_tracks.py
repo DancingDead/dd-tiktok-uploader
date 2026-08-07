@@ -24,14 +24,25 @@ def parse_links(text: str) -> list[str]:
     return links
 
 
-def ytdlp_args(dest: Path, video: bool) -> list[str]:
-    """Arguments yt-dlp : audio mp3 par défaut, ou vidéo ≤1080p mp4 (clips)."""
+def ytdlp_args(dest: Path, video: bool, with_audio: bool = False) -> list[str]:
+    """Arguments yt-dlp : audio mp3 par défaut, ou vidéo ≤1080p mp4 (clips).
+
+    `with_audio` ne concerne que le mode vidéo. Il est faux par défaut parce que
+    le catalogue `clips/` de beatsync n'a que faire du son (le montage pose sa
+    propre bande son) : lui ajouter l'audio ferait retélécharger tout le
+    catalogue pour rien. Le clipper, lui, ne travaille QUE sur la parole — sans
+    piste audio, sa source est condamnée avant même la transcription."""
     common = [
         "--restrict-filenames",  # noms de fichiers sans espaces/accents : plus simple en CLI
         "--no-overwrites",       # relancer le script ne retélécharge pas l'existant
         "--ignore-errors",       # un lien mort ne bloque pas les suivants
         "-o", str(dest / "%(title)s.%(ext)s"),
     ]
+    if video and with_audio:
+        # `bv*` seul sélectionne un flux VIDÉO SEULE (sur YouTube, le 1080p DASH
+        # est muet) : d'où `+ba`, et le repli sur `b` = un format déjà muxé.
+        return ["-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                "--merge-output-format", "mp4", *common]
     if video:
         # Toutes les alternatives sont plafonnées à 1080p : sans piste ≤1080p,
         # yt-dlp échoue pour cette vidéo et --ignore-errors passe à la suivante.
@@ -41,13 +52,16 @@ def ytdlp_args(dest: Path, video: bool) -> list[str]:
             *common]
 
 
-def download_tracks(urls: list[str], dest: Path, video: bool = False) -> int:
+def download_tracks(urls: list[str], dest: Path, video: bool = False,
+                    with_audio: bool = False) -> int:
     """Télécharge chaque URL dans dest : audio mp3 par défaut, vidéo ≤1080p mp4
-    si video=True. Retourne le code yt-dlp (0 = tout OK ; on continue malgré
-    les échecs individuels avec --ignore-errors)."""
+    si video=True (avec la piste audio muxée si with_audio). Retourne le code
+    yt-dlp (0 = tout OK ; on continue malgré les échecs individuels avec
+    --ignore-errors)."""
     dest.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [sys.executable, "-m", "yt_dlp", *ytdlp_args(dest, video), *urls])
+        [sys.executable, "-m", "yt_dlp",
+         *ytdlp_args(dest, video, with_audio), *urls])
     return result.returncode
 
 
@@ -60,6 +74,8 @@ def main() -> None:
                         help="fichier de liens (défaut : links.txt)")
     parser.add_argument("--dest", default="tracks", help="dossier de destination (défaut : tracks/)")
     parser.add_argument("--video", action="store_true", help="télécharge la VIDÉO (clips) au lieu de l'audio")
+    parser.add_argument("--with-audio", action="store_true",
+                        help="avec --video : muxe la piste audio (source du clipper)")
     args = parser.parse_args()
 
     links_path = Path(args.links_file)
@@ -71,7 +87,8 @@ def main() -> None:
         sys.exit(f"aucun lien dans {links_path} (un lien YouTube par ligne, # pour commenter)")
 
     print(f"{len(urls)} lien(s) à télécharger vers {args.dest}/")
-    code = download_tracks(urls, Path(args.dest), video=args.video)
+    code = download_tracks(urls, Path(args.dest), video=args.video,
+                           with_audio=args.with_audio)
     if code != 0:
         sys.exit("certains téléchargements ont échoué (voir les messages yt-dlp ci-dessus)")
     print("Téléchargements terminés.")

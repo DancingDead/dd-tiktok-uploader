@@ -666,9 +666,11 @@ def create_app(root: Path | None = None):
         links = inbox / "links.txt"
         links.write_text(url + "\n")
         try:
+            # --with-audio : sans lui, yt-dlp rend le meilleur flux VIDÉO SEULE
+            # et la source arrive muette — le clipper ne traite que la parole.
             job_id = start_job("clipper-download",
                                [sys.executable, "fetch_tracks.py", str(links),
-                                "--video", "--dest", str(inbox)])
+                                "--video", "--with-audio", "--dest", str(inbox)])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
         return jsonify({"job_id": job_id})
@@ -688,10 +690,22 @@ def create_app(root: Path | None = None):
 
         import clip_source
 
+        import clipper
+
         safe = Path(name).name  # neutralise toute traversée de chemin
         origin = paths["clipper"] / "_inbox" / safe
         if origin.suffix.lower() not in VIDEO_EXTS or not origin.is_file():
             return jsonify({"error": "fichier introuvable"}), 404
+        # Refus à la promotion plutôt qu'échec à l'analyse : une source muette
+        # est condamnée d'avance (le lot 1 ne traite que la parole), et le
+        # message d'échec de l'analyse accuserait le contenu, pas le fichier.
+        try:
+            muette = not clipper.has_audio(origin)
+        except Exception:
+            muette = False   # ffprobe indisponible : on ne bloque pas l'import
+        if muette:
+            return jsonify({"error": "cette vidéo n'a pas de piste audio : le "
+                                     "clipper ne traite que le contenu parlé"}), 400
         conn = get_conn()
         try:
             existing = {s["slug"] for s in dbmod.list_clipper_sources(conn)}
