@@ -272,6 +272,12 @@ ASS_BASE = "&HFFFFFF&"
 # 4 mots tiennent sur une ligne en Impact 64 px sur 1080 de large, et c'est la
 # fenêtre de lecture d'un spectateur qui scrolle.
 ASS_WORDS_PER_LINE = 4
+# Le projet EMBARQUE ses polices (beatsync.FONTS_DIR) : « Impact » n'est pas
+# installable partout et libass lui substituerait silencieusement une sans-serif
+# quelconque. Anton est le substitut sous licence OFL qu'utilise déjà beatsync
+# pour le nom logique « impact » — nommer autre chose ici donnerait deux typos
+# différentes à des vidéos censées venir du même label.
+ASS_FONT = "Anton"
 
 
 def ass_time(seconds: float) -> str:
@@ -308,7 +314,7 @@ def build_ass(words: list[dict], start: float, end: float, *,
         "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour,"
         " BackColour, Bold, BorderStyle, Outline, Shadow, Alignment,"
         " MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: DD,Impact,{size},{ASS_BASE},&H000000&,&H000000&,-1,1,4,0,2,"
+        f"Style: DD,{ASS_FONT},{size},{ASS_BASE},&H000000&,&H000000&,-1,1,4,0,2,"
         f"60,60,{margin},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR,"
@@ -322,9 +328,14 @@ def build_ass(words: list[dict], start: float, end: float, *,
             rendered = " ".join(
                 f"{{\\c{ASS_HIGHLIGHT}}}{t}{{\\c{ASS_BASE}}}" if k == j else t
                 for k, t in enumerate(texts))
+            # La ligne tient jusqu'au mot suivant, pas jusqu'à la fin du mot
+            # courant : borner sur word["end"] éteint le sous-titre pendant
+            # chaque respiration, et le français parlé en est plein — la ligne
+            # clignotait en continu.
+            until = group[j + 1]["start"] if j + 1 < len(group) else group[-1]["end"]
             lines.append(
                 f"Dialogue: 0,{ass_time(word['start'] - start)},"
-                f"{ass_time(word['end'] - start)},DD,,0,0,0,,{rendered}")
+                f"{ass_time(until - start)},DD,,0,0,0,,{rendered}")
     return header + "\n".join(lines) + ("\n" if lines else "")
 
 
@@ -620,6 +631,11 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
                          default=src_w / 2, dead_zone=DEAD_ZONE * crop_w)
     expr = crop_expr(track, SAMPLE_FPS, crop_w, src_w)
 
+    # Police EMBARQUÉE, comme beatsync : sans fontsdir, libass demande « Anton »
+    # à fontconfig et lui substitue silencieusement une sans-serif quelconque
+    # sur une machine où elle n'est pas installée (la tour de prod, typiquement).
+    from beatsync import FONTS_DIR   # import paresseux : beatsync est lourd
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     ass_path = out_path.with_suffix(".ass")
     ass_path.write_text(build_ass(words, start, end), encoding="utf-8")
@@ -629,7 +645,8 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
     evaluation = ":eval=frame" if "if(" in expr else ""
     filters = (f"crop={crop_w}:{crop_h}:x='{expr}':y=0{evaluation},"
                f"scale={OUT_W}:{OUT_H}:flags=lanczos,"
-               f"subtitles='{ffmpeg_path(ass_path)}'")
+               f"subtitles='{ffmpeg_path(ass_path)}'"
+               f":fontsdir='{ffmpeg_path(FONTS_DIR)}'")
     try:
         args = ["-y", "-loglevel", "error",
                 "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(video_path),

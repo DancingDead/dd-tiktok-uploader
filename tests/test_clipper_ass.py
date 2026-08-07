@@ -84,3 +84,40 @@ def test_ffmpeg_path_neutralise_l_apostrophe():
     """Le filtre s'écrit subtitles='<chemin>' : une apostrophe dans le chemin
     refermerait la chaîne et la fin du chemin passerait pour des options."""
     assert ffmpeg_path("/home/o'brien/x.ass") == "/home/o'\\''brien/x.ass"
+
+
+def _dialogue_times(line: str) -> tuple[str, str]:
+    fields = line.split(",")
+    return fields[1], fields[2]
+
+
+def test_pas_de_trou_entre_deux_mots_d_une_meme_ligne():
+    """Borner chaque Dialogue sur la fin du mot éteint le sous-titre pendant
+    chaque respiration : sur du français parlé, la ligne clignote en continu."""
+    words = [w("Le", 0.0, 0.3), w("hardstyle", 0.8, 1.4),
+             w("c'est", 2.0, 2.3), w("violent", 2.4, 3.0)]
+    out = build_ass(words, 0.0, 3.0)
+    lignes = [ln for ln in out.splitlines() if ln.startswith("Dialogue:")]
+    for courant, suivant in zip(lignes, lignes[1:]):
+        assert _dialogue_times(courant)[1] == _dialogue_times(suivant)[0]
+
+
+def test_le_dernier_mot_tient_jusqu_a_la_fin_du_groupe():
+    out = build_ass([w("un", 0.0, 0.2), w("deux", 1.0, 1.5)], 0.0, 3.0)
+    dernier = [ln for ln in out.splitlines() if ln.startswith("Dialogue:")][-1]
+    assert _dialogue_times(dernier)[1] == ass_time(1.5)
+
+
+def test_le_style_nomme_la_police_embarquee():
+    """Impact n'est pas installable partout : libass lui substituerait
+    silencieusement une sans-serif. Anton est le substitut OFL déjà embarqué
+    par beatsync pour le nom logique « impact »."""
+    from clipper import ASS_FONT
+    out = build_ass(WORDS, 10.0, 12.6)
+    assert f"Style: DD,{ASS_FONT}," in out
+    assert "Impact" not in out
+
+
+def test_la_police_embarquee_existe_bien():
+    from beatsync import FONTS_DIR
+    assert (FONTS_DIR / "Anton-Regular.ttf").is_file()
