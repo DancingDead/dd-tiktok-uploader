@@ -481,7 +481,15 @@ SAMPLE_FPS = 2.0
 
 
 def transcribe(video_path: Path, model: str = "small") -> list[dict]:
-    """Mots horodatés de la bande son. Langue auto-détectée. I/O."""
+    """Mots horodatés de la bande son. Langue auto-détectée. I/O.
+
+    Une source sans piste audio (upload muet, import vidéo sans son) fait
+    planter le décodeur de faster-whisper avec une IndexError opaque : on le
+    vérifie nous-mêmes et on dégrade en liste vide, comme un LLM qui échoue —
+    l'orchestrateur sait déjà traiter un transcript vide."""
+    if not has_audio(video_path):
+        return []
+
     from faster_whisper import WhisperModel  # import paresseux : ~1 s + le modèle
 
     whisper = WhisperModel(model, device="cpu", compute_type="int8")
@@ -517,9 +525,30 @@ def probe_duration(video_path: Path) -> float:
         capture_output=True, text=True, check=True).stdout.strip())
 
 
+def has_audio(video_path: Path) -> bool:
+    """La source a-t-elle au moins une piste audio ? I/O.
+
+    À appeler avant transcribe : sans ça, une source muette (fréquente sur un
+    upload utilisateur ou un import vidéo) fait planter le décodeur audio de
+    faster-whisper plutôt que de dégrader proprement."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "csv=p=0", str(video_path)],
+        capture_output=True, text=True, check=True).stdout.strip()
+    return bool(out)
+
+
+# Échecs de lecture consécutifs tolérés avant de conclure à une fin de flux.
+# Sur un conteneur sans index propre (upload utilisateur, vidéo VFR), un seek
+# isolé peut rater sans que le flux soit fini : sortir dès le premier échec
+# tronque le suivi et fige le cadrage pour le reste du short, en silence.
+_MAX_CONSECUTIVE_READ_FAILURES = 5
+
+
 def track_faces(video_path: Path, start: float, end: float) -> list[float | None]:
     """Centre horizontal (px, dans le repère de la source) du plus grand visage,
-    échantillonné à SAMPLE_FPS. None quand aucun visage n'est détecté. I/O."""
+    échantillonné à SAMPLE_FPS. None quand aucun visage n'est détecté (ou quand
+    la lecture échoue ponctuellement — smooth_track sait combler ces trous). I/O."""
     import cv2  # import paresseux : coûteux, inutile à la logique pure
 
     cascade = cv2.CascadeClassifier(
@@ -528,11 +557,18 @@ def track_faces(video_path: Path, start: float, end: float) -> list[float | None
     centers: list[float | None] = []
     try:
         time = start
+        consecutive_failures = 0
         while time < end:
             capture.set(cv2.CAP_PROP_POS_MSEC, time * 1000)
             ok, frame = capture.read()
             if not ok:
-                break
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_CONSECUTIVE_READ_FAILURES:
+                    break
+                centers.append(None)
+                time += 1 / SAMPLE_FPS
+                continue
+            consecutive_failures = 0
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = cascade.detectMultiScale(gray, 1.15, 5, minSize=(60, 60))
             if len(faces) == 0:
@@ -569,18 +605,25 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
                f"scale={OUT_W}:{OUT_H}:flags=lanczos,"
                f"subtitles='{ffmpeg_path(ass_path)}'")
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error",
-             "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(video_path),
-             "-vf", filters, "-r", str(config.get("fps", 30)),
-             "-c:v", "libx264", "-crf", str(config.get("crf", 20)),
-             "-preset", config.get("preset", "medium"), "-pix_fmt", "yuv420p",
-             "-c:a", "aac", "-b:a", config.get("audio_bitrate", "192k"),
-             "-movflags", "+faststart",
-             # Mêmes flags que beatsync : sans eux, l'encodeur date le fichier et
-             # deux rendus identiques diffèrent octet à octet.
-             "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
-             str(out_path)],
-            check=True, capture_output=True, text=True)
+        args = ["-y", "-loglevel", "error",
+                "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(video_path),
+                "-vf", filters, "-r", str(config.get("fps", 30)),
+                "-c:v", "libx264", "-crf", str(config.get("crf", 20)),
+                "-preset", config.get("preset", "medium"), "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", config.get("audio_bitrate", "192k"),
+                "-movflags", "+faststart",
+                # Mêmes flags que beatsync : sans eux, l'encodeur date le fichier
+                # et deux rendus identiques diffèrent octet à octet.
+                "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
+                str(out_path)]
+        # Pas de check=True : un CalledProcessError n'expose que le code retour,
+        # jamais le stderr de ffmpeg — or c'est ce message (filtre invalide,
+        # codec manquant, chemin de sous-titres cassé) que l'utilisateur doit
+        # voir dans le journal quand un rendu échoue. Même motif que
+        # beatsync._run_ffmpeg.
+        result = subprocess.run(["ffmpeg", *args], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n"
+                               f"{result.stderr}")
     finally:
         ass_path.unlink(missing_ok=True)
