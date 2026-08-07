@@ -74,3 +74,18 @@ def test_score_tronque_une_justification_verbeuse(monkeypatch):
     monkeypatch.setattr(clipper, "_call_json", lambda *a, **k: {
         "hook": 50, "flow": 50, "value": 50, "why": "x" * 2000})
     assert len(clipper.score_moment("t", "t", 7)["why"]) <= clipper.WHY_MAX
+
+
+@pytest.mark.parametrize("reponse", [None, [], ["pas un objet"], 42])
+def test_propose_degrade_si_la_racine_json_n_est_pas_un_objet(monkeypatch, reponse):
+    """`strict: True` n'est pas honoré par tous les modèles locaux : la racine
+    peut ne pas être l'objet demandé. L'usine dégrade, elle ne tombe pas."""
+    monkeypatch.setattr(clipper, "_call_json", lambda *a, **k: reponse)
+    assert clipper.propose_moments(WORDS, 3, 7) == []
+
+
+@pytest.mark.parametrize("reponse", [None, [], ["pas un objet"], 42])
+def test_score_degrade_si_la_racine_json_n_est_pas_un_objet(monkeypatch, reponse):
+    monkeypatch.setattr(clipper, "_call_json", lambda *a, **k: reponse)
+    assert clipper.score_moment("texte", "titre", 7) == {
+        "hook": 0, "flow": 0, "value": 0, "why": ""}

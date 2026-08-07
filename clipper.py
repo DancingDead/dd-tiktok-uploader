@@ -368,10 +368,13 @@ def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> di
     if _llm_backend() == "anthropic":
         import anthropic
 
-        resp = anthropic.Anthropic().messages.create(
+        # L'API Messages n'expose pas de paramètre `seed` : on l'injecte dans le
+        # texte du prompt pour la reproductibilité, comme le fait _punchline_user_prompt.
+        user_with_seed = user + f"\n\n(variation n°{seed})"
+        resp = anthropic.Anthropic(timeout=300).messages.create(
             model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8"),
             max_tokens=4096, system=system,
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": user_with_seed}],
             output_config={"format": {"type": "json_schema", "schema": schema}})
         return json.loads(next(b.text for b in resp.content if b.type == "text"))
 
@@ -426,10 +429,14 @@ def propose_moments(words: list[dict], count: int, seed: int) -> list[dict]:
             + "\n\nRends start et end en SECONDES depuis le début de la vidéo.")
     try:
         data = _call_json(_PROPOSE_SYSTEM, user, _PROPOSE_SCHEMA, seed, "moments")
+        # Un modèle local rend parfois une racine qui n'est pas l'objet demandé
+        # (null, liste, nombre) : `strict: True` n'est pas honoré par tous.
+        # L'usine dégrade plutôt que de tomber.
+        raw_moments = data["moments"]
     except Exception:
         return []
     moments = []
-    for raw in data.get("moments", []):
+    for raw in raw_moments:
         try:
             start, end = float(raw["start"]), float(raw["end"])
         except (KeyError, TypeError, ValueError):
@@ -447,6 +454,10 @@ def score_moment(text: str, title: str, seed: int) -> dict:
     user = f"Titre proposé : {title}\n\nTranscription de l'extrait :\n{text}"
     try:
         data = _call_json(_SCORE_SYSTEM, user, _SCORE_SCHEMA, seed, "score")
+        # Un modèle local rend parfois une racine qui n'est pas l'objet demandé :
+        # l'usine dégrade plutôt que de tomber.
+        if not isinstance(data, dict):
+            raise ValueError("racine non-objet")
     except Exception:
         return {"hook": 0, "flow": 0, "value": 0, "why": ""}
 
