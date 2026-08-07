@@ -78,3 +78,9 @@ def test_ffmpeg_path_echappe_les_chemins_windows():
 
 def test_ffmpeg_path_laisse_un_chemin_posix_lisible():
     assert ffmpeg_path("/tmp/a/x.ass") == "/tmp/a/x.ass"
+
+
+def test_ffmpeg_path_neutralise_l_apostrophe():
+    """Le filtre s'écrit subtitles='<chemin>' : une apostrophe dans le chemin
+    refermerait la chaîne et la fin du chemin passerait pour des options."""
+    assert ffmpeg_path("/home/o'brien/x.ass") == "/home/o'\\''brien/x.ass"

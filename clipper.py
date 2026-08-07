@@ -259,9 +259,11 @@ def ass_time(seconds: float) -> str:
 
 
 def _ass_escape(text: str) -> str:
-    """Neutralise ce qui pilote le rendu ASS. Sans ça, un orateur qui dit
-    « accolade » — ou Whisper qui hallucine une — injecte une balise."""
-    return (text.replace("\\", "\\\\").replace("{", r"\{").replace("}", r"\}")
+    """Neutralise ce qui pilote le rendu ASS. Les accolades lancent un bloc
+    d'override dans ASS : pas d'échappement portable sur toutes les versions
+    de libass. On substitue plutôt — une transcription n'en contient à peu près
+    jamais. L'antislash et le retour à la ligne restent traités."""
+    return (text.replace("\\", "\\\\").replace("{", "(").replace("}", ")")
                 .replace("\n", " "))
 
 
@@ -301,8 +303,10 @@ def build_ass(words: list[dict], start: float, end: float, *,
 
 
 def ffmpeg_path(path) -> str:
-    """Chemin utilisable À L'INTÉRIEUR d'une chaîne de filtre ffmpeg. Sur
-    Windows, `C:\\data\\x.ass` casse le parseur : le `:` y sépare les arguments
-    du filtre et `\\` y ouvre une séquence d'échappement. On normalise en `/` et
-    on échappe le `:` de la lettre de lecteur."""
-    return str(path).replace("\\", "/").replace(":", "\\:")
+    """Chemin utilisable À L'INTÉRIEUR d'une chaîne de filtre ffmpeg. Le filtre
+    s'écrit subtitles='<chemin>' : une apostrophe refermerait la chaîne, brisée
+    le parseur. On normalise en `/`, échappe les `:` de lettres de lecteur, puis
+    échappe les apostrophes (dernier, sinon le `\\` qu'on introduit serait mangé
+    par le remplacement des séparateurs)."""
+    s = str(path).replace("\\", "/").replace(":", "\\:")
+    return s.replace("'", "'\\''")
