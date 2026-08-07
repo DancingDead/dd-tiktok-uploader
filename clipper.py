@@ -140,8 +140,12 @@ def rank_moments(moments: list[dict], count: int) -> list[dict]:
 
 
 # Le cadre ne suit le visage que s'il s'en écarte de plus de cette fraction de
-# la largeur de sortie. Sans zone morte, le crop corrige en permanence des
+# la LARGEUR DU CROP (donc de la largeur de l'image finale, puisque le crop est
+# étiré vers OUT_W). Sans zone morte, le crop corrige en permanence des
 # micro-déplacements et le plan « respire » — c'est ce qui donne le mal de mer.
+# L'unité compte : `smooth_track` reçoit des pixels SOURCE, et une zone morte
+# exprimée en pixels de sortie vaudrait 21 % de l'image en 720p contre 7 % en
+# 4K — le même invité se cadrerait différemment selon la définition du rush.
 DEAD_ZONE = 0.08
 # Fenêtre (impaire) de la moyenne glissante : à 2 fps, 5 échantillons lissent sur
 # 2,5 s, assez pour écraser une fausse détection sans traîner sur un vrai
@@ -208,10 +212,26 @@ def crop_size(src_w: int, src_h: int) -> tuple[int, int]:
     return (_even(width), src_h)
 
 
+def _ramp(t0: float, x0: int, t1: float, x1: int) -> str:
+    """Rampe linéaire de (t0, x0) à (t1, x1), en expression FFmpeg.
+
+    Un palier sec ne « lisse » rien : le cadre reste figé le temps que la zone
+    morte cède, puis saute de plusieurs pour cent de la largeur en une frame.
+    C'est un saut de cadrage, pas un panoramique — d'où l'interpolation.
+    `2*floor(…/2)` garde x pair, exigence du chroma yuv420p, au prix d'un
+    escalier de 2 px invisible."""
+    if x0 == x1:
+        return str(x0)
+    slope = (x1 - x0) / (t1 - t0)
+    elapsed = "t" if t0 == 0 else f"(t-{t0:g})"
+    return f"2*floor(({x0}+{slope:g}*{elapsed})/2)"
+
+
 def crop_expr(track: list[float], sample_fps: float, crop_w: int,
               src_w: int) -> str:
-    """Compile la trajectoire en expression FFmpeg pour `crop=x=…:eval=frame`.
-    Une trajectoire immobile rend un simple nombre (pas d'évaluation par frame).
+    """Compile la trajectoire en expression FFmpeg pour `crop=x=…:eval=frame`,
+    en interpolant linéairement entre les points de la trajectoire. Une
+    trajectoire immobile rend un simple nombre (pas d'évaluation par frame).
     Pure."""
     centre = _even(max(0, (src_w - crop_w) / 2))
     if not track:
@@ -234,11 +254,13 @@ def crop_expr(track: list[float], sample_fps: float, crop_w: int,
     if len(merged) == 1:
         return str(merged[0][1])
 
-    # Emboîtement en partant de la fin : chaque palier vaut jusqu'au suivant.
+    # Emboîtement en partant de la fin : chaque segment interpole jusqu'au point
+    # suivant ; après le dernier point, le cadre tient sa valeur.
     expr = str(merged[-1][1])
-    for (_, x), (next_time, _) in zip(reversed(merged[:-1]),
-                                      reversed(merged[1:])):
-        expr = f"if(lt(t,{next_time:g}),{x},{expr})"
+    for (time, x), (next_time, next_x) in zip(reversed(merged[:-1]),
+                                              reversed(merged[1:])):
+        expr = (f"if(lt(t,{next_time:g}),"
+                f"{_ramp(time, x, next_time, next_x)},{expr})")
     return expr
 
 
@@ -590,8 +612,12 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
     Un seul appel ffmpeg. I/O."""
     src_w, src_h = probe_size(video_path)
     crop_w, crop_h = crop_size(src_w, src_h)
+    # dead_zone en pixels SOURCE (track_faces travaille dans ce repère) : la
+    # fraction se rapporte donc à crop_w, pas à OUT_W — le crop est ensuite
+    # étiré vers OUT_W, si bien que DEAD_ZONE × crop_w vaut la même fraction de
+    # l'image finale quelle que soit la définition de la source.
     track = smooth_track(track_faces(video_path, start, end),
-                         default=src_w / 2, dead_zone=DEAD_ZONE * OUT_W)
+                         default=src_w / 2, dead_zone=DEAD_ZONE * crop_w)
     expr = crop_expr(track, SAMPLE_FPS, crop_w, src_w)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -68,17 +68,46 @@ def test_crop_expr_borne_le_cadre_dans_l_image():
     assert crop_expr([9999.0] * 4, 2.0, 400, 1920) == "1520"   # 1920 - 400
 
 
-def test_crop_expr_produit_des_paliers_temporels():
-    track = [200.0] * 4 + [1000.0] * 4     # 2 fps → bascule à t = 2 s
+def test_crop_expr_interpole_entre_deux_points():
+    """Un palier sec fait sauter le cadre d'un coup quand la zone morte cède :
+    c'est un saut de cadrage, pas un panoramique. La trajectoire doit donc
+    évoluer continûment entre deux points."""
+    track = [200.0] * 4 + [1000.0] * 4     # 2 fps → point à t=0 puis t=2 s
     expr = crop_expr(track, 2.0, 400, 1920)
     assert expr.startswith("if(lt(t,")
-    assert "0" in expr and "800" in expr
+    # De x=0 (t=0) à x=800 (t=2 s) : pente 400 px/s, pas de marche.
+    assert "2*floor((0+400*t)/2)" in expr
+    assert expr.endswith(",800)")
+
+
+def _eval_expr(expr: str, t: float) -> float:
+    """Évalue une expression crop_expr comme le ferait FFmpeg. Le sous-ensemble
+    émis (`if`, `lt`, `floor`, arithmétique) se traduit littéralement en Python
+    une fois les noms de fonctions renommés (`if` est un mot-clé)."""
+    import math
+    scope = {"t": t, "floor": math.floor,
+             "if_": lambda cond, a, b: a if cond else b,
+             "lt_": lambda x, y: x < y}
+    return eval(expr.replace("if(", "if_(").replace("lt(", "lt_("), scope)
+
+
+def test_crop_expr_est_continue_a_mi_chemin():
+    """À mi-parcours entre deux points, la valeur est à mi-chemin — un palier
+    rendrait encore la valeur de départ."""
+    track = [200.0] * 4 + [1000.0] * 4
+    expr = crop_expr(track, 2.0, 400, 1920)
+    assert _eval_expr(expr, 0.0) == pytest.approx(0, abs=2)
+    assert _eval_expr(expr, 1.0) == pytest.approx(400, abs=2)
+    assert _eval_expr(expr, 2.0) == pytest.approx(800, abs=2)
 
 
 def test_crop_expr_produit_des_valeurs_paires():
-    """x impair = artefacts de chroma en yuv420p. 301 → 300, 705 → 704."""
-    assert crop_expr([501.0, 703.0, 905.0, 1107.0], 2.0, 400, 1920) == \
-        "if(lt(t,1),300,704)"
+    """x impair = artefacts de chroma en yuv420p. 301 → 300, 705 → 704, et
+    l'interpolation elle-même reste sur la grille paire."""
+    expr = crop_expr([501.0, 703.0, 905.0, 1107.0], 2.0, 400, 1920)
+    assert expr == "if(lt(t,1),2*floor((300+404*t)/2),704)"
+    for tenth in range(0, 11):
+        assert _eval_expr(expr, tenth / 10) % 2 == 0
 
 
 def test_crop_expr_borne_le_nombre_de_paliers():
