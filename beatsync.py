@@ -16,6 +16,12 @@ from pathlib import Path
 
 import numpy as np
 
+# Les défauts du clipper sont définis UNE seule fois, dans clipper.py — c'est
+# lui qui les consomme (`clip_source.main`), et il est léger à importer (pas de
+# dépendance lourde en tête de module). Les dupliquer ici les ferait diverger en
+# silence entre l'interface et le CLI le jour où l'un des deux change.
+from clipper import DEFAULTS as CLIPPER_DEFAULTS
+
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -76,12 +82,9 @@ DEFAULT_CONFIG = {
         "model": "claude-opus-4-8",     # modèle de génération
         "font": "impact",               # police embarquée : impact|classique|sobre|condensee|douce|elegante
     },
-    "clipper": {                        # onglet Clipper : vidéo longue → shorts
-        "whisper_model": "small",       # taille du modèle de transcription
-        "clip_count": 8,                # shorts gardés par source
-        "min_dur": 15.0,                # s : en dessous, un extrait n'a pas d'histoire
-        "max_dur": 60.0,                # s : au-delà, ce n'est plus un short
-    },
+    # Onglet Clipper : vidéo longue → shorts. Copie (pas la référence) pour
+    # qu'un merge_settings ne mute pas les défauts du module clipper.
+    "clipper": dict(CLIPPER_DEFAULTS),
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,

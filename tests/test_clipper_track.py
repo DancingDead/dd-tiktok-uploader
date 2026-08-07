@@ -119,3 +119,9 @@ def test_crop_expr_borne_le_nombre_de_paliers():
 
 def test_crop_expr_trajectoire_vide():
     assert crop_expr([], 2.0, 400, 1920) == "760"    # centré : (1920-400)/2
+
+
+def test_crop_size_arrondit_une_hauteur_impaire():
+    """Une hauteur impaire fait échouer l'encodage yuv420p, donc un `failed`
+    opaque à la toute fin du pipeline."""
+    assert crop_size(1920, 1081) == (606, 1080)

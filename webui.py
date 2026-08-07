@@ -67,6 +67,13 @@ ALLOWED_WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
 # Statuts qui signalent un job en cours sur la source : on refuse de la
 # supprimer tant qu'il tourne (il recréerait les dossiers derrière nous).
 BUSY_CLIPPER_STATUSES = ("transcribing", "analyzing", "rendering")
+# Champs exposés par /api/state : `path` et `file` en sont ABSENTS à dessein
+# (l'arborescence disque de la machine n'a rien à faire dans une réponse HTTP),
+# comme pour les vidéos des niches.
+CLIPPER_SOURCE_FIELDS = ("id", "title", "slug", "duration", "status", "error",
+                         "created_at")
+CLIPPER_CLIP_FIELDS = ("id", "source_id", "start", "end", "title", "hook",
+                       "flow", "value", "score", "why", "status")
 # Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
 ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
@@ -173,6 +180,14 @@ def coerce_clipper(settings: dict) -> dict:
         if model not in ALLOWED_WHISPER_MODELS:
             raise ValueError(f"modèle Whisper inconnu : {model!r}")
         coerced["whisper_model"] = model
+    # Une inversion des deux bornes est acceptable pour chacune prise seule,
+    # mais `snap_to_speech` ne retiendrait alors plus aucun candidat : la source
+    # finirait en `failed` avec un message accusant le recalage. On refuse à la
+    # saisie, là où l'utilisateur peut encore comprendre.
+    if coerced.get("min_dur", 0.0) > coerced.get("max_dur", float("inf")):
+        raise ValueError(
+            f"durée minimale ({coerced['min_dur']:g} s) supérieure à la durée "
+            f"maximale ({coerced['max_dur']:g} s)")
     return coerced
 
 
@@ -329,12 +344,18 @@ def create_app(root: Path | None = None):
             videos_by_niche: dict[int, list] = {}
             for v in dbmod.list_videos(conn):
                 videos_by_niche.setdefault(v["niche_id"], []).append(v)
-            sources = dbmod.list_clipper_sources(conn)
+            # Projection sur une liste blanche, comme les vidéos des niches
+            # plus bas : `SELECT *` renverrait `path` et `file`, donc
+            # l'arborescence disque de la machine, à un client qui n'en a pas
+            # l'usage.
             clips_by_source: dict = {}
             for clip in dbmod.list_clipper_clips(conn):
-                clips_by_source.setdefault(clip["source_id"], []).append(clip)
-            for source in sources:
-                source["clips"] = clips_by_source.get(source["id"], [])
+                clips_by_source.setdefault(clip["source_id"], []).append(
+                    {k: clip[k] for k in CLIPPER_CLIP_FIELDS})
+            sources = [
+                {**{k: s[k] for k in CLIPPER_SOURCE_FIELDS},
+                 "clips": clips_by_source.get(s["id"], [])}
+                for s in dbmod.list_clipper_sources(conn)]
         finally:
             conn.close()
 
@@ -606,6 +627,17 @@ def create_app(root: Path | None = None):
         finally:
             conn.close()
 
+    def _probe_duration(path: Path) -> float:
+        """Durée de la source, 0 si la sonde échoue. Un fichier illisible par
+        ffprobe ne doit pas faire échouer l'import : la colonne est
+        informative, pas structurante."""
+        import clipper
+
+        try:
+            return clipper.probe_duration(path)
+        except Exception:
+            return 0.0
+
     def _taken_slugs(conn) -> set[str]:
         """Slugs déjà pris : ceux en base ET ceux présents sur disque.
 
@@ -651,7 +683,7 @@ def create_app(root: Path | None = None):
             source_id = dbmod.create_clipper_source(
                 conn, title=Path(name).stem, slug=slug,
                 path=str(target.relative_to(paths["data"].parent)),
-                duration=0.0,
+                duration=_probe_duration(target),
                 created_at=datetime.now().isoformat(timespec="seconds"))
         finally:
             conn.close()
@@ -672,12 +704,20 @@ def create_app(root: Path | None = None):
         croire fiable qu'il ne l'est)."""
         from urllib.parse import urlparse
 
-        url = (request.json or {}).get("url", "").strip()
+        url = (request.json or {}).get("url", "")
+        # Type vérifié avant .strip() : c'est le seul endpoint qui alimente une
+        # ligne de commande, on n'y laisse pas remonter une AttributeError en 500.
+        if not isinstance(url, str):
+            return jsonify({"error": "lien YouTube attendu"}), 400
+        url = url.strip()
         if any(c.isspace() for c in url):
             return jsonify({"error": "lien YouTube attendu"}), 400
         parsed = urlparse(url)
         allowed_hosts = {"www.youtube.com", "youtube.com", "youtu.be", "m.youtube.com"}
-        if parsed.scheme != "https" or parsed.netloc not in allowed_hosts:
+        # Hôte et schéma normalisés en minuscules : ils sont insensibles à la
+        # casse (RFC 3986), et un WWW.YouTube.com collé depuis la barre
+        # d'adresse était rejeté à tort.
+        if parsed.scheme.lower() != "https" or parsed.netloc.lower() not in allowed_hosts:
             return jsonify({"error": "lien YouTube attendu"}), 400
         inbox = paths["clipper"] / "_inbox"
         inbox.mkdir(parents=True, exist_ok=True)
@@ -734,7 +774,7 @@ def create_app(root: Path | None = None):
             source_id = dbmod.create_clipper_source(
                 conn, title=origin.stem, slug=slug,
                 path=str(target.relative_to(paths["data"].parent)),
-                duration=0.0,
+                duration=_probe_duration(target),
                 created_at=datetime.now().isoformat(timespec="seconds"))
         finally:
             conn.close()

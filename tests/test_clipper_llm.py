@@ -89,3 +89,29 @@ def test_score_degrade_si_la_racine_json_n_est_pas_un_objet(monkeypatch, reponse
     monkeypatch.setattr(clipper, "_call_json", lambda *a, **k: reponse)
     assert clipper.score_moment("texte", "titre", 7) == {
         "hook": 0, "flow": 0, "value": 0, "why": ""}
+
+
+def test_call_json_bascule_sur_le_backend_de_repli(monkeypatch):
+    """CLAUDE.md promet que LLM_BACKEND pilote les deux sous-systèmes de la même
+    façon : sans repli, un LM Studio éteint fait échouer le clipper alors que
+    beatsync serait passé sur Anthropic."""
+    monkeypatch.setenv("LLM_BACKEND", "lmstudio")
+    monkeypatch.setenv("LLM_FALLBACK", "anthropic")
+
+    def eteint(*a, **k):
+        raise OSError("connection refused")
+    monkeypatch.setattr(clipper, "_json_lmstudio", eteint)
+    monkeypatch.setattr(clipper, "_json_anthropic", lambda *a, **k: {"ok": True})
+
+    assert clipper._call_json("s", "u", {}, 7, "n") == {"ok": True}
+
+
+def test_call_json_remonte_l_erreur_sans_repli(monkeypatch):
+    monkeypatch.setenv("LLM_BACKEND", "lmstudio")
+    monkeypatch.delenv("LLM_FALLBACK", raising=False)
+
+    def eteint(*a, **k):
+        raise OSError("connection refused")
+    monkeypatch.setattr(clipper, "_json_lmstudio", eteint)
+    with pytest.raises(OSError):
+        clipper._call_json("s", "u", {}, 7, "n")

@@ -265,3 +265,62 @@ def test_suppression_ne_perd_pas_la_ligne_si_l_effacement_echoue(
     reponse = client.delete(f"/api/clipper/sources/{sid}")
     assert reponse.status_code == 409
     assert len(client.get("/api/state").get_json()["clipper_sources"]) == 1
+
+
+def test_coerce_refuse_min_dur_superieur_a_max_dur():
+    """Une inversion donne 0 clip et un `failed` qui accuse le recalage : on la
+    refuse à la saisie, là où elle est encore compréhensible."""
+    with pytest.raises(ValueError):
+        coerce_clipper({"min_dur": 90, "max_dur": 30})
+    # Bornes égales : légitime (tous les clips font exactement cette durée).
+    assert coerce_clipper({"min_dur": 30, "max_dur": 30})["min_dur"] == 30.0
+
+
+def test_import_youtube_refuse_une_url_non_chaine(client):
+    """400, pas 500 : c'est le seul endpoint qui alimente une ligne de commande."""
+    assert client.post("/api/clipper/sources/link",
+                       json={"url": 42}).status_code == 400
+
+
+def test_import_youtube_accepte_un_hote_en_majuscules(client, monkeypatch):
+    """L'hôte est insensible à la casse : une URL collée depuis la barre
+    d'adresse ne doit pas être rejetée à tort."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job42")
+    assert client.post("/api/clipper/sources/link", json={
+        "url": "https://WWW.YouTube.com/watch?v=dQw4w9WgXcQ"}).status_code == 200
+
+
+def test_etat_n_expose_pas_les_chemins_disque(client, tmp_path):
+    """`path` et `file` décrivent l'arborescence de la machine : ils n'ont rien
+    à faire dans une réponse HTTP, comme pour les vidéos des niches."""
+    sid = client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Live.mp4")}).get_json()["id"]
+    conn = connect(tmp_path / "platform.db")
+    create_clipper_clip(conn, source_id=sid, start=0.0, end=30.0, title="A",
+                        hook=1, flow=1, value=1, score=1.0, why="",
+                        file="data/clipper/live/clips/01-a.mp4")
+    conn.close()
+    source = client.get("/api/state").get_json()["clipper_sources"][0]
+    assert "path" not in source
+    assert "file" not in source["clips"][0]
+    assert source["clips"][0]["title"] == "A"
+
+
+def test_la_duree_de_la_source_est_renseignee(client, tmp_path, monkeypatch):
+    import clipper
+    monkeypatch.setattr(clipper, "probe_duration", lambda p: 3600.0)
+    client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Live.mp4")})
+    assert client.get("/api/state").get_json()["clipper_sources"][0]["duration"] \
+        == 3600.0
+
+
+def test_une_sonde_de_duree_qui_echoue_ne_bloque_pas_l_upload(client, monkeypatch):
+    import clipper
+
+    def boom(path):
+        raise RuntimeError("ffprobe absent")
+    monkeypatch.setattr(clipper, "probe_duration", boom)
+    assert client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Live.mp4")}).status_code == 200

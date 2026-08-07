@@ -208,8 +208,11 @@ def _even(value: float) -> int:
 def crop_size(src_w: int, src_h: int) -> tuple[int, int]:
     """Rectangle 9:16 le plus large qui tienne dans la source. Une source déjà
     plus verticale que 9:16 n'est pas recadrée en largeur. Pure."""
-    width = min(src_w, _even(src_h * OUT_W / OUT_H))
-    return (_even(width), src_h)
+    # src_h passe aussi par _even : une source de hauteur impaire (rare mais
+    # existante) ferait échouer l'encodage yuv420p, donc un `failed` opaque.
+    height = _even(src_h)
+    width = min(src_w, _even(height * OUT_W / OUT_H))
+    return (_even(width), height)
 
 
 def _ramp(t0: float, x0: int, t1: float, x1: int) -> str:
@@ -389,29 +392,25 @@ _SCORE_SCHEMA = {
 }
 
 
-def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> dict:
-    """Un appel LLM rendant du JSON conforme à `schema`. Isolé pour être mocké.
+def _json_anthropic(system: str, user: str, schema: dict, seed: int,
+                    name: str) -> dict:
+    """Appel JSON structuré via l'API Anthropic."""
+    import anthropic
 
-    N'utilise PAS beatsync._call_llm : celui-ci a le prompt punchline codé en
-    dur et une signature sans schéma. On réutilise en revanche son choix de
-    backend et son chargement de .env, pour que LLM_BACKEND pilote les deux
-    sous-systèmes de la même façon."""
-    from beatsync import _llm_backend, _load_dotenv
+    # L'API Messages n'expose pas de paramètre `seed` : on l'injecte dans le
+    # texte du prompt pour la reproductibilité, comme le fait _punchline_user_prompt.
+    user_with_seed = user + f"\n\n(variation n°{seed})"
+    resp = anthropic.Anthropic(timeout=300).messages.create(
+        model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8"),
+        max_tokens=4096, system=system,
+        messages=[{"role": "user", "content": user_with_seed}],
+        output_config={"format": {"type": "json_schema", "schema": schema}})
+    return json.loads(next(b.text for b in resp.content if b.type == "text"))
 
-    _load_dotenv()
-    if _llm_backend() == "anthropic":
-        import anthropic
 
-        # L'API Messages n'expose pas de paramètre `seed` : on l'injecte dans le
-        # texte du prompt pour la reproductibilité, comme le fait _punchline_user_prompt.
-        user_with_seed = user + f"\n\n(variation n°{seed})"
-        resp = anthropic.Anthropic(timeout=300).messages.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8"),
-            max_tokens=4096, system=system,
-            messages=[{"role": "user", "content": user_with_seed}],
-            output_config={"format": {"type": "json_schema", "schema": schema}})
-        return json.loads(next(b.text for b in resp.content if b.type == "text"))
-
+def _json_lmstudio(system: str, user: str, schema: dict, seed: int,
+                   name: str) -> dict:
+    """Appel JSON structuré via un serveur local compatible OpenAI (LM Studio)."""
     base = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1").rstrip("/")
     body = {
         "model": os.environ.get("LMSTUDIO_MODEL", "local-model"),
@@ -432,6 +431,42 @@ def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> di
     with urllib.request.urlopen(req, timeout=300) as resp:
         data = json.loads(resp.read())
     return json.loads(data["choices"][0]["message"]["content"])
+
+
+# Nom de fonction par backend, résolu via globals() au moment de l'appel pour
+# rester monkeypatchable dans les tests — même convention que beatsync.
+_JSON_BACKENDS = {"anthropic": "_json_anthropic", "lmstudio": "_json_lmstudio"}
+
+
+def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> dict:
+    """Un appel LLM rendant du JSON conforme à `schema`. Isolé pour être mocké.
+
+    N'utilise PAS beatsync._call_llm : celui-ci a le prompt punchline codé en
+    dur et une signature sans schéma. On réutilise en revanche son choix de
+    backend et son chargement de .env, et on honore comme lui `LLM_FALLBACK` —
+    sans quoi `LLM_BACKEND` ne piloterait pas les deux sous-systèmes de la même
+    façon, et un LM Studio éteint ferait échouer le clipper alors que beatsync
+    aurait basculé sur Anthropic."""
+    from beatsync import _llm_backend, _load_dotenv
+
+    _load_dotenv()
+    primary = _llm_backend()
+    order = [primary]
+    fallback = os.environ.get("LLM_FALLBACK", "").strip().lower()
+    if fallback and fallback != primary:
+        order.append(fallback)
+    last_exc: Exception | None = None
+    for backend in order:
+        fnname = _JSON_BACKENDS.get(backend)
+        if fnname is None:
+            continue
+        try:
+            return globals()[fnname](system, user, schema, seed, name)
+        except Exception as exc:   # on tente le repli, sinon on remonte l'erreur
+            last_exc = exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"backend LLM inconnu : {primary!r}")
 
 
 def transcript_digest(words: list[dict], max_chars: int = DIGEST_MAX_CHARS) -> str:
