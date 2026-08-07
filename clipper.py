@@ -10,6 +10,9 @@ Whisper, sans LLM), et trois fonctions d'I/O en périphérie — `transcribe`,
 centre.
 """
 
+import json
+import os
+import urllib.request
 from pathlib import Path
 
 # Format de sortie du lot 1 : vertical en dur, pas de preset de format.
@@ -310,3 +313,148 @@ def ffmpeg_path(path) -> str:
     par le remplacement des séparateurs)."""
     s = str(path).replace("\\", "/").replace(":", "\\:")
     return s.replace("'", "'\\''")
+
+
+# Longueur max d'une justification stockée. Le texte vient du LLM, donc d'une
+# source non fiable : on le borne avant la base, pas à l'affichage.
+WHY_MAX = 240
+# Un modèle local a une fenêtre finie ; tronquer proprement vaut mieux que se
+# faire couper la réponse au milieu d'un JSON.
+DIGEST_MAX_CHARS = 40_000
+
+_PROPOSE_SYSTEM = (
+    "Tu es monteur pour un label de musique électronique. On te donne la "
+    "transcription horodatée d'une vidéo longue. Tu repères les moments qui "
+    "fonctionneraient seuls, sortis de leur contexte, en short vertical de "
+    "15 à 60 secondes : une idée qui se tient du début à la fin, avec une "
+    "accroche dans les premières secondes. Tu réponds en français."
+)
+_SCORE_SYSTEM = (
+    "Tu notes un extrait vidéo court destiné à TikTok, sur trois critères, de "
+    "0 à 100 : hook (les trois premières secondes retiennent-elles quelqu'un "
+    "qui scrolle), flow (l'extrait se tient-il seul, du début à une fin "
+    "satisfaisante), value (apporte-t-il quelque chose — une info, une "
+    "émotion, une opinion tranchée). Tu es sévère : 50 est un extrait moyen. "
+    "Tu justifies en une seule phrase, en français."
+)
+
+_PROPOSE_SCHEMA = {
+    "type": "object",
+    "properties": {"moments": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"start": {"type": "number"}, "end": {"type": "number"},
+                       "title": {"type": "string"}},
+        "required": ["start", "end", "title"]}}},
+    "required": ["moments"],
+}
+_SCORE_SCHEMA = {
+    "type": "object",
+    "properties": {"hook": {"type": "integer"}, "flow": {"type": "integer"},
+                   "value": {"type": "integer"}, "why": {"type": "string"}},
+    "required": ["hook", "flow", "value", "why"],
+}
+
+
+def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> dict:
+    """Un appel LLM rendant du JSON conforme à `schema`. Isolé pour être mocké.
+
+    N'utilise PAS beatsync._call_llm : celui-ci a le prompt punchline codé en
+    dur et une signature sans schéma. On réutilise en revanche son choix de
+    backend et son chargement de .env, pour que LLM_BACKEND pilote les deux
+    sous-systèmes de la même façon."""
+    from beatsync import _llm_backend, _load_dotenv
+
+    _load_dotenv()
+    if _llm_backend() == "anthropic":
+        import anthropic
+
+        resp = anthropic.Anthropic().messages.create(
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8"),
+            max_tokens=4096, system=system,
+            messages=[{"role": "user", "content": user}],
+            output_config={"format": {"type": "json_schema", "schema": schema}})
+        return json.loads(next(b.text for b in resp.content if b.type == "text"))
+
+    base = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+    body = {
+        "model": os.environ.get("LMSTUDIO_MODEL", "local-model"),
+        "messages": [
+            {"role": "system",
+             "content": system + " Réponds UNIQUEMENT en JSON conforme au schéma."},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0.4,   # plus bas que les punchlines : on veut du jugement, pas de la créativité
+        "seed": seed,         # reproductibilité, comme pour les punchlines
+        "response_format": {"type": "json_schema", "json_schema": {
+            "name": name, "strict": True, "schema": schema}},
+    }
+    req = urllib.request.Request(
+        base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    # 300 s : un transcript d'une heure fait travailler un modèle local longtemps.
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        data = json.loads(resp.read())
+    return json.loads(data["choices"][0]["message"]["content"])
+
+
+def transcript_digest(words: list[dict], max_chars: int = DIGEST_MAX_CHARS) -> str:
+    """Transcript compacté en lignes `[mm:ss] phrase`, pour le prompt. Pure."""
+    out: list[str] = []
+    total = 0
+    for first, last in sentences(words):
+        start = words[first]["start"]
+        text = " ".join(x["word"].strip() for x in words[first:last + 1])
+        line = f"[{int(start) // 60:02d}:{int(start) % 60:02d}] {text}"
+        if total + len(line) > max_chars:
+            break
+        out.append(line)
+        total += len(line) + 1
+    return "\n".join(out)
+
+
+def moment_text(words: list[dict], start: float, end: float) -> str:
+    """Texte prononcé dans une fenêtre. Pure."""
+    return " ".join(x["word"].strip() for x in words
+                    if x["end"] > start and x["start"] < end)
+
+
+def propose_moments(words: list[dict], count: int, seed: int) -> list[dict]:
+    """Candidats bruts du LLM. Dégrade en [] si le LLM échoue — l'usine ne
+    bloque jamais dessus, exactement comme generate_punchlines."""
+    user = (f"Propose {count} moments. Transcription :\n\n"
+            + transcript_digest(words)
+            + "\n\nRends start et end en SECONDES depuis le début de la vidéo.")
+    try:
+        data = _call_json(_PROPOSE_SYSTEM, user, _PROPOSE_SCHEMA, seed, "moments")
+    except Exception:
+        return []
+    moments = []
+    for raw in data.get("moments", []):
+        try:
+            start, end = float(raw["start"]), float(raw["end"])
+        except (KeyError, TypeError, ValueError):
+            continue   # entrée malformée : on la jette, la source continue
+        if end <= start:
+            continue
+        moments.append({"start": start, "end": end,
+                        "title": str(raw.get("title", ""))[:WHY_MAX]})
+    return moments
+
+
+def score_moment(text: str, title: str, seed: int) -> dict:
+    """Notes hook/flow/value d'un candidat. Dégrade en zéros si le LLM échoue :
+    le moment tombe en fin de classement, il ne fait pas échouer la source."""
+    user = f"Titre proposé : {title}\n\nTranscription de l'extrait :\n{text}"
+    try:
+        data = _call_json(_SCORE_SYSTEM, user, _SCORE_SCHEMA, seed, "score")
+    except Exception:
+        return {"hook": 0, "flow": 0, "value": 0, "why": ""}
+
+    def note(key: str) -> int:
+        try:
+            return max(0, min(100, int(data.get(key, 0))))
+        except (TypeError, ValueError):
+            return 0
+
+    return {"hook": note("hook"), "flow": note("flow"), "value": note("value"),
+            "why": str(data.get("why", ""))[:WHY_MAX]}
