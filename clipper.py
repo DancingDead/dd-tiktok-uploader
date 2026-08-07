@@ -324,8 +324,9 @@ def build_ass(words: list[dict], start: float, end: float, *,
         " MarginV, Effect, Text\n"
     )
     lines = []
-    for i in range(0, len(inside), ASS_WORDS_PER_LINE):
-        group = inside[i:i + ASS_WORDS_PER_LINE]
+    groups = [inside[i:i + ASS_WORDS_PER_LINE]
+              for i in range(0, len(inside), ASS_WORDS_PER_LINE)]
+    for g, group in enumerate(groups):
         texts = [_ass_escape(x["word"].strip()) for x in group]
         for j, word in enumerate(group):
             rendered = " ".join(
@@ -334,8 +335,16 @@ def build_ass(words: list[dict], start: float, end: float, *,
             # La ligne tient jusqu'au mot suivant, pas jusqu'à la fin du mot
             # courant : borner sur word["end"] éteint le sous-titre pendant
             # chaque respiration, et le français parlé en est plein — la ligne
-            # clignotait en continu.
-            until = group[j + 1]["start"] if j + 1 < len(group) else group[-1]["end"]
+            # clignotait en continu. Pour le dernier mot d'un groupe, le mot
+            # suivant est le premier du groupe d'après (même règle, aucun
+            # chevauchement : l'événement précédent finit où le suivant
+            # commence) ; seul le tout dernier mot du clip garde sa propre fin.
+            if j + 1 < len(group):
+                until = group[j + 1]["start"]
+            elif g + 1 < len(groups):
+                until = groups[g + 1][0]["start"]
+            else:
+                until = group[-1]["end"]
             lines.append(
                 f"Dialogue: 0,{ass_time(word['start'] - start)},"
                 f"{ass_time(until - start)},DD,,0,0,0,,{rendered}")

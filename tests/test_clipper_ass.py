@@ -102,7 +102,29 @@ def test_pas_de_trou_entre_deux_mots_d_une_meme_ligne():
         assert _dialogue_times(courant)[1] == _dialogue_times(suivant)[0]
 
 
-def test_le_dernier_mot_tient_jusqu_a_la_fin_du_groupe():
+def test_pas_de_trou_entre_deux_groupes():
+    """Le dernier mot d'un groupe de 4 s'étend jusqu'au premier mot du groupe
+    suivant, comme à l'intérieur d'un groupe : sinon la ligne s'éteint entre
+    deux groupes, exactement le même clignotement que le test ci-dessus couvre
+    à l'intérieur d'une ligne. Prolonger jusqu'au `start` du mot suivant ne
+    crée aucun chevauchement : l'événement précédent finit où le suivant
+    commence."""
+    words = [w("Le", 0.0, 0.3), w("hardstyle", 0.3, 0.9), w("c'est", 0.9, 1.2),
+              w("violent", 1.2, 1.8), w("et", 2.5, 2.7), w("j'assume", 2.7, 3.2)]
+    out = build_ass(words, 0.0, 3.2)
+    lignes = [ln for ln in out.splitlines() if ln.startswith("Dialogue:")]
+    assert len(lignes) == 6
+    # Le 4e mot (fin de groupe 1) doit tenir jusqu'au 5e (début groupe 2).
+    assert _dialogue_times(lignes[3])[1] == _dialogue_times(lignes[4])[0]
+    assert _dialogue_times(lignes[3])[1] == ass_time(2.5)
+    # Aucun Dialogue ne chevauche le suivant, tous groupes confondus.
+    for courant, suivant in zip(lignes, lignes[1:]):
+        assert _dialogue_times(courant)[1] == _dialogue_times(suivant)[0]
+
+
+def test_le_dernier_mot_du_clip_tient_jusqu_a_sa_propre_fin():
+    """Seul le tout dernier mot du clip n'a pas de mot suivant à qui céder :
+    il garde sa propre fin, sans quoi la ligne resterait affichée sur du vide."""
     out = build_ass([w("un", 0.0, 0.2), w("deux", 1.0, 1.5)], 0.0, 3.0)
     dernier = [ln for ln in out.splitlines() if ln.startswith("Dialogue:")][-1]
     assert _dialogue_times(dernier)[1] == ass_time(1.5)
