@@ -153,6 +153,8 @@ def coerce_clipper(settings: dict) -> dict:
     """Réglages du clipper, coercés et bornés côté serveur. Défense XSS et
     défense tout court : ces valeurs finissent dans une ligne de commande
     ffmpeg et dans un nom de modèle. Lève ValueError si non convertible."""
+    if not isinstance(settings, dict):
+        raise ValueError(f"réglages clipper invalides : {settings!r}")
     coerced = {}
     for key, (low, high) in CLIPPER_RANGES.items():
         if key not in settings:
@@ -641,10 +643,23 @@ def create_app(root: Path | None = None):
     def download_clipper_source():
         """Importe un lien YouTube dans data/clipper/_inbox/ via yt-dlp. La
         source est ensuite ajoutée par l'utilisateur depuis l'inbox — on ne peut
-        pas connaître le nom du fichier avant la fin du téléchargement."""
+        pas connaître le nom du fichier avant la fin du téléchargement.
+
+        L'URL finit dans le fichier de liens que `fetch_tracks.parse_links`
+        découpe ligne par ligne, chaque ligne devenant un argument positionnel
+        passé à yt-dlp : un espace ou un retour à la ligne y injecterait une
+        option (`--exec`, `-o`, ...) exécutée ou écrivant sur le disque. On
+        rejette donc tout espacement, et on valide l'hôte par liste blanche
+        plutôt que par préfixe de chaîne (un `startswith` est plus facile à
+        croire fiable qu'il ne l'est)."""
+        from urllib.parse import urlparse
+
         url = (request.json or {}).get("url", "").strip()
-        if not url.startswith(("https://www.youtube.com/", "https://youtu.be/",
-                               "https://youtube.com/")):
+        if any(c.isspace() for c in url):
+            return jsonify({"error": "lien YouTube attendu"}), 400
+        parsed = urlparse(url)
+        allowed_hosts = {"www.youtube.com", "youtube.com", "youtu.be", "m.youtube.com"}
+        if parsed.scheme != "https" or parsed.netloc not in allowed_hosts:
             return jsonify({"error": "lien YouTube attendu"}), 400
         inbox = paths["clipper"] / "_inbox"
         inbox.mkdir(parents=True, exist_ok=True)
@@ -720,7 +735,12 @@ def create_app(root: Path | None = None):
         finally:
             conn.close()
         folder = dbmod.clipper_source_dir(paths["data"], source["slug"]).resolve()
-        if folder.is_dir() and paths["data"].resolve() in folder.parents:
+        # Égalité stricte sur le parent (pas seulement « quelque part sous data/ »,
+        # comme `_delete_asset`) : un slug vide résoudrait `folder` en
+        # `data/clipper` lui-même, dont les parents contiennent bien `data` — et
+        # rmtree effacerait alors le dossier clipper entier, donc les sources de
+        # tous les membres.
+        if folder.is_dir() and folder.parent == paths["clipper"].resolve():
             shutil.rmtree(folder)
         return jsonify({"ok": True})
 

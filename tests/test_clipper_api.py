@@ -107,6 +107,22 @@ def test_un_clip_hors_de_data_n_est_pas_servi(client, tmp_path):
     assert client.get(f"/api/clipper/clips/{cid}").status_code == 404
 
 
+def test_un_clip_hors_de_data_n_est_pas_efface(client, tmp_path):
+    """Pendant de test_un_clip_hors_de_data_n_est_pas_servi, cote suppression."""
+    secret = tmp_path.parent / "secret-a-garder.mp4"
+    secret.write_bytes(b"secret")
+    sid = client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Live.mp4")}).get_json()["id"]
+    conn = connect(tmp_path / "platform.db")
+    cid = create_clipper_clip(
+        conn, source_id=sid, start=0, end=30, title="X", hook=0, flow=0,
+        value=0, score=0, why="", file="../secret-a-garder.mp4")
+    conn.close()
+
+    client.delete(f"/api/clipper/clips/{cid}")
+    assert secret.is_file()      # la ligne part, le fichier hors de data/ reste
+
+
 def test_clip_inconnu(client):
     assert client.get("/api/clipper/clips/999").status_code == 404
     assert client.post("/api/clipper/clips/999/status",
@@ -126,5 +142,45 @@ def test_reglages_clipper_invalides_rejetes(client):
         "clipper": {"clip_count": "<img onerror=x>"}}).status_code == 400
 
 
+@pytest.mark.parametrize("valeur", ["clip_count", ["clip_count"], 42])
+def test_reglages_clipper_non_objet_rejetes(client, valeur):
+    """400, pas 500 : le contrat est « coercion serveur », pas « trace »."""
+    assert client.post("/api/settings", json={"clipper": valeur}).status_code == 400
+
+
 def test_analyse_d_une_source_inconnue(client):
     assert client.post("/api/clipper/sources/999/run").status_code == 404
+
+
+@pytest.mark.parametrize("url", [
+    "https://youtu.be/abc\n--exec\nbash -c 'id'",   # injection d'options yt-dlp
+    "https://www.youtube.com/watch?v=a\n-o\n/tmp/x",
+    "https://www.youtube.com/watch?v=a --exec id",
+    "https://www.youtube.com/watch?v=a\ttruc",
+])
+def test_import_youtube_refuse_une_url_avec_espacement(client, url):
+    """Chaque ligne du fichier de liens devient un argument positionnel de
+    yt-dlp : un retour a la ligne suffit a injecter --exec."""
+    assert client.post("/api/clipper/sources/link", json={"url": url}).status_code == 400
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.youtube.com.attaquant.tld/watch?v=a",
+    "http://www.youtube.com/watch?v=a",
+    "https://vimeo.com/123",
+    "",
+])
+def test_import_youtube_refuse_un_hote_non_youtube(client, url):
+    assert client.post("/api/clipper/sources/link", json={"url": url}).status_code == 400
+
+
+def test_import_youtube_accepte_une_url_normale(client, tmp_path, monkeypatch):
+    """Chemin nominal : l'URL est ecrite dans le fichier de liens et le job part."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job42")
+    reponse = client.post("/api/clipper/sources/link",
+                          json={"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"})
+    assert reponse.status_code == 200
+    assert reponse.get_json()["job_id"] == "job42"
+    liens = (tmp_path / "data" / "clipper" / "_inbox" / "links.txt").read_text()
+    assert liens.strip() == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
