@@ -16,12 +16,6 @@ from pathlib import Path
 
 import numpy as np
 
-# Les défauts du clipper sont définis UNE seule fois, dans clipper.py — c'est
-# lui qui les consomme (`clip_source.main`), et il est léger à importer (pas de
-# dépendance lourde en tête de module). Les dupliquer ici les ferait diverger en
-# silence entre l'interface et le CLI le jour où l'un des deux change.
-from clipper import DEFAULTS as CLIPPER_DEFAULTS
-
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -82,9 +76,18 @@ DEFAULT_CONFIG = {
         "model": "claude-opus-4-8",     # modèle de génération
         "font": "impact",               # police embarquée : impact|classique|sobre|condensee|douce|elegante
     },
-    # Onglet Clipper : vidéo longue → shorts. Copie (pas la référence) pour
-    # qu'un merge_settings ne mute pas les défauts du module clipper.
-    "clipper": dict(CLIPPER_DEFAULTS),
+    # Onglet Clipper : vidéo longue → shorts. Littéral volontairement dupliqué
+    # de clipper.DEFAULTS : importer clipper ici inverserait la dépendance
+    # (beatsync est le cœur du montage, clipper un second front indépendant) et
+    # paierait son import à chaque `import beatsync`. Le test
+    # test_clipper_defaults_match_beatsync (tests/test_clipper_llm.py) garde
+    # les deux alignés sans les coupler.
+    "clipper": {
+        "whisper_model": "small",   # taille du modèle faster-whisper
+        "clip_count": 8,            # nombre de shorts gardés par source
+        "min_dur": 15.0,            # s : en dessous, un extrait n'a pas d'histoire
+        "max_dur": 60.0,            # s : au-delà, ce n'est plus un short
+    },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,

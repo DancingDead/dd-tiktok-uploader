@@ -1,5 +1,6 @@
 import pytest
 
+import beatsync
 import clipper
 
 
@@ -115,3 +116,10 @@ def test_call_json_remonte_l_erreur_sans_repli(monkeypatch):
     monkeypatch.setattr(clipper, "_json_lmstudio", eteint)
     with pytest.raises(OSError):
         clipper._call_json("s", "u", {}, 7, "n")
+
+
+def test_clipper_defaults_match_beatsync():
+    """`beatsync.DEFAULT_CONFIG["clipper"]` duplique clipper.DEFAULTS en littéral
+    (pour ne pas importer clipper depuis beatsync et inverser la dépendance) :
+    ce test garde les deux alignés sans les coupler par un import croisé."""
+    assert beatsync.DEFAULT_CONFIG["clipper"] == clipper.DEFAULTS
