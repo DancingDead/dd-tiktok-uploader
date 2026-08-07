@@ -29,3 +29,7 @@ out.mp4
 # Front PoC (React/Vite) — dépendances et build
 frontend/node_modules/
 frontend/dist/
+
+# Fichier de travail perso (liens de clips à importer) — jamais suivi,
+# contrairement à links.txt qui l'est depuis le début du projet.
+clip_links.txt
