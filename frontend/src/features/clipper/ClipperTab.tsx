@@ -306,12 +306,27 @@ export function ClipperTab({
                   </IconButton>
                 </div>
 
-                {expanded && (
-                  <div className="space-y-3 border-t px-4 py-3">
+                {/* Le suivi du job ne doit PAS dépendre de `expanded` : replier la
+                    ligne pendant qu'une analyse tourne démonterait JobLog, dont
+                    l'effet arrête le polling au démontage — plus jamais de refresh(),
+                    plus jamais d'onAnalyzeDone, et le bouton "Analyser" resterait
+                    désactivé indéfiniment (c'est le piège dans lequel la correction
+                    précédente est tombée). Tant qu'un job existe pour cette source,
+                    JobLog reste monté que la ligne soit ouverte ou non ; seul son
+                    affichage est réservé à la ligne dépliée (motif de Catalogue.tsx,
+                    où JobLog vit dans un composant toujours monté plutôt que dans un
+                    bloc conditionnel à l'UI). */}
+                {analyzeJobs[source.id] && (
+                  <div className={expanded ? "border-t px-4 py-3" : "hidden"}>
                     <JobLog
                       jobId={analyzeJobs[source.id] ?? null}
                       onDone={(status) => onAnalyzeDone(source.id, status)}
                     />
+                  </div>
+                )}
+
+                {expanded && (
+                  <div className="space-y-3 border-t px-4 py-3">
                     <SourceDetail clips={source.clips} refresh={refresh} />
                   </div>
                 )}
