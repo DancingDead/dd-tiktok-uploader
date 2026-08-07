@@ -27,6 +27,31 @@ export type Video = {
   exists: boolean
 }
 
+export type ClipperClip = {
+  id: number
+  source_id: number
+  start: number
+  end: number
+  title: string
+  hook: number
+  flow: number
+  value: number
+  score: number
+  why: string
+  status: "proposed" | "approved" | "rejected" | "posted"
+}
+
+export type ClipperSource = {
+  id: number
+  title: string
+  slug: string
+  duration: number
+  status: "pending" | "transcribing" | "analyzing" | "rendering" | "done" | "failed"
+  error: string | null
+  created_at: string
+  clips: ClipperClip[]
+}
+
 export type Niche = {
   id: number
   name: string
@@ -62,6 +87,7 @@ export type Overrides = {
   format?: "vertical" | "carre" | "horizontal"
   end_scene?: { enabled?: boolean; beats?: number; freeze?: number; speed?: number }
   speed_ramp?: { interpolate?: boolean; slow_beats?: number }
+  clipper?: { whisper_model?: string; clip_count?: number; min_dur?: number; max_dur?: number }
 }
 
 export type Preset = { id: number; name: string; overrides: Overrides }
@@ -78,6 +104,7 @@ export type Settings = Required<
     | "cut_every"
     | "buildup"
     | "strobe_beats"
+    | "clipper"
   >
 >
 
@@ -89,6 +116,7 @@ export type AppState = {
   clip_links: string
   tracks: Asset[]
   clips: Asset[]
+  clipper_sources: ClipperSource[]
   settings: Settings
   jobs: Record<string, Job>
 }
@@ -158,6 +186,24 @@ export const api = {
   setVideoStatus: (id: number, status: Video["status"]) =>
     req(`/api/videos/${id}/status`, json({ status })),
   deleteVideo: (id: number) => req(`/api/videos/${id}`, { method: "DELETE" }),
+
+  // Clipper
+  uploadClipperSource: (file: File) => upload("/api/clipper/sources", file),
+  linkClipperSource: (url: string) =>
+    req<{ job_id: string }>("/api/clipper/sources/link", json({ url })),
+  clipperInbox: () => req<{ files: string[] }>("/api/clipper/inbox"),
+  promoteClipperInbox: (name: string) =>
+    req<{ id: number }>(`/api/clipper/inbox/${encodeURIComponent(name)}`, json({})),
+  runClipperSource: (id: number) =>
+    req<{ job_id: string }>(`/api/clipper/sources/${id}/run`, json({})),
+  deleteClipperSource: (id: number) =>
+    req(`/api/clipper/sources/${id}`, { method: "DELETE" }),
+  clipperClipUrl: (id: number, download = false) =>
+    `/api/clipper/clips/${id}${download ? "?dl=1" : ""}`,
+  setClipperClipStatus: (id: number, status: ClipperClip["status"]) =>
+    req(`/api/clipper/clips/${id}/status`, json({ status })),
+  deleteClipperClip: (id: number) =>
+    req(`/api/clipper/clips/${id}`, { method: "DELETE" }),
 
   // Presets
   createPreset: (name: string, overrides: Overrides) =>

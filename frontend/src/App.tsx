@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
-import { Blocks, Film, LogOut, type LucideIcon, Settings2, SlidersHorizontal } from "lucide-react"
+import {
+  Blocks,
+  Film,
+  LogOut,
+  type LucideIcon,
+  Scissors,
+  Settings2,
+  SlidersHorizontal,
+} from "lucide-react"
 
 import { ApiError, api, type AppState } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -21,16 +29,18 @@ import {
 import { Toaster } from "@/components/ui/sonner"
 import { ConfirmHost } from "@/components/confirm"
 import { Catalogue } from "@/features/catalogue/Catalogue"
+import { ClipperTab } from "@/features/clipper/ClipperTab"
 import { NichesTab } from "@/features/niches/NichesTab"
 import { PresetsTab } from "@/features/presets/PresetsTab"
 import { SettingsTab } from "@/features/settings/SettingsTab"
 
-type TabKey = "niches" | "presets" | "catalogue" | "reglages"
+type TabKey = "niches" | "presets" | "catalogue" | "clipper" | "reglages"
 
 const TABS: { key: TabKey; label: string; icon: LucideIcon }[] = [
   { key: "niches", label: "Niches", icon: Blocks },
   { key: "presets", label: "Presets", icon: SlidersHorizontal },
   { key: "catalogue", label: "Catalogue", icon: Film },
+  { key: "clipper", label: "Clipper", icon: Scissors },
   { key: "reglages", label: "Réglages", icon: Settings2 },
 ]
 
@@ -153,6 +163,7 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
           {tab === "niches" && <NichesTab state={state} refresh={refresh} />}
           {tab === "presets" && <PresetsTab state={state} refresh={refresh} />}
           {tab === "catalogue" && <Catalogue state={state} refresh={refresh} />}
+          {tab === "clipper" && <ClipperTab state={state} refresh={refresh} />}
           {tab === "reglages" && <SettingsTab state={state} refresh={refresh} />}
         </div>
       </main>
@@ -166,7 +177,7 @@ function LoadingScreen() {
       <nav className="flex w-56 shrink-0 flex-col gap-2 border-r bg-card/40 p-4">
         <Brand />
         <Skeleton className="mt-4 h-8 w-full" />
-        {Array.from({ length: 4 }).map((_, i) => (
+        {Array.from({ length: 5 }).map((_, i) => (
           <Skeleton key={i} className="h-9 w-full" />
         ))}
       </nav>
