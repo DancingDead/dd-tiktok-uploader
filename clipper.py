@@ -93,3 +93,43 @@ def snap_to_speech(start: float, end: float, words: list[dict],
     after = (words[groups[last + 1][0]]["start"] - e
              if last + 1 < len(groups) else PAD * 2)
     return (max(0.0, s - min(PAD, before / 2)), e + min(PAD, after / 2))
+
+
+# Le hook pèse le plus : c'est la seule des trois notes qui décide du scroll.
+# Les deux autres ne jouent qu'une fois le spectateur retenu.
+WEIGHTS = {"hook": 0.4, "flow": 0.3, "value": 0.3}
+# Au-delà de cette part du plus court des deux, deux candidats décrivent le même
+# moment — on ne garde que le mieux noté.
+OVERLAP_MAX = 0.5
+
+
+def moment_score(moment: dict) -> float:
+    """Note agrégée 0-100. Une note absente ou None vaut 0 : un échec LLM fait
+    tomber le moment en fin de liste, il ne fait pas planter le classement."""
+    return sum(w * float(moment.get(k) or 0) for k, w in WEIGHTS.items())
+
+
+def _overlap_ratio(a: dict, b: dict) -> float:
+    """Part du plus court des deux moments couverte par leur intersection."""
+    inter = min(a["end"], b["end"]) - max(a["start"], b["start"])
+    if inter <= 0:
+        return 0.0
+    shortest = min(a["end"] - a["start"], b["end"] - b["start"])
+    return inter / shortest if shortest > 0 else 0.0
+
+
+def rank_moments(moments: list[dict], count: int) -> list[dict]:
+    """Top `count` moments, score décroissant, sans doublons de position.
+    Ne mute pas l'entrée. Pure."""
+    scored = [{**mo, "score": moment_score(mo)} for mo in moments]
+    # `start` en second critère : deux ex æquo gardent un ordre stable, sans
+    # quoi deux lancements sur la même source ne donneraient pas les mêmes clips.
+    scored.sort(key=lambda mo: (-mo["score"], mo["start"]))
+    kept: list[dict] = []
+    for moment in scored:
+        if len(kept) >= count:
+            break
+        if any(_overlap_ratio(moment, k) > OVERLAP_MAX for k in kept):
+            continue
+        kept.append(moment)
+    return kept
