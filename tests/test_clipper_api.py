@@ -233,6 +233,28 @@ def test_suppression_refusee_pendant_une_analyse(client, tmp_path, statut):
     assert len(client.get("/api/state").get_json()["clipper_sources"]) == 1
 
 
+def test_lancer_l_analyse_pose_le_statut_avant_que_le_sous_processus_ecrive(
+        client, tmp_path, monkeypatch):
+    """Le statut `transcribing` est posé par start_job, l'endpoint qui lance
+    le job — pas par le sous-processus, qui ne l'écrit qu'à sa première étape.
+    Sans ça, une suppression lancée juste après « Analyser » passe à travers
+    la garde 409 (fenêtre entre le démarrage du job et l'écriture différée)."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job42")
+
+    sid = client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Podcast.mp4")}).get_json()["id"]
+
+    reponse = client.post(f"/api/clipper/sources/{sid}/run")
+    assert reponse.status_code == 200
+    assert reponse.get_json()["job_id"] == "job42"
+
+    sources = client.get("/api/state").get_json()["clipper_sources"]
+    assert sources[0]["status"] == "transcribing"
+
+    assert client.delete(f"/api/clipper/sources/{sid}").status_code == 409
+
+
 def test_un_dossier_orphelin_ne_voit_pas_son_slug_reattribue(client, tmp_path):
     """Un effacement de dossier qui échoue (handle ouvert sous Windows) laisse
     un dossier sans ligne en base. Réattribuer son slug ferait hériter la

@@ -791,6 +791,15 @@ def create_app(root: Path | None = None):
                                 str(paths["data"].parent)])
         except RuntimeError as exc:
             return jsonify({"error": str(exc)}), 409
+        # Le sous-processus n'écrit son propre statut qu'à sa première étape
+        # (transcription) : sans ça, entre le démarrage du job et cette
+        # première écriture, la source reste "pending"/"done" et la garde 409
+        # de la suppression ne voit rien à bloquer.
+        conn = get_conn()
+        try:
+            dbmod.set_clipper_source_status(conn, source_id, "transcribing")
+        finally:
+            conn.close()
         return jsonify({"job_id": job_id})
 
     @app.delete("/api/clipper/sources/<int:source_id>")
