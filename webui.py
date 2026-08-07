@@ -64,6 +64,9 @@ CLIPPER_RANGES = {"clip_count": (1, 30), "min_dur": (3.0, 180.0),
                   "max_dur": (3.0, 180.0)}
 CLIPPER_INT_KEYS = ("clip_count",)
 ALLOWED_WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
+# Statuts qui signalent un job en cours sur la source : on refuse de la
+# supprimer tant qu'il tourne (il recréerait les dossiers derrière nous).
+BUSY_CLIPPER_STATUSES = ("transcribing", "analyzing", "rendering")
 # Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
 ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
@@ -603,6 +606,22 @@ def create_app(root: Path | None = None):
         finally:
             conn.close()
 
+    def _taken_slugs(conn) -> set[str]:
+        """Slugs déjà pris : ceux en base ET ceux présents sur disque.
+
+        Les deux ensembles peuvent diverger — un effacement de dossier qui
+        échoue (handle ouvert sous Windows) laisse un dossier orphelin sans
+        ligne en base. Réattribuer son slug ferait hériter la nouvelle source
+        du `transcript.json` de l'ancienne : `process` annoncerait « Transcript
+        en cache » et découperait les clips aux timestamps d'une autre vidéo,
+        en silence."""
+        slugs = {s["slug"] for s in dbmod.list_clipper_sources(conn)}
+        clipper_dir = paths["clipper"]
+        if clipper_dir.is_dir():
+            slugs |= {p.name for p in clipper_dir.iterdir()
+                      if p.is_dir() and not p.name.startswith("_")}
+        return slugs
+
     def _clipper_file(rel: str):
         """Chemin absolu d'un fichier clipper, ou None s'il sort de data/.
         Même garde anti-traversal que serve_video : une ligne trafiquée en base
@@ -624,8 +643,7 @@ def create_app(root: Path | None = None):
             return jsonify({"error": f"format non supporté : {name}"}), 400
         conn = get_conn()
         try:
-            existing = {s["slug"] for s in dbmod.list_clipper_sources(conn)}
-            slug = clip_source.slug_for(Path(name).stem, existing)
+            slug = clip_source.slug_for(Path(name).stem, _taken_slugs(conn))
             folder = dbmod.clipper_source_dir(paths["data"], slug)
             folder.mkdir(parents=True, exist_ok=True)
             target = folder / ("source" + Path(name).suffix.lower())
@@ -708,8 +726,7 @@ def create_app(root: Path | None = None):
                                      "clipper ne traite que le contenu parlé"}), 400
         conn = get_conn()
         try:
-            existing = {s["slug"] for s in dbmod.list_clipper_sources(conn)}
-            slug = clip_source.slug_for(origin.stem, existing)
+            slug = clip_source.slug_for(origin.stem, _taken_slugs(conn))
             folder = dbmod.clipper_source_dir(paths["data"], slug)
             folder.mkdir(parents=True, exist_ok=True)
             target = folder / ("source" + origin.suffix.lower())
@@ -743,19 +760,41 @@ def create_app(root: Path | None = None):
         conn = get_conn()
         try:
             source = dbmod.get_clipper_source(conn, source_id)
-            if source is None:
-                return jsonify({"error": "source inconnue"}), 404
-            dbmod.delete_clipper_source(conn, source_id)  # cascade sur les clips
         finally:
             conn.close()
+        if source is None:
+            return jsonify({"error": "source inconnue"}), 404
+        # Un job en cours survivrait à la suppression : il recréerait les
+        # dossiers et écrirait des mp4 sans ligne en base — des fichiers
+        # invisibles dans l'interface, que rien ne nettoiera jamais.
+        if source["status"] in BUSY_CLIPPER_STATUSES:
+            return jsonify({"error": "analyse en cours : attends qu'elle "
+                                     "finisse avant de supprimer"}), 409
         folder = dbmod.clipper_source_dir(paths["data"], source["slug"]).resolve()
+        # Le dossier part AVANT la ligne : si l'effacement échoue, la ligne
+        # reste et la source est encore visible. Dans l'autre ordre, un dossier
+        # orphelin subsistait avec son transcript.json, et un réupload
+        # récupérant le même slug héritait du transcript d'une autre vidéo.
+        #
         # Égalité stricte sur le parent (pas seulement « quelque part sous data/ »,
         # comme `_delete_asset`) : un slug vide résoudrait `folder` en
         # `data/clipper` lui-même, dont les parents contiennent bien `data` — et
         # rmtree effacerait alors le dossier clipper entier, donc les sources de
         # tous les membres.
         if folder.is_dir() and folder.parent == paths["clipper"].resolve():
-            shutil.rmtree(folder)
+            try:
+                shutil.rmtree(folder)
+            except OSError as exc:
+                # Cas courant sur la tour Windows : un handle ouvert (lecteur
+                # <video> du navigateur) fait échouer rmtree. Message clair
+                # plutôt que 500, et la source reste intacte.
+                return jsonify({"error": "impossible d'effacer le dossier de la "
+                                         f"source (fichier ouvert ?) : {exc}"}), 409
+        conn = get_conn()
+        try:
+            dbmod.delete_clipper_source(conn, source_id)  # cascade sur les clips
+        finally:
+            conn.close()
         return jsonify({"ok": True})
 
     @app.get("/api/clipper/clips/<int:clip_id>")

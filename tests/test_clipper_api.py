@@ -214,3 +214,54 @@ def test_promotion_accepte_un_fichier_avec_audio(client, tmp_path, monkeypatch):
 
     assert client.post("/api/clipper/inbox/parle.mp4").status_code == 200
     assert (tmp_path / "data/clipper/parle/source.mp4").is_file()
+
+
+@pytest.mark.parametrize("statut", ["transcribing", "analyzing", "rendering"])
+def test_suppression_refusee_pendant_une_analyse(client, tmp_path, statut):
+    """Le job survivrait à la suppression : il recréerait les dossiers et
+    écrirait des mp4 sans ligne en base, invisibles et jamais nettoyés."""
+    from db import set_clipper_source_status
+
+    sid = client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Podcast.mp4")}).get_json()["id"]
+    conn = connect(tmp_path / "platform.db")
+    set_clipper_source_status(conn, sid, statut)
+    conn.close()
+
+    assert client.delete(f"/api/clipper/sources/{sid}").status_code == 409
+    assert (tmp_path / "data/clipper/podcast/source.mp4").is_file()
+    assert len(client.get("/api/state").get_json()["clipper_sources"]) == 1
+
+
+def test_un_dossier_orphelin_ne_voit_pas_son_slug_reattribue(client, tmp_path):
+    """Un effacement de dossier qui échoue (handle ouvert sous Windows) laisse
+    un dossier sans ligne en base. Réattribuer son slug ferait hériter la
+    nouvelle source du transcript.json de l'ancienne : « Transcript en cache »,
+    puis des clips découpés aux timestamps d'une autre vidéo."""
+    orphelin = tmp_path / "data" / "clipper" / "podcast"
+    orphelin.mkdir(parents=True)
+    (orphelin / "transcript.json").write_text('[{"word": "vieux"}]')
+
+    client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Podcast.mp4")})
+    slug = client.get("/api/state").get_json()["clipper_sources"][0]["slug"]
+    assert slug != "podcast"
+    assert (orphelin / "transcript.json").read_text() == '[{"word": "vieux"}]'
+
+
+def test_suppression_ne_perd_pas_la_ligne_si_l_effacement_echoue(
+        client, tmp_path, monkeypatch):
+    """Ordre inverse de l'ancien code : le dossier part avant la ligne, sinon
+    un échec d'effacement laisse un orphelin et une source disparue."""
+    import shutil
+
+    sid = client.post("/api/clipper/sources", data={
+        "file": (io.BytesIO(b"faux"), "Podcast.mp4")}).get_json()["id"]
+
+    def refuse(*a, **k):
+        raise PermissionError("fichier ouvert")
+    monkeypatch.setattr(shutil, "rmtree", refuse)
+
+    reponse = client.delete(f"/api/clipper/sources/{sid}")
+    assert reponse.status_code == 409
+    assert len(client.get("/api/state").get_json()["clipper_sources"]) == 1
