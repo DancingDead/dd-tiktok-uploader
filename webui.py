@@ -26,7 +26,7 @@ AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aiff"}
 # Réglages exposés dans l'onglet Paramètres (sous-ensemble sûr de DEFAULT_CONFIG)
 EDITABLE_SETTINGS = [
     "effects", "accents", "delogo", "chrono", "min_presence",
-    "buildup", "strobe_beats", "cut_mode", "cut_every",
+    "buildup", "strobe_beats", "cut_mode", "cut_every", "clipper",
 ]
 # Clés d'overrides de preset qui doivent être numériques (défense XSS : jamais de HTML stocké)
 NUMERIC_OVERRIDE_KEYS = ("min_presence", "cut_every", "buildup", "strobe_beats",
@@ -57,6 +57,13 @@ END_SCENE_RANGES = {"beats": (2, 32), "freeze": (0.0, 3.0), "speed": (0.5, 1.5)}
 # Longueur du segment ralenti, en beats. 1 = pas de fusion ; au-delà de
 # `impact_beats` (8 par défaut) la fusion avalerait toute la grille de coupe.
 SLOW_BEATS_RANGE = (1, 8)
+# Bornes des réglages du clipper. clip_count au-delà de 30 sature un modèle
+# local ; un clip sous 3 s n'a pas d'histoire, au-delà de 180 s ce n'est plus un
+# short. Modèles Whisper : ceux que faster-whisper sait résoudre.
+CLIPPER_RANGES = {"clip_count": (1, 30), "min_dur": (3.0, 180.0),
+                  "max_dur": (3.0, 180.0)}
+CLIPPER_INT_KEYS = ("clip_count",)
+ALLOWED_WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
 # Types MIME explicites pour l'aperçu d'assets (send_file devine mal .flac/.aiff).
 ASSET_MIMETYPES = {
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
@@ -142,6 +149,28 @@ def coerce_subtitles(subtitles: dict) -> dict:
     return coerced
 
 
+def coerce_clipper(settings: dict) -> dict:
+    """Réglages du clipper, coercés et bornés côté serveur. Défense XSS et
+    défense tout court : ces valeurs finissent dans une ligne de commande
+    ffmpeg et dans un nom de modèle. Lève ValueError si non convertible."""
+    coerced = {}
+    for key, (low, high) in CLIPPER_RANGES.items():
+        if key not in settings:
+            continue
+        try:
+            value = int(settings[key]) if key in CLIPPER_INT_KEYS \
+                else float(settings[key])
+        except (TypeError, ValueError):
+            raise ValueError(f"valeur non numérique pour {key} : {settings[key]!r}")
+        coerced[key] = max(low, min(high, value))
+    if "whisper_model" in settings:
+        model = str(settings["whisper_model"])
+        if model not in ALLOWED_WHISPER_MODELS:
+            raise ValueError(f"modèle Whisper inconnu : {model!r}")
+        coerced["whisper_model"] = model
+    return coerced
+
+
 # --- Jobs en arrière-plan (téléchargements, génération) --------------------------
 
 _jobs: dict = {}
@@ -194,6 +223,7 @@ def create_app(root: Path | None = None):
         "links": root / "links.txt",
         "clip_links": root / "clip_links.txt",
         "settings": root / "settings.json",
+        "clipper": root / "data" / "clipper",
         "dist": root / "frontend" / "dist",  # build React (mono-serveur en prod)
     }
     paths["data"].mkdir(exist_ok=True)
@@ -294,6 +324,12 @@ def create_app(root: Path | None = None):
             videos_by_niche: dict[int, list] = {}
             for v in dbmod.list_videos(conn):
                 videos_by_niche.setdefault(v["niche_id"], []).append(v)
+            sources = dbmod.list_clipper_sources(conn)
+            clips_by_source: dict = {}
+            for clip in dbmod.list_clipper_clips(conn):
+                clips_by_source.setdefault(clip["source_id"], []).append(clip)
+            for source in sources:
+                source["clips"] = clips_by_source.get(source["id"], [])
         finally:
             conn.close()
 
@@ -318,6 +354,7 @@ def create_app(root: Path | None = None):
                 "clips": clips,
                 "settings": {k: settings[k] for k in EDITABLE_SETTINGS},
                 "jobs": jobs,
+                "clipper_sources": sources,
             }
         )
 
@@ -451,6 +488,11 @@ def create_app(root: Path | None = None):
     @app.post("/api/settings")
     def save_settings():
         overrides = {k: v for k, v in request.json.items() if k in EDITABLE_SETTINGS}
+        if "clipper" in overrides:
+            try:
+                overrides["clipper"] = coerce_clipper(overrides["clipper"] or {})
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
         paths["settings"].write_text(json.dumps(overrides, ensure_ascii=False, indent=2) + "\n")
         return jsonify({"ok": True})
 
@@ -548,6 +590,188 @@ def create_app(root: Path | None = None):
             dbmod.set_video_status(conn, video_id, status)
         finally:
             conn.close()
+        return jsonify({"ok": True})
+
+    # --- Clipper --------------------------------------------------------------
+
+    def _source_or_404(source_id):
+        conn = get_conn()
+        try:
+            return dbmod.get_clipper_source(conn, source_id)
+        finally:
+            conn.close()
+
+    def _clipper_file(rel: str):
+        """Chemin absolu d'un fichier clipper, ou None s'il sort de data/.
+        Même garde anti-traversal que serve_video : une ligne trafiquée en base
+        ne doit pas exfiltrer un fichier arbitraire."""
+        path = (paths["data"].parent / rel).resolve()
+        if not path.is_file() or paths["data"].resolve() not in path.parents:
+            return None
+        return path
+
+    @app.post("/api/clipper/sources")
+    def upload_clipper_source():
+        from datetime import datetime
+
+        import clip_source
+
+        file = request.files["file"]
+        name = Path(file.filename).name  # pas de traversée de chemin
+        if Path(name).suffix.lower() not in VIDEO_EXTS:
+            return jsonify({"error": f"format non supporté : {name}"}), 400
+        conn = get_conn()
+        try:
+            existing = {s["slug"] for s in dbmod.list_clipper_sources(conn)}
+            slug = clip_source.slug_for(Path(name).stem, existing)
+            folder = dbmod.clipper_source_dir(paths["data"], slug)
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / ("source" + Path(name).suffix.lower())
+            file.save(target)
+            source_id = dbmod.create_clipper_source(
+                conn, title=Path(name).stem, slug=slug,
+                path=str(target.relative_to(paths["data"].parent)),
+                duration=0.0,
+                created_at=datetime.now().isoformat(timespec="seconds"))
+        finally:
+            conn.close()
+        return jsonify({"ok": True, "id": source_id, "slug": slug})
+
+    @app.post("/api/clipper/sources/link")
+    def download_clipper_source():
+        """Importe un lien YouTube dans data/clipper/_inbox/ via yt-dlp. La
+        source est ensuite ajoutée par l'utilisateur depuis l'inbox — on ne peut
+        pas connaître le nom du fichier avant la fin du téléchargement."""
+        url = (request.json or {}).get("url", "").strip()
+        if not url.startswith(("https://www.youtube.com/", "https://youtu.be/",
+                               "https://youtube.com/")):
+            return jsonify({"error": "lien YouTube attendu"}), 400
+        inbox = paths["clipper"] / "_inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+        links = inbox / "links.txt"
+        links.write_text(url + "\n")
+        try:
+            job_id = start_job("clipper-download",
+                               [sys.executable, "fetch_tracks.py", str(links),
+                                "--video", "--dest", str(inbox)])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"job_id": job_id})
+
+    @app.get("/api/clipper/inbox")
+    def clipper_inbox():
+        """Fichiers téléchargés en attente d'être promus en source."""
+        inbox = paths["clipper"] / "_inbox"
+        names = sorted(p.name for p in inbox.glob("*")
+                       if p.suffix.lower() in VIDEO_EXTS) if inbox.is_dir() else []
+        return jsonify({"files": names})
+
+    @app.post("/api/clipper/inbox/<path:name>")
+    def promote_clipper_inbox(name):
+        """Promeut un fichier de l'inbox en source (déplacement, pas copie)."""
+        from datetime import datetime
+
+        import clip_source
+
+        safe = Path(name).name  # neutralise toute traversée de chemin
+        origin = paths["clipper"] / "_inbox" / safe
+        if origin.suffix.lower() not in VIDEO_EXTS or not origin.is_file():
+            return jsonify({"error": "fichier introuvable"}), 404
+        conn = get_conn()
+        try:
+            existing = {s["slug"] for s in dbmod.list_clipper_sources(conn)}
+            slug = clip_source.slug_for(origin.stem, existing)
+            folder = dbmod.clipper_source_dir(paths["data"], slug)
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / ("source" + origin.suffix.lower())
+            origin.replace(target)
+            source_id = dbmod.create_clipper_source(
+                conn, title=origin.stem, slug=slug,
+                path=str(target.relative_to(paths["data"].parent)),
+                duration=0.0,
+                created_at=datetime.now().isoformat(timespec="seconds"))
+        finally:
+            conn.close()
+        return jsonify({"ok": True, "id": source_id})
+
+    @app.post("/api/clipper/sources/<int:source_id>/run")
+    def run_clipper_source(source_id):
+        source = _source_or_404(source_id)
+        if source is None:
+            return jsonify({"error": "source inconnue"}), 404
+        try:
+            job_id = start_job(f"clip-{source['slug']}",
+                               [sys.executable, "clip_source.py", str(source_id),
+                                str(paths["data"].parent)])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"job_id": job_id})
+
+    @app.delete("/api/clipper/sources/<int:source_id>")
+    def delete_clipper_source_ep(source_id):
+        import shutil
+
+        conn = get_conn()
+        try:
+            source = dbmod.get_clipper_source(conn, source_id)
+            if source is None:
+                return jsonify({"error": "source inconnue"}), 404
+            dbmod.delete_clipper_source(conn, source_id)  # cascade sur les clips
+        finally:
+            conn.close()
+        folder = dbmod.clipper_source_dir(paths["data"], source["slug"]).resolve()
+        if folder.is_dir() and paths["data"].resolve() in folder.parents:
+            shutil.rmtree(folder)
+        return jsonify({"ok": True})
+
+    @app.get("/api/clipper/clips/<int:clip_id>")
+    def serve_clipper_clip(clip_id):
+        from flask import send_file
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT file FROM clipper_clips WHERE id = ?",
+                               (clip_id,)).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return jsonify({"error": "clip inconnu"}), 404
+        path = _clipper_file(row["file"])
+        if path is None:
+            return jsonify({"error": "fichier introuvable"}), 404
+        return send_file(path, mimetype="video/mp4",
+                         as_attachment=request.args.get("dl") == "1",
+                         download_name=path.name)
+
+    @app.post("/api/clipper/clips/<int:clip_id>/status")
+    def set_clipper_clip_status_ep(clip_id):
+        status = (request.json or {}).get("status")
+        if status not in ("proposed", "approved", "rejected", "posted"):
+            return jsonify({"error": "statut invalide"}), 400
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT id FROM clipper_clips WHERE id = ?",
+                               (clip_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "clip inconnu"}), 404
+            dbmod.set_clipper_clip_status(conn, clip_id, status)
+        finally:
+            conn.close()
+        return jsonify({"ok": True})
+
+    @app.delete("/api/clipper/clips/<int:clip_id>")
+    def delete_clipper_clip_ep(clip_id):
+        conn = get_conn()
+        try:
+            row = conn.execute("SELECT file FROM clipper_clips WHERE id = ?",
+                               (clip_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "clip inconnu"}), 404
+            dbmod.delete_clipper_clip(conn, clip_id)
+        finally:
+            conn.close()
+        path = _clipper_file(row["file"])
+        if path is not None:
+            path.unlink()
         return jsonify({"ok": True})
 
     @app.get("/api/jobs/<job_id>")

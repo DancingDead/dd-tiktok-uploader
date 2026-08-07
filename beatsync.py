@@ -76,6 +76,12 @@ DEFAULT_CONFIG = {
         "model": "claude-opus-4-8",     # modèle de génération
         "font": "impact",               # police embarquée : impact|classique|sobre|condensee|douce|elegante
     },
+    "clipper": {                        # onglet Clipper : vidéo longue → shorts
+        "whisper_model": "small",       # taille du modèle de transcription
+        "clip_count": 8,                # shorts gardés par source
+        "min_dur": 15.0,                # s : en dessous, un extrait n'a pas d'histoire
+        "max_dur": 60.0,                # s : au-delà, ce n'est plus un short
+    },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,
