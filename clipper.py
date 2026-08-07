@@ -12,6 +12,7 @@ centre.
 
 import json
 import os
+import subprocess
 import urllib.request
 from pathlib import Path
 
@@ -469,3 +470,117 @@ def score_moment(text: str, title: str, seed: int) -> dict:
 
     return {"hook": note("hook"), "flow": note("flow"), "value": note("value"),
             "why": str(data.get("why", ""))[:WHY_MAX]}
+
+
+# --- I/O : transcription, détection de visage, rendu ------------------------------
+
+# 2 fps pour le suivi de visage : même cadence que le scan de beatsync. Plus fin
+# ne sert à rien (la moyenne glissante et la zone morte écrasent tout ce qui
+# bouge plus vite), et le décodage domine le coût.
+SAMPLE_FPS = 2.0
+
+
+def transcribe(video_path: Path, model: str = "small") -> list[dict]:
+    """Mots horodatés de la bande son. Langue auto-détectée. I/O."""
+    from faster_whisper import WhisperModel  # import paresseux : ~1 s + le modèle
+
+    whisper = WhisperModel(model, device="cpu", compute_type="int8")
+    segments, _ = whisper.transcribe(str(video_path), word_timestamps=True,
+                                     vad_filter=True)
+    words = []
+    for segment in segments:
+        for word in (segment.words or []):
+            words.append({"word": word.word.strip(),
+                          "start": float(word.start), "end": float(word.end)})
+    return words
+
+
+def _ffprobe(video_path: Path, entries: str) -> list[str]:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", entries, "-of", "csv=p=0:s=,", str(video_path)],
+        capture_output=True, text=True, check=True).stdout.strip()
+    return out.split(",")
+
+
+def probe_size(video_path: Path) -> tuple[int, int]:
+    """Dimensions de la piste vidéo. I/O."""
+    width, height = _ffprobe(video_path, "stream=width,height")[:2]
+    return int(width), int(height)
+
+
+def probe_duration(video_path: Path) -> float:
+    """Durée en secondes. I/O."""
+    return float(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(video_path)],
+        capture_output=True, text=True, check=True).stdout.strip())
+
+
+def track_faces(video_path: Path, start: float, end: float) -> list[float | None]:
+    """Centre horizontal (px, dans le repère de la source) du plus grand visage,
+    échantillonné à SAMPLE_FPS. None quand aucun visage n'est détecté. I/O."""
+    import cv2  # import paresseux : coûteux, inutile à la logique pure
+
+    cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    capture = cv2.VideoCapture(str(video_path))
+    centers: list[float | None] = []
+    try:
+        time = start
+        while time < end:
+            capture.set(cv2.CAP_PROP_POS_MSEC, time * 1000)
+            ok, frame = capture.read()
+            if not ok:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cascade.detectMultiScale(gray, 1.15, 5, minSize=(60, 60))
+            if len(faces) == 0:
+                centers.append(None)
+            else:
+                # Le plus grand visage : sur un plan à plusieurs personnes,
+                # c'est presque toujours celui au premier plan, donc l'orateur.
+                x, _, w, _ = max(faces, key=lambda f: f[2] * f[3])
+                centers.append(float(x) + w / 2)
+            time += 1 / SAMPLE_FPS
+    finally:
+        capture.release()
+    return centers
+
+
+def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
+                words: list[dict], config: dict) -> None:
+    """Rend un short : recadrage suivi, mise à l'échelle, sous-titres incrustés.
+    Un seul appel ffmpeg. I/O."""
+    src_w, src_h = probe_size(video_path)
+    crop_w, crop_h = crop_size(src_w, src_h)
+    track = smooth_track(track_faces(video_path, start, end),
+                         default=src_w / 2, dead_zone=DEAD_ZONE * OUT_W)
+    expr = crop_expr(track, SAMPLE_FPS, crop_w, src_w)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    ass_path = out_path.with_suffix(".ass")
+    ass_path.write_text(build_ass(words, start, end), encoding="utf-8")
+
+    # eval=frame seulement si l'expression dépend du temps : sinon on paie une
+    # évaluation par frame pour une constante.
+    evaluation = ":eval=frame" if "if(" in expr else ""
+    filters = (f"crop={crop_w}:{crop_h}:x='{expr}':y=0{evaluation},"
+               f"scale={OUT_W}:{OUT_H}:flags=lanczos,"
+               f"subtitles='{ffmpeg_path(ass_path)}'")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-ss", f"{start:.3f}", "-to", f"{end:.3f}", "-i", str(video_path),
+             "-vf", filters, "-r", str(config.get("fps", 30)),
+             "-c:v", "libx264", "-crf", str(config.get("crf", 20)),
+             "-preset", config.get("preset", "medium"), "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", config.get("audio_bitrate", "192k"),
+             "-movflags", "+faststart",
+             # Mêmes flags que beatsync : sans eux, l'encodeur date le fichier et
+             # deux rendus identiques diffèrent octet à octet.
+             "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
+             str(out_path)],
+            check=True, capture_output=True, text=True)
+    finally:
+        ass_path.unlink(missing_ok=True)
