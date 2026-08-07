@@ -15,6 +15,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+// Doit rester aligné sur webui.ALLOWED_WHISPER_MODELS : le serveur refuse en
+// 400 tout autre nom (il finit dans un chargement de modèle faster-whisper).
+const WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+
 export function SettingsTab({
   state,
   refresh,
@@ -31,6 +35,10 @@ export function SettingsTab({
 
   function setAccent(key: keyof Settings["accents"], value: boolean) {
     setLocal((s) => ({ ...s, accents: { ...s.accents, [key]: value } }))
+  }
+
+  function setClipper(key: keyof Settings["clipper"], value: string | number) {
+    setLocal((s) => ({ ...s, clipper: { ...s.clipper, [key]: value } }))
   }
 
   async function save() {
@@ -216,6 +224,73 @@ export function SettingsTab({
                     strobe_beats: Number(e.target.value),
                   }))
                 }
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Clipper</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="whisper_model">Modèle de transcription</Label>
+              <Select
+                value={local.clipper.whisper_model ?? "small"}
+                onValueChange={(v) => setClipper("whisper_model", v)}
+              >
+                <SelectTrigger id="whisper_model" className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {WHISPER_MODELS.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Plus le modèle est gros, meilleure est la transcription — et plus
+              l'analyse est longue : la transcription dure environ une fois la
+              durée de la vidéo en « small », plusieurs fois en « large-v3 ».
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clip_count">Shorts par source</Label>
+              <Input
+                id="clip_count"
+                type="number"
+                min={1}
+                max={30}
+                className="w-20"
+                value={local.clipper.clip_count ?? 8}
+                onChange={(e) => setClipper("clip_count", Number(e.target.value))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_min_dur">Durée min … s</Label>
+              <Input
+                id="clipper_min_dur"
+                type="number"
+                min={3}
+                max={180}
+                className="w-20"
+                value={local.clipper.min_dur ?? 15}
+                onChange={(e) => setClipper("min_dur", Number(e.target.value))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_max_dur">Durée max … s</Label>
+              <Input
+                id="clipper_max_dur"
+                type="number"
+                min={3}
+                max={180}
+                className="w-20"
+                value={local.clipper.max_dur ?? 60}
+                onChange={(e) => setClipper("max_dur", Number(e.target.value))}
               />
             </div>
           </CardContent>
