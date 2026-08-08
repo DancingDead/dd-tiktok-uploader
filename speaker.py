@@ -113,41 +113,61 @@ def _anchor(center: float, crop_w: int, src_w: int) -> int:
     return _even(min(max(0.0, center - crop_w / 2), max(0, src_w - crop_w)))
 
 
+def _nearest_box(boxes: dict[int, dict], start_frame: int, end_frame: int) -> dict:
+    """Rectangle de la piste le plus proche en numéro d'image de l'intervalle
+    `[start_frame, end_frame)`. Sert à combler un trou de détection : la
+    cascade a raté le visage sur ce plan précis, mais la position connue la
+    plus proche dans le temps reste le meilleur indice de où il est."""
+    def distance(i: int) -> int:
+        return min(abs(i - start_frame), abs(i - (end_frame - 1)))
+    nearest = min(boxes, key=lambda i: (distance(i), i))
+    return boxes[nearest]
+
+
 def crop_segments(timeline: list[dict], tracks: list[dict], crop_w: int,
                   src_w: int, fps: float) -> list[dict]:
     """Traduit la timeline en segments de cadrage. Un segment porte le x de son
     début et celui de sa fin : le cadre suit doucement l'orateur pendant un plan
     long, mais saute d'un segment à l'autre. Pure.
 
-    N'utilise que les rectangles de la piste dont le numéro d'image tombe DANS
-    le segment courant — jamais la première/dernière position de la piste
-    entière, qui peut avoir été enregistrée bien avant ou après ce plan précis
-    (une même piste traverse plusieurs segments). `fps` sert à convertir les
-    bornes temporelles du segment en numéros d'image, l'unité dans laquelle
-    `track["boxes"]` est indexé."""
+    Trois niveaux de repli, dans cet ordre :
+    1. des rectangles DANS le segment (numéro d'image compris dans ses bornes,
+       converties via `fps`, l'unité dans laquelle `track["boxes"]` est
+       indexé) → cadrage normal, ancré sur le premier et le dernier.
+    2. aucun rectangle dans le segment mais la piste en a AILLEURS dans le
+       clip → trou de détection (link_tracks tolère jusqu'à TRACK_MAX_AGE
+       images sans appariement au sein d'une même piste, et une frontière de
+       `speaker_timeline` peut tomber à quelques images d'une détection réelle
+       à cause de la fenêtre glissante) : la personne est toujours là, on
+       tient sa position connue la plus proche plutôt que de recentrer.
+       `speaker_timeline` refuse déjà ce recentrage en plein clip (« ça se lit
+       comme une panne ») ; le cadrage géométrique ne doit pas la contredire.
+    3. piste inconnue, ou piste sans le moindre rectangle → centre : là, il
+       n'y a rien à tenir."""
     centre = _even(max(0, (src_w - crop_w) / 2))
     by_id = {t["id"]: t for t in tracks}
     segments = []
     for entry in timeline:
         track = by_id.get(entry["track_id"])
-        start_frame = round(entry["start"] * fps)
-        end_frame = round(entry["end"] * fps)
-        in_segment = ([] if track is None else
-                      sorted((i, box) for i, box in track["boxes"].items()
-                            if start_frame <= i < end_frame))
-        if not in_segment:
-            # Piste inconnue, ou connue mais sans détection PENDANT ce plan
-            # précis (visage non retrouvé sur ces images) : centrer plutôt que
-            # d'aller chercher une position prise à un autre moment du clip,
-            # qui ne dit rien de où était le visage ici.
+        if track is None or not track["boxes"]:
             segments.append({"start": entry["start"], "end": entry["end"],
                              "x_start": centre, "x_end": centre})
             continue
-        first, last = in_segment[0][1], in_segment[-1][1]
-        segments.append({
-            "start": entry["start"], "end": entry["end"],
-            "x_start": _anchor(first["x"] + first["w"] / 2, crop_w, src_w),
-            "x_end": _anchor(last["x"] + last["w"] / 2, crop_w, src_w)})
+        start_frame = round(entry["start"] * fps)
+        end_frame = round(entry["end"] * fps)
+        in_segment = sorted((i, box) for i, box in track["boxes"].items()
+                            if start_frame <= i < end_frame)
+        if in_segment:
+            first, last = in_segment[0][1], in_segment[-1][1]
+            segments.append({
+                "start": entry["start"], "end": entry["end"],
+                "x_start": _anchor(first["x"] + first["w"] / 2, crop_w, src_w),
+                "x_end": _anchor(last["x"] + last["w"] / 2, crop_w, src_w)})
+            continue
+        nearest = _nearest_box(track["boxes"], start_frame, end_frame)
+        x = _anchor(nearest["x"] + nearest["w"] / 2, crop_w, src_w)
+        segments.append({"start": entry["start"], "end": entry["end"],
+                         "x_start": x, "x_end": x})
     return segments
 
 

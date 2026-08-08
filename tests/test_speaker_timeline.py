@@ -174,12 +174,33 @@ def test_le_cadrage_suit_le_visage_pendant_le_segment_pas_ailleurs():
     assert seg[1]["x_end"] == 760
 
 
-def test_un_segment_sans_rectangle_retombe_au_centre():
-    """La piste existe mais n'a aucune detection pendant ce plan : mieux vaut
-    centrer que cadrer sur une position prise a un autre moment du clip."""
+def test_un_segment_sans_rectangle_tient_la_derniere_position_connue():
+    """Spécification révisée en ronde 2 : la piste n'a aucune détection PENDANT
+    ce plan, mais elle en a ailleurs dans le clip — c'est un trou de détection,
+    pas une piste vide. On tient la position connue la plus proche (image 4,
+    x=900) plutôt que de recentrer, ce qui contredirait la doctrine de
+    speaker_timeline (tenir plutôt que recentrer en plein clip)."""
     a = piste_pos(0, {i: 900 for i in range(5)})
     tl = [{"start": 2.0, "end": 3.0, "track_id": 0}]
     seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
+    assert seg[0]["x_start"] == 600 and seg[0]["x_end"] == 600
+
+
+def test_un_trou_de_detection_tient_la_position_au_lieu_de_recentrer():
+    """La cascade rate le visage pendant ce plan, mais la personne est toujours
+    la : on tient sa derniere position connue. Recentrer en plein clip se lit
+    comme une panne."""
+    a = piste_pos(0, {i: 900 for i in range(10)})       # images 0 a 9
+    tl = [{"start": 1.0, "end": 2.0, "track_id": 0}]    # images 10 a 19 : aucun rectangle
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
+    assert seg[0]["x_start"] == 600 and seg[0]["x_end"] == 600   # 900 - 300, pas le centre
+
+
+def test_le_centre_ne_sert_que_faute_de_toute_detection():
+    """Piste sans le moindre rectangle : la, il n'y a rien a tenir."""
+    vide = {"id": 0, "boxes": {}, "activity": {}}
+    tl = [{"start": 0.0, "end": 1.0, "track_id": 0}]
+    seg = crop_segments(tl, [vide], crop_w=600, src_w=1920, fps=10.0)
     assert seg[0]["x_start"] == 660 and seg[0]["x_end"] == 660
 
 
