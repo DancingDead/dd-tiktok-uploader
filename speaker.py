@@ -114,21 +114,36 @@ def _anchor(center: float, crop_w: int, src_w: int) -> int:
 
 
 def crop_segments(timeline: list[dict], tracks: list[dict], crop_w: int,
-                  src_w: int) -> list[dict]:
+                  src_w: int, fps: float) -> list[dict]:
     """Traduit la timeline en segments de cadrage. Un segment porte le x de son
     début et celui de sa fin : le cadre suit doucement l'orateur pendant un plan
-    long, mais saute d'un segment à l'autre. Pure."""
+    long, mais saute d'un segment à l'autre. Pure.
+
+    N'utilise que les rectangles de la piste dont le numéro d'image tombe DANS
+    le segment courant — jamais la première/dernière position de la piste
+    entière, qui peut avoir été enregistrée bien avant ou après ce plan précis
+    (une même piste traverse plusieurs segments). `fps` sert à convertir les
+    bornes temporelles du segment en numéros d'image, l'unité dans laquelle
+    `track["boxes"]` est indexé."""
     centre = _even(max(0, (src_w - crop_w) / 2))
     by_id = {t["id"]: t for t in tracks}
     segments = []
     for entry in timeline:
         track = by_id.get(entry["track_id"])
-        if track is None or not track["boxes"]:
-            segments.append({**{k: entry[k] for k in ("start", "end")},
+        start_frame = round(entry["start"] * fps)
+        end_frame = round(entry["end"] * fps)
+        in_segment = ([] if track is None else
+                      sorted((i, box) for i, box in track["boxes"].items()
+                            if start_frame <= i < end_frame))
+        if not in_segment:
+            # Piste inconnue, ou connue mais sans détection PENDANT ce plan
+            # précis (visage non retrouvé sur ces images) : centrer plutôt que
+            # d'aller chercher une position prise à un autre moment du clip,
+            # qui ne dit rien de où était le visage ici.
+            segments.append({"start": entry["start"], "end": entry["end"],
                              "x_start": centre, "x_end": centre})
             continue
-        indices = sorted(track["boxes"])
-        first, last = track["boxes"][indices[0]], track["boxes"][indices[-1]]
+        first, last = in_segment[0][1], in_segment[-1][1]
         segments.append({
             "start": entry["start"], "end": entry["end"],
             "x_start": _anchor(first["x"] + first["w"] / 2, crop_w, src_w),
@@ -140,11 +155,51 @@ def track_to_segments(centers: list[float], sample_fps: float, crop_w: int,
                       src_w: int) -> list[dict]:
     """Convertit une trajectoire plate en segments d'une image chacun. Sert au
     chemin de repli (`speaker_cuts` désactivé), qui raisonne encore en
-    trajectoire — `crop_expr` fusionnera les paliers identiques. Pure."""
+    trajectoire. Le x_end de chaque segment est l'ancre de l'échantillon
+    SUIVANT, pas celle du même échantillon : sinon chaque segment est immobile
+    (x_start == x_end) et `crop_expr` ne ferait qu'un escalier de paliers secs
+    — exactement ce que `_ramp` existe pour éviter. Le dernier segment n'a pas
+    de suivant : son x_end vaut sa propre ancre, ce qui tient la valeur.
+    `crop_expr` fusionnera ensuite les segments immobiles consécutifs. Pure."""
+    anchors = [_anchor(x, crop_w, src_w) for x in centers]
     return [{"start": i / sample_fps, "end": (i + 1) / sample_fps,
-             "x_start": _anchor(x, crop_w, src_w),
-             "x_end": _anchor(x, crop_w, src_w)}
-            for i, x in enumerate(centers)]
+             "x_start": anchors[i],
+             "x_end": anchors[i + 1] if i + 1 < len(anchors) else anchors[i]}
+            for i in range(len(anchors))]
+
+
+def _merge_static(segments: list[dict]) -> list[dict]:
+    """Fusionne les segments adjacents immobiles et de même ancre : deux plans
+    fixes consécutifs au même endroit ne valent pas deux paliers dans
+    l'expression FFmpeg — inutile, et ça consomme le plafond `MAX_STEPS` pour
+    rien (cas réel : `track_to_segments` à 2 images/s produit un segment par
+    image, dont l'immense majorité est immobile). Pure."""
+    merged: list[dict] = []
+    for segment in segments:
+        static = segment["x_start"] == segment["x_end"]
+        if (static and merged and merged[-1]["x_start"] == merged[-1]["x_end"]
+                == segment["x_start"]):
+            merged[-1] = {**merged[-1], "end": segment["end"]}
+        else:
+            merged.append(segment)
+    return merged
+
+
+def expr_needs_eval(expr: str) -> bool:
+    """Dit si l'expression de crop dépend du temps.
+
+    La présence d'un `if(` ne suffit PLUS à en juger, dans un sens comme dans
+    l'autre : un segment unique non constant (« le visage dérive pendant tout
+    le plan ») compile en une simple rampe `2*floor((…+…*t)/2)` SANS aucun
+    `if(`, et pourtant dépend bien de `t` ; à l'inverse, rien n'empêcherait un
+    jour une expression de contenir `if(` sans dépendre du temps. Le seul test
+    fiable : `crop_expr` ne rend jamais que deux formes — un entier littéral
+    (cadre figé) ou une expression qui référence `t`. Pure."""
+    try:
+        int(expr)
+        return False
+    except ValueError:
+        return True
 
 
 def crop_expr(segments: list[dict], crop_w: int, src_w: int) -> str:
@@ -158,6 +213,7 @@ def crop_expr(segments: list[dict], crop_w: int, src_w: int) -> str:
     centre = _even(max(0, (src_w - crop_w) / 2))
     if not segments:
         return str(centre)
+    segments = _merge_static(segments)
     # Plafond de paliers : au-delà l'expression devient illisible et coûteuse.
     # Le dernier segment retenu est prolongé jusqu'à la fin plutôt que tronqué,
     # pour que le cadre ne reparte jamais au centre en cours de clip.
@@ -168,8 +224,15 @@ def crop_expr(segments: list[dict], crop_w: int, src_w: int) -> str:
            for s in segments):
         return str(segments[0]["x_start"])
 
-    expr = _ramp(segments[-1]["start"], segments[-1]["x_start"],
-                 segments[-1]["end"], segments[-1]["x_end"])
+    # Après la fin du DERNIER segment, le cadre tient sa valeur finale plutôt
+    # que de continuer la rampe : ffmpeg évalue l'expression pour tout t, y
+    # compris au-delà de la fin de la timeline (arrondis de durée rendue), et
+    # une rampe non bornée extrapolerait hors de l'image.
+    last = segments[-1]
+    expr = str(last["x_end"])
+    if last["x_start"] != last["x_end"]:
+        inner = _ramp(last["start"], last["x_start"], last["end"], last["x_end"])
+        expr = f"if(lt(t,{last['end']:g}),{inner},{expr})"
     for segment in reversed(segments[:-1]):
         inner = _ramp(segment["start"], segment["x_start"],
                       segment["end"], segment["x_end"])

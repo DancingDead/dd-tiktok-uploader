@@ -1,6 +1,7 @@
 import pytest
 
-from speaker import speaker_timeline, crop_segments, crop_expr
+from speaker import (speaker_timeline, crop_segments, crop_expr,
+                     track_to_segments, expr_needs_eval)
 
 
 def piste(id_, activity):
@@ -140,7 +141,7 @@ def piste_pos(id_, positions):
 
 def test_segments_centres_quand_aucune_piste():
     tl = [{"start": 0.0, "end": 5.0, "track_id": None}]
-    seg = crop_segments(tl, [], crop_w=600, src_w=1920)
+    seg = crop_segments(tl, [], crop_w=600, src_w=1920, fps=10.0)
     assert seg == [{"start": 0.0, "end": 5.0, "x_start": 660, "x_end": 660}]
 
 
@@ -148,32 +149,69 @@ def test_segment_cale_sur_le_visage_de_sa_piste():
     """Visage centré en x=900 → crop de 600 large ancré en 900-300 = 600."""
     a = piste_pos(0, {i: 900 for i in range(50)})
     tl = [{"start": 0.0, "end": 5.0, "track_id": 0}]
-    seg = crop_segments(tl, [a], crop_w=600, src_w=1920)
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
     assert seg[0]["x_start"] == 600 and seg[0]["x_end"] == 600
 
 
 def test_un_visage_qui_derive_donne_un_segment_qui_interpole():
     a = piste_pos(0, {i: 500 + i * 10 for i in range(50)})
     tl = [{"start": 0.0, "end": 5.0, "track_id": 0}]
-    seg = crop_segments(tl, [a], crop_w=600, src_w=1920)
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
     assert seg[0]["x_start"] < seg[0]["x_end"]
+
+
+def test_le_cadrage_suit_le_visage_pendant_le_segment_pas_ailleurs():
+    """Le visage traverse l'image sur tout le clip, mais un seul segment lui est
+    attribue. Sans borner aux images du segment, le cadre prend les positions de
+    debut et de fin de la PISTE et rate le visage pendant le plan."""
+    a = piste_pos(0, {i: 300 + i * 40 for i in range(30)})   # centre 300 -> 1460
+    tl = [{"start": 0.0, "end": 1.0, "track_id": None},
+          {"start": 1.0, "end": 2.0, "track_id": 0},
+          {"start": 2.0, "end": 3.0, "track_id": None}]
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
+    # images 10 a 19 -> centres 700 a 1060 -> ancres 400 a 760
+    assert seg[1]["x_start"] == 400
+    assert seg[1]["x_end"] == 760
+
+
+def test_un_segment_sans_rectangle_retombe_au_centre():
+    """La piste existe mais n'a aucune detection pendant ce plan : mieux vaut
+    centrer que cadrer sur une position prise a un autre moment du clip."""
+    a = piste_pos(0, {i: 900 for i in range(5)})
+    tl = [{"start": 2.0, "end": 3.0, "track_id": 0}]
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
+    assert seg[0]["x_start"] == 660 and seg[0]["x_end"] == 660
 
 
 def test_les_x_sont_pairs_et_bornes_dans_l_image():
     a = piste_pos(0, {i: 0 for i in range(10)})
-    z = piste_pos(1, {i: 5000 for i in range(10)})
+    z = piste_pos(1, {i: 5000 for i in range(10, 20)})
     tl = [{"start": 0.0, "end": 1.0, "track_id": 0},
           {"start": 1.0, "end": 2.0, "track_id": 1}]
-    seg = crop_segments(tl, [a, z], crop_w=600, src_w=1920)
+    seg = crop_segments(tl, [a, z], crop_w=600, src_w=1920, fps=10.0)
     assert seg[0]["x_start"] == 0
     assert seg[1]["x_start"] == 1320          # 1920 - 600
     assert all(s[k] % 2 == 0 for s in seg for k in ("x_start", "x_end"))
 
 
+def test_les_x_sont_pairs_meme_quand_l_ancre_brute_est_impaire():
+    """0 et 5000 tombent pairs par simple BORNAGE dans l'image, sans jamais
+    passer par l'arrondi de `_even` : une implémentation qui oublierait
+    `_even` passerait quand même. 901 - 300 = 601, réellement impair avant
+    arrondi → doit devenir 600."""
+    a = piste_pos(0, {i: 901 for i in range(20, 30)})
+    tl = [{"start": 2.0, "end": 3.0, "track_id": 0}]
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
+    assert seg[0]["x_start"] == 600
+
+
 def test_une_piste_absente_de_la_timeline_ne_plante_pas():
-    """Robustesse : un track_id inconnu retombe sur le cadrage centré."""
+    """Robustesse : un track_id inconnu au milieu d'une liste de pistes NON
+    VIDE retombe sur le cadrage centré plutôt que de planter — une liste vide
+    ne prouverait rien sur la recherche par id."""
+    a = piste_pos(0, {i: 900 for i in range(50)})
     tl = [{"start": 0.0, "end": 5.0, "track_id": 42}]
-    seg = crop_segments(tl, [], crop_w=600, src_w=1920)
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920, fps=10.0)
     assert seg[0]["x_start"] == 660
 
 
@@ -190,9 +228,31 @@ def test_expr_saute_sec_entre_deux_segments():
 
 
 def test_expr_interpole_a_l_interieur_d_un_segment():
+    """Chaîne exacte : `"2*floor(" in expr and "t" in expr` passerait avec une
+    pente inversée, un facteur faux ou une origine fausse — `"t" in expr` est
+    trivialement vrai dès que `2*floor(` est présent."""
     seg = [{"start": 0.0, "end": 2.0, "x_start": 100, "x_end": 300}]
     expr = crop_expr(seg, crop_w=600, src_w=1920)
-    assert "2*floor(" in expr and "t" in expr
+    assert expr == "if(lt(t,2),2*floor((100+100*t)/2),300)"
+
+
+def test_expr_tient_sa_valeur_finale_au_dela_de_la_fin():
+    """FFmpeg évalue l'expression pour tout t, y compris après la fin de la
+    timeline (arrondis de durée rendue) : sans borne, la rampe du dernier
+    segment extrapolerait hors de l'image plutôt que de tenir x_end."""
+    seg = [{"start": 0.0, "end": 2.0, "x_start": 100, "x_end": 300},
+           {"start": 2.0, "end": 6.0, "x_start": 300, "x_end": 500}]
+    expr = crop_expr(seg, crop_w=600, src_w=1920)
+
+    def _eval(t):
+        import math
+        scope = {"t": t, "floor": math.floor,
+                 "if_": lambda cond, a, b: a if cond else b,
+                 "lt_": lambda x, y: x < y}
+        return eval(expr.replace("if(", "if_(").replace("lt(", "lt_("), scope)
+
+    assert _eval(8.0) == 500       # au-delà de t=6 : tenu, pas extrapolé
+    assert _eval(12.0) == 500
 
 
 def test_expr_sans_segment_rend_le_centre():
@@ -204,4 +264,58 @@ def test_expr_borne_le_nombre_de_paliers():
     seg = [{"start": i * 0.4, "end": (i + 1) * 0.4,
             "x_start": (i * 40) % 1200, "x_end": (i * 40) % 1200}
            for i in range(400)]
-    assert crop_expr(seg, crop_w=600, src_w=1920).count("if(") <= MAX_STEPS
+    expr = crop_expr(seg, crop_w=600, src_w=1920)
+    # > 0 exclut une implémentation qui dégénérerait en constante : une suite
+    # de 400 valeurs qui varient à chaque pas ne doit jamais rendre un nombre
+    # nu, sans quoi le plafond serait « respecté » en trichant.
+    assert 0 < expr.count("if(") <= MAX_STEPS
+
+
+def test_expr_borne_pile_a_la_limite():
+    """Un pas au-dessus de MAX_STEPS : le plafond doit tenir exactement là où
+    il est cense agir, pas seulement sur un nombre de segments trois fois
+    plus grand."""
+    from speaker import MAX_STEPS
+    seg = [{"start": i * 0.4, "end": (i + 1) * 0.4,
+            "x_start": (i * 2) % 1200, "x_end": (i * 2) % 1200}
+           for i in range(MAX_STEPS + 1)]
+    expr = crop_expr(seg, crop_w=600, src_w=1920)
+    assert expr.count("if(") <= MAX_STEPS
+
+
+def test_track_to_segments_produit_une_rampe_pas_un_escalier():
+    """x_end doit être l'ancre de l'échantillon SUIVANT : sinon chaque segment
+    est immobile (x_start == x_end) et le cadre saute d'un palier à l'autre
+    toutes les 0,5 s au lieu de suivre en douceur — exactement ce que `_ramp`
+    existe pour éviter."""
+    seg = track_to_segments([500.0, 900.0], sample_fps=2.0, crop_w=600, src_w=1920)
+    assert seg[0]["x_start"] != seg[0]["x_end"]
+    assert seg[0]["x_end"] == seg[1]["x_start"]
+    assert seg[1]["x_start"] == seg[1]["x_end"]   # dernier segment : pas de suivant
+
+
+def test_track_to_segments_puis_expr_fusionne_les_paliers_immobiles():
+    """Un clip de 60 s à 2 images/s (cadence de repli) donne 120 segments d'une
+    image chacune — pile la limite MAX_STEPS. Sans fusion des paliers immobiles
+    consécutifs, un cadrage qui ne bouge qu'une fois en fin de clip toucherait
+    quand même le plafond ; avec la fusion, ça retombe à une poignée de
+    paliers."""
+    centers = [500.0] * 119 + [900.0]
+    seg = track_to_segments(centers, sample_fps=2.0, crop_w=600, src_w=1920)
+    assert len(seg) == 120
+    expr = crop_expr(seg, crop_w=600, src_w=1920)
+    assert expr.count("if(") <= 5
+
+
+def test_expr_needs_eval_faux_sur_une_constante():
+    assert expr_needs_eval("660") is False
+
+
+def test_expr_needs_eval_vrai_sur_une_rampe_sans_if():
+    """Cas piège : une rampe à un seul segment ne contient AUCUN `if(` et
+    dépend pourtant du temps — la présence d'un `if(` ne suffit pas à trancher."""
+    assert expr_needs_eval("2*floor((100+100*t)/2)") is True
+
+
+def test_expr_needs_eval_vrai_sur_une_expression_a_paliers():
+    assert expr_needs_eval("if(lt(t,2),100,900)") is True
