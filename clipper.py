@@ -17,9 +17,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Tout le cadrage passe par le préfixe `speaker.` : un style mixte (certains
+# noms importés, d'autres via le module) laissait traîner un `MAX_STEPS` importé
+# et jamais utilisé, et rend illisible ce qui vient d'où. Le préfixe dit aussi
+# clairement, à la lecture, quel module est le plus bas niveau des deux.
 import speaker
-from speaker import (DEAD_ZONE, MAX_STEPS, OUT_H, OUT_W, crop_expr, crop_size,
-                     smooth_track)
 
 DEFAULTS = {
     "whisper_model": "small",   # taille du modèle faster-whisper
@@ -193,11 +195,11 @@ def build_ass(words: list[dict], start: float, end: float, *,
     """Sous-titres karaoké : la ligne entière s'affiche, le mot en cours d'être
     prononcé passe en rouge. Temps rebasés sur `start`. Pure."""
     inside = [x for x in words if x["end"] > start and x["start"] < end]
-    margin = int(round((1 - y) * OUT_H))
+    margin = int(round((1 - y) * speaker.OUT_H))
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        f"PlayResX: {OUT_W}\nPlayResY: {OUT_H}\n"
+        f"PlayResX: {speaker.OUT_W}\nPlayResY: {speaker.OUT_H}\n"
         "WrapStyle: 2\n\n"
         "[V4+ Styles]\n"
         "Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour,"
@@ -739,7 +741,7 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
     clip et dégrade en cadrage centré quand la source est illisible — sans
     journal, ce repli est indiscernable d'une vidéo sans visage."""
     src_w, src_h = probe_size(video_path)
-    crop_w, crop_h = crop_size(src_w, src_h)
+    crop_w, crop_h = speaker.crop_size(src_w, src_h)
     if config.get("speaker_cuts", True):
         segments = speaker.analyze_framing(
             video_path, start, end, src_w, src_h,
@@ -751,10 +753,11 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
         # (track_faces travaille dans ce repère), donc rapportée à crop_w — le
         # crop est ensuite étiré vers OUT_W, si bien que DEAD_ZONE × crop_w vaut
         # la même fraction de l'image finale quelle que soit la définition.
-        track = smooth_track(track_faces(video_path, start, end),
-                             default=src_w / 2, dead_zone=DEAD_ZONE * crop_w)
+        track = speaker.smooth_track(
+            track_faces(video_path, start, end),
+            default=src_w / 2, dead_zone=speaker.DEAD_ZONE * crop_w)
         segments = speaker.track_to_segments(track, SAMPLE_FPS, crop_w, src_w)
-    expr = crop_expr(segments, crop_w, src_w)
+    expr = speaker.crop_expr(segments, crop_w, src_w)
 
     # Police EMBARQUÉE, comme beatsync : sans fontsdir, libass demande « Anton »
     # à fontconfig et lui substitue silencieusement une sans-serif quelconque
@@ -776,7 +779,7 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
                   if speaker.expr_needs_eval(expr) and crop_supports_eval()
                   else "")
     filters = (f"crop={crop_w}:{crop_h}:x='{expr}':y=0{evaluation},"
-               f"scale={OUT_W}:{OUT_H}:flags=lanczos,"
+               f"scale={speaker.OUT_W}:{speaker.OUT_H}:flags=lanczos,"
                f"subtitles='{ffmpeg_path(ass_path)}'"
                f":fontsdir='{ffmpeg_path(FONTS_DIR)}'")
     try:
