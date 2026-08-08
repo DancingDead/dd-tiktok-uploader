@@ -143,3 +143,56 @@ def crop_expr(track: list[float], sample_fps: float, crop_w: int,
         expr = (f"if(lt(t,{next_time:g}),"
                 f"{_ramp(time, x, next_time, next_x)},{expr})")
     return expr
+
+
+# --- Suivi de visages -------------------------------------------------------
+
+# Recouvrement minimal pour considérer que deux rectangles d'images successives
+# sont le même visage. En dessous, deux visages voisins finiraient reliés dans
+# la même piste — et le cadre passerait de l'un à l'autre sans qu'aucune coupe
+# ne soit décidée.
+IOU_MIN = 0.3
+
+
+def iou(a: dict, b: dict) -> float:
+    """Recouvrement de deux rectangles, rapporté à leur union. Pure."""
+    x1 = max(a["x"], b["x"])
+    y1 = max(a["y"], b["y"])
+    x2 = min(a["x"] + a["w"], b["x"] + b["w"])
+    y2 = min(a["y"] + a["h"], b["y"] + b["h"])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    union = a["w"] * a["h"] + b["w"] * b["h"] - inter
+    return inter / union if union > 0 else 0.0
+
+
+def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN) -> list[dict]:
+    """Relie les détections image par image en pistes persistantes.
+
+    Une piste non appariée sur une image n'est pas close : la cascade rate
+    régulièrement un visage (tête tournée, flou de mouvement), et rouvrir une
+    piste ferait passer la même personne pour une nouvelle — donc une coupe
+    injustifiée. Elle reste donc candidate à l'appariement sur sa DERNIÈRE
+    position connue. Pure."""
+    tracks: list[dict] = []
+    for index, boxes in enumerate(detections):
+        # Appariement glouton par recouvrement décroissant : le meilleur couple
+        # est figé d'abord, ce qui évite qu'un visage vole l'appariement d'un
+        # autre quand deux personnes se rapprochent.
+        pairs = sorted(
+            ((iou(track["boxes"][max(track["boxes"])], box), t, d)
+             for t, track in enumerate(tracks)
+             for d, box in enumerate(boxes)),
+            key=lambda p: (-p[0], p[1], p[2]))
+        used_tracks: set[int] = set()
+        used_boxes: set[int] = set()
+        for score, t, d in pairs:
+            if score < iou_min or t in used_tracks or d in used_boxes:
+                continue
+            tracks[t]["boxes"][index] = boxes[d]
+            used_tracks.add(t)
+            used_boxes.add(d)
+        for d, box in enumerate(boxes):
+            if d not in used_boxes:
+                tracks.append({"id": len(tracks), "boxes": {index: box},
+                               "activity": {}})
+    return tracks
