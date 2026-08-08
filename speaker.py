@@ -258,3 +258,66 @@ def usable_tracks(tracks: list[dict], frame_h: int) -> list[dict]:
                 continue
         kept.append(track)
     return kept
+
+
+# --- Découpage en plans -----------------------------------------------------
+
+# Fenêtre glissante de mesure de l'agitation : assez longue pour lisser une
+# syllabe, assez courte pour réagir à une prise de parole.
+ACTIVITY_WINDOW = 0.6
+# Le prétendant doit être une fois et demie plus agité que le tenant. En deçà,
+# deux personnes qui se coupent la parole feraient osciller le cadre.
+SWITCH_MARGIN = 1.5
+# Durée minimale d'un plan. Dans une conversation vive la parole alterne en
+# moins d'une seconde ; sans plancher, le cadre ferait des allers-retours qui se
+# lisent comme un bug et non comme un montage.
+MIN_SHOT = 1.2
+
+
+def _windowed_activity(track: dict, index: int, half: int) -> float:
+    """Agitation moyenne d'une piste autour d'une image. Une image sans mesure
+    compte pour zéro : un visage non détecté ne parle pas, de notre point de vue."""
+    values = [track["activity"].get(i, 0.0)
+              for i in range(index - half, index + half + 1)]
+    return sum(values) / len(values) if values else 0.0
+
+
+def speaker_timeline(tracks: list[dict], cuts: set[int], n_frames: int,
+                     fps: float, min_shot: float = MIN_SHOT) -> list[dict]:
+    """Qui tient le cadre, à chaque instant. Segments contigus couvrant tout le
+    clip ; `track_id` à None quand aucune piste ne s'impose (cadrage centré).
+    Pure."""
+    if n_frames <= 0:
+        return []
+    if not tracks:
+        return [{"start": 0.0, "end": n_frames / fps, "track_id": None}]
+
+    half = max(1, int(round(ACTIVITY_WINDOW * fps / 2)))
+    min_frames = max(1, int(round(min_shot * fps)))
+    current = None
+    since = 0
+    boundaries: list[tuple[int, int | None]] = []
+    for index in range(n_frames):
+        scores = {t["id"]: _windowed_activity(t, index, half) for t in tracks}
+        best = max(scores, key=lambda k: (scores[k], -k))
+        if current is None:
+            current, since = best, index
+            boundaries.append((index, current))
+            continue
+        # Une coupe de la source rend le saut invisible : min_shot ne s'y
+        # applique pas.
+        libre = index in cuts or (index - since) >= min_frames
+        # Marge de bascule : le tenant garde la main tant qu'il n'est pas
+        # nettement dépassé. Un tenant à zéro (silence) n'est pas dépassé non
+        # plus — on tient plutôt que de recentrer.
+        domine = scores[best] > SWITCH_MARGIN * scores[current] and scores[best] > 0
+        if best != current and libre and domine:
+            current, since = best, index
+            boundaries.append((index, current))
+
+    segments = []
+    for (start_index, track_id), (next_index, _) in zip(
+            boundaries, boundaries[1:] + [(n_frames, None)]):
+        segments.append({"start": start_index / fps, "end": next_index / fps,
+                         "track_id": track_id})
+    return segments
