@@ -87,6 +87,22 @@ def test_une_rafale_de_coupes_ne_produit_pas_de_plans_trop_courts():
     assert all(s["end"] - s["start"] >= 0.4 - 1e-6 for s in tl[:-1])
 
 
+def test_le_plancher_de_coupe_n_est_jamais_plus_dur_que_min_shot():
+    """`CUT_MIN_SHOT` (0,4 s) ASSOUPLIT le plancher, il ne le durcit jamais.
+
+    Un `min_shot` réglé sous 0,4 s — possible en éditant `settings.json` à la
+    main, qui n'est pas coercé — inverserait son rôle : une coupe de la source
+    RETARDERAIT la bascule au lieu de l'autoriser plus tôt. Ici min_shot vaut
+    0,2 s (2 images) et la coupe tombe à l'image 3, première image où le second
+    domine : la bascule doit y être permise, alors qu'un plancher calculé sur
+    0,4 s (4 images) l'y refuserait et la repousserait d'une image."""
+    a = piste(0, {i: 5.0 for i in range(21)})
+    b = piste(1, {i: (100.0 if i >= 6 else 0.0) for i in range(21)})
+    tl = speaker_timeline([a, b], cuts={3}, n_frames=21, fps=FPS, min_shot=0.2)
+    assert tl[0]["end"] == pytest.approx(0.3)
+    assert tl[1]["track_id"] == 1
+
+
 def test_une_coupe_de_la_source_autorise_une_bascule_plus_tot():
     """Sans coupe, min_shot repousse le changement à 1,2 s. La coupe le rend
     invisible, donc on l'autorise avant. La fenêtre glissante décale forcément
@@ -302,6 +318,26 @@ def test_expr_borne_pile_a_la_limite():
            for i in range(MAX_STEPS + 1)]
     expr = crop_expr(seg, crop_w=600, src_w=1920)
     assert expr.count("if(") <= MAX_STEPS
+
+
+def test_expr_suit_l_orateur_jusqu_a_la_fin_au_dela_du_plafond():
+    """Au-delà de MAX_STEPS on DÉCIME, on ne tronque pas.
+
+    Le cas est atteignable en vrai : `max_dur` à 150 s sur une source à plans
+    courts, ou `min_shot` abaissé sur un 60 s très découpé. En tronquant, le
+    dernier palier tombait à 59,5 s et le cadre restait figé pendant les 90 s
+    suivantes — l'orateur sortait du champ sans y revenir, en silence. Le
+    dernier palier doit donc valoir la FIN du clip, pas une fraction d'icelle."""
+    import re
+
+    from speaker import MAX_STEPS
+    seg = [{"start": i * 0.5, "end": (i + 1) * 0.5,
+            "x_start": (i * 40) % 1200, "x_end": (i * 40) % 1200}
+           for i in range(300)]
+    expr = crop_expr(seg, crop_w=600, src_w=1920)
+    seuils = [float(x) for x in re.findall(r"lt\(t,([0-9.]+)\)", expr)]
+    assert max(seuils) == pytest.approx(300 * 0.5)
+    assert 0 < expr.count("if(") <= MAX_STEPS
 
 
 def test_track_to_segments_produit_une_rampe_pas_un_escalier():

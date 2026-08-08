@@ -235,11 +235,19 @@ def crop_expr(segments: list[dict], crop_w: int, src_w: int) -> str:
         return str(centre)
     segments = _merge_static(segments)
     # Plafond de paliers : au-delà l'expression devient illisible et coûteuse.
-    # Le dernier segment retenu est prolongé jusqu'à la fin plutôt que tronqué,
-    # pour que le cadre ne reparte jamais au centre en cours de clip.
+    # On DÉCIME plutôt que de tronquer — un segment gardé sur `keep`, qui absorbe
+    # ceux qu'il remplace (bornes recollées, x_end pris sur le dernier absorbé).
+    # Le cadre suit donc l'orateur jusqu'au bout du clip, simplement plus
+    # grossièrement. Tronquer et prolonger le dernier segment retenu figeait le
+    # cadre sur toute la queue du clip : avec 300 segments sur 150 s, le cadrage
+    # était juste 59,5 s puis immobile les 90 s restantes — l'orateur sortait du
+    # champ et n'y revenait plus, en silence.
     if len(segments) > MAX_STEPS:
-        segments = segments[:MAX_STEPS - 1] + [
-            {**segments[MAX_STEPS - 1], "end": segments[-1]["end"]}]
+        keep = -(-len(segments) // MAX_STEPS)   # division entière par excès
+        segments = [{**group[0], "end": group[-1]["end"],
+                     "x_end": group[-1]["x_end"]}
+                    for group in (segments[i:i + keep]
+                                  for i in range(0, len(segments), keep))]
     if all(s["x_start"] == s["x_end"] == segments[0]["x_start"]
            for s in segments):
         return str(segments[0]["x_start"])
@@ -442,7 +450,12 @@ def speaker_timeline(tracks: list[dict], cuts: set[int], n_frames: int,
 
     half = max(1, int(round(ACTIVITY_WINDOW * fps / 2)))
     min_frames = max(1, int(round(min_shot * fps)))
-    cut_min_frames = max(1, int(round(CUT_MIN_SHOT * fps)))
+    # `CUT_MIN_SHOT` est un ASSOUPLISSEMENT du plancher, jamais un durcissement :
+    # sur une coupe de la source, on autorise une bascule plus tôt. Calculé seul,
+    # il inverserait cette intention dès que `min_shot` descend sous 0,4 s — ce
+    # qu'un settings.json édité à la main permet (le formulaire est coercé, pas
+    # le fichier). D'où le `min` avec le plancher ordinaire.
+    cut_min_frames = max(1, min(min_frames, int(round(CUT_MIN_SHOT * fps))))
     current = None
     since = 0
     # Le plancher ne protège qu'un cadrage choisi en connaissance de cause. Le
@@ -498,6 +511,10 @@ DETECT_EVERY = 0.5
 # Haar en 960x540 coûte 8 ms contre 25 ms en pleine résolution, pour la même
 # détection à ces tailles de visage.
 DETECT_SCALE = 0.5
+# Cadence supposée quand la source n'en déclare pas d'exploitable (voir
+# `sampling_cadence`). 30 est la valeur la plus courante ; se tromper décale le
+# cadrage, ne pas décider du tout perd le clip.
+FALLBACK_FPS = 30.0
 # Une coupe du montage d'origine est un écart inter-images qui SORT DE LA
 # DISTRIBUTION du clip, pas qui dépasse une valeur absolue : un seuil fixe ne peut
 # pas servir à la fois un plateau fixe et une captation agitée. Mesuré sur la
@@ -525,7 +542,16 @@ def sampling_cadence(source_fps: float,
     juste que si la source est un multiple de la cible. Une source PAL à 25
     donne 12,5 images/s, du cinéma à 24 en donne 12, du NTSC à 23,976 en donne
     11,988. Confondre les deux étire toute la timeline du même facteur, puisque
-    la suite convertit des indices d'image en secondes."""
+    la suite convertit des indices d'image en secondes.
+
+    Une cadence source inexploitable (0, négative, ou NaN — certains conteneurs
+    en rendent, et NaN est TRUTHY, si bien qu'un `or 30.0` chez l'appelant ne
+    l'attrape pas) est ramenée à `FALLBACK_FPS`. Sans cette garde,
+    `int(round(nan))` lève « cannot convert float NaN to integer » que personne
+    n'attrape, et le clip est perdu — alors qu'`analyze_framing` promet de
+    dégrader en cadrage centré plutôt que d'échouer."""
+    if not source_fps > 0:   # faux aussi pour NaN, contrairement à `== 0`
+        source_fps = FALLBACK_FPS
     keep_every = max(1, int(round(source_fps / target_fps)))
     return keep_every, source_fps / keep_every
 
@@ -621,11 +647,15 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
     diffs: list[float] = [0.0]
     try:
         capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
-        source_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
         # PIÈGE : `FRAME_FPS` est une cadence VISÉE, pas la cadence obtenue.
         # Passer 10,0 à la suite étirerait la timeline d'un facteur 1,25 sur du
         # PAL, et le cadre suivrait l'orateur avec un retard croissant.
-        keep_every, sample_fps = sampling_cadence(source_fps)
+        keep_every, sample_fps = sampling_cadence(capture.get(cv2.CAP_PROP_FPS))
+        # Cadence source RECONSTITUÉE depuis la cadence coercée : `capture.get`
+        # rend 0 sur un conteneur sans métadonnée, et NaN sur certains autres.
+        # `sampling_cadence` les remplace déjà par `FALLBACK_FPS` ; reprendre la
+        # valeur brute ici ferait rentrer le NaN par la fenêtre, dans `max_raw`.
+        source_fps = sample_fps * keep_every
         # Idem : l'intervalle entre deux détections vaut `DETECT_EVERY`
         # SECONDES, donc il se compte dans la cadence réelle, pas la visée.
         detect_every = max(1, int(round(DETECT_EVERY * sample_fps)))
@@ -703,4 +733,12 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
     usable = usable_tracks(tracks, src_h)
     timeline = speaker_timeline(usable, cuts, len(detections), sample_fps,
                                 min_shot=min_shot)
+    if log:
+        # L'analyse dure plusieurs secondes par clip : sans cette ligne, le
+        # journal du job affiche le nom du clip puis plus rien, et on ne peut
+        # pas distinguer un travail en cours d'un blocage. Aucun test ne couvre
+        # ce chemin d'I/O — l'observabilité en production est la seule façon de
+        # savoir ce que la détection a réellement trouvé.
+        log(f"  cadrage : {len(timeline)} plan(s), {len(cuts)} coupe(s), "
+            f"{len(usable)} piste(s) retenue(s)")
     return crop_segments(timeline, usable, crop_w, src_w, sample_fps)

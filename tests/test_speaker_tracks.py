@@ -300,3 +300,16 @@ def test_une_source_plus_lente_que_la_cible_garde_toutes_ses_images():
     a. `keep_every` ne descend pas sous 1, et la cadence obtenue est celle de
     la source."""
     assert sampling_cadence(5.0, 10.0) == (1, 5.0)
+
+
+def test_une_cadence_source_inexploitable_ne_perd_pas_le_clip():
+    """0, negatif ou NaN : on retombe sur FALLBACK_FPS plutot que de lever.
+
+    NaN est TRUTHY — certains conteneurs en rendent, et un `or 30.0` chez
+    l'appelant ne l'attrape pas. `int(round(nan))` levait alors un ValueError
+    que personne n'attrape : le clip etait perdu, alors qu'`analyze_framing`
+    promet de degrader en cadrage centre."""
+    from speaker import FALLBACK_FPS
+    for mauvais in (float("nan"), 0.0, -25.0):
+        keep_every, obtenue = sampling_cadence(mauvais, 10.0)
+        assert (keep_every, obtenue) == sampling_cadence(FALLBACK_FPS, 10.0)
