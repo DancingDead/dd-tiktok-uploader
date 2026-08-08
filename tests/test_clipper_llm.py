@@ -1,5 +1,6 @@
 import io
 import json
+import types
 import urllib.error
 import urllib.request
 
@@ -262,6 +263,49 @@ def test_propose_ne_perd_pas_les_autres_fenetres_si_une_echoue(monkeypatch):
     out = clipper.propose_moments(mots, 6, 7, digest_chars=200, log=lignes.append)
     assert len(out) == len(fenetres) - 1
     assert any("contexte dépassé" in ligne for ligne in lignes)
+
+
+# --- Correction 3 : `eval=frame` n'existe plus sur ffmpeg 8 ----------------------
+
+
+@pytest.mark.parametrize("aide, attendu", [
+    # ffmpeg 7 : l'option existe.
+    ("crop AVOptions:\n   x <string> ..FV....... set x\n"
+     "   eval <int> ..FV....... specify when to evaluate expressions\n", True),
+    # ffmpeg 8 : elle a disparu, `x` porte le drapeau T (runtime-tunable).
+    ("crop AVOptions:\n   x <string> ..FV.....T. set the x crop area expression\n"
+     "   keep_aspect <boolean> ..FV....... keep aspect ratio\n", False),
+])
+def test_sonde_eval_lit_l_aide_du_filtre(monkeypatch, aide, attendu):
+    monkeypatch.setattr(clipper, "_CROP_EVAL_SUPPORTED", None)
+    monkeypatch.setattr(clipper.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout=aide, stderr=""))
+    assert clipper.crop_supports_eval() is attendu
+
+
+def test_sonde_eval_suppose_absente_si_la_sonde_echoue(monkeypatch):
+    """ffmpeg absent ou sortie inattendue : on suppose l'option absente, le
+    comportement des versions récentes, qui ne casse rien sur elles."""
+    monkeypatch.setattr(clipper, "_CROP_EVAL_SUPPORTED", None)
+
+    def boom(*a, **k):
+        raise FileNotFoundError("ffmpeg")
+    monkeypatch.setattr(clipper.subprocess, "run", boom)
+    assert clipper.crop_supports_eval() is False
+
+
+def test_sonde_eval_mise_en_cache(monkeypatch):
+    """Un sous-processus par segment rendu serait payé pour rien."""
+    monkeypatch.setattr(clipper, "_CROP_EVAL_SUPPORTED", None)
+    appels = []
+
+    def compte(*a, **k):
+        appels.append(1)
+        return types.SimpleNamespace(stdout="   eval <int> ..FV.....\n", stderr="")
+    monkeypatch.setattr(clipper.subprocess, "run", compte)
+    clipper.crop_supports_eval()
+    clipper.crop_supports_eval()
+    assert len(appels) == 1
 
 
 def test_clipper_defaults_match_beatsync():

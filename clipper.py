@@ -238,10 +238,11 @@ def _ramp(t0: float, x0: int, t1: float, x1: int) -> str:
 
 def crop_expr(track: list[float], sample_fps: float, crop_w: int,
               src_w: int) -> str:
-    """Compile la trajectoire en expression FFmpeg pour `crop=x=…:eval=frame`,
-    en interpolant linéairement entre les points de la trajectoire. Une
-    trajectoire immobile rend un simple nombre (pas d'évaluation par frame).
-    Pure."""
+    """Compile la trajectoire en expression FFmpeg pour `crop=x=…`, en
+    interpolant linéairement entre les points de la trajectoire. Une trajectoire
+    immobile rend un simple nombre — ce qui évite de demander une réévaluation
+    par frame (`eval=frame`, quand la ffmpeg installée connaît encore l'option,
+    voir `crop_supports_eval`) pour une constante. Pure."""
     centre = _even(max(0, (src_w - crop_w) / 2))
     if not track:
         return str(centre)
@@ -724,6 +725,41 @@ def has_audio(video_path: Path) -> bool:
     return bool(out)
 
 
+# Réponse de la sonde ci-dessous, mémorisée : c'est un sous-processus, on ne le
+# paie pas une fois par segment rendu.
+_CROP_EVAL_SUPPORTED: bool | None = None
+
+
+def crop_supports_eval() -> bool:
+    """Le filtre `crop` de la ffmpeg installée accepte-t-il l'option `eval` ? I/O.
+
+    Question de VERSION, pas de mécanisme : jusqu'à ffmpeg 7, `crop` porte une
+    option `eval` qui vaut `init` par défaut — sans `eval=frame`, une expression
+    de `x` n'est évaluée qu'une fois et le cadre reste figé à sa position de
+    départ (régression visuelle silencieuse). Depuis ffmpeg 8, l'option a
+    disparu : `x`/`y` sont marquées runtime-tunable (`T`) et réévaluées par frame
+    nativement, et passer `eval=frame` fait échouer TOUT le rendu avec
+    « Option not found ». On sonde donc plutôt que de choisir un camp : la tour
+    de production n'a pas forcément la même ffmpeg que la machine de dev.
+
+    Sonde en échec (ffmpeg absent, sortie inattendue) = option absente, le
+    comportement des versions récentes, qui ne casse rien sur elles."""
+    global _CROP_EVAL_SUPPORTED
+    if _CROP_EVAL_SUPPORTED is None:
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-h", "filter=crop"],
+                                 capture_output=True, text=True, timeout=30)
+            # Une ligne d'option ffmpeg s'écrit « <nom> <type> <drapeaux> … » :
+            # on cherche le nom exact en tête, pas « eval » n'importe où (les
+            # descriptions parlent d'« evaluate »).
+            _CROP_EVAL_SUPPORTED = any(
+                line.split()[:1] == ["eval"]
+                for line in (out.stdout + out.stderr).splitlines())
+        except Exception:
+            _CROP_EVAL_SUPPORTED = False
+    return _CROP_EVAL_SUPPORTED
+
+
 # Échecs de lecture consécutifs tolérés avant de conclure à une fin de flux.
 # Sur un conteneur sans index propre (upload utilisateur, vidéo VFR), un seek
 # isolé peut rater sans que le flux soit fini : sortir dès le premier échec
@@ -793,9 +829,11 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
     ass_path = out_path.with_suffix(".ass")
     ass_path.write_text(build_ass(words, start, end), encoding="utf-8")
 
-    # eval=frame seulement si l'expression dépend du temps : sinon on paie une
-    # évaluation par frame pour une constante.
-    evaluation = ":eval=frame" if "if(" in expr else ""
+    # `eval=frame` seulement si la ffmpeg installée connaît l'option (elle a
+    # disparu en ffmpeg 8, où la passer fait échouer le rendu entier) ET si
+    # l'expression dépend du temps (sinon on paie une évaluation par frame pour
+    # une constante).
+    evaluation = ":eval=frame" if "if(" in expr and crop_supports_eval() else ""
     filters = (f"crop={crop_w}:{crop_h}:x='{expr}':y=0{evaluation},"
                f"scale={OUT_W}:{OUT_H}:flags=lanczos,"
                f"subtitles='{ffmpeg_path(ass_path)}'"
