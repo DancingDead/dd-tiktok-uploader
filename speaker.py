@@ -528,8 +528,26 @@ def detect_cuts(diffs: list[float], ratio: float = CUT_RATIO,
     return {i for i in range(1, len(diffs)) if diffs[i] > threshold}
 
 
-def _mouth_activity(previous, current, box: dict, scale: float) -> float:
-    """Agitation du tiers inférieur d'un rectangle entre deux images réduites."""
+# Plancher du dénominateur de normalisation, en niveaux de gris. Une image
+# parfaitement statique donne un écart global nul : sans plancher, la division
+# lève une erreur, et juste au-dessus elle amplifierait le seul bruit de
+# compression jusqu'à des scores absurdes. Mesuré sur la source d'essai : l'écart
+# global descend à 0,61 niveau sur les plans les plus fixes, et sa médiane vaut
+# 4,3 à 9,4 niveaux — un plancher à 1 niveau ne borne donc que les images
+# réellement immobiles.
+GLOBAL_FLOOR = 1.0
+
+
+def _mouth_activity(previous, current, box: dict, scale: float,
+                    global_diff: float) -> float:
+    """Agitation du tiers inférieur d'un rectangle, RAPPORTÉE à l'agitation de
+    l'image entière.
+
+    Une différence d'images ne distingue pas une bouche qui bouge d'une image
+    entière qui bouge : pendant un panoramique, la zone de la bouche change
+    énormément sans que personne ne parle. Ce qui doit compter, c'est de combien
+    la bouche bouge PLUS que le reste de l'image, d'où la division par l'écart
+    global — déjà calculé pour la détection de coupe, donc gratuit."""
     x = int(box["x"] * scale)
     y = int((box["y"] + box["h"] * 2 / 3) * scale)
     w = max(1, int(box["w"] * scale))
@@ -539,7 +557,8 @@ def _mouth_activity(previous, current, box: dict, scale: float) -> float:
     if a.size == 0 or a.shape != b.shape:
         return 0.0
     import numpy as np
-    return float(np.mean(np.abs(a.astype("int16") - b.astype("int16"))))
+    mouth = float(np.mean(np.abs(a.astype("int16") - b.astype("int16"))))
+    return mouth / max(global_diff, GLOBAL_FLOOR)
 
 
 def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
@@ -605,11 +624,14 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
             frame_boxes = [dict(b, detected=is_pass) for b in boxes]
             detections.append(frame_boxes)
             if previous is not None:
-                diffs.append(float(np.mean(np.abs(
-                    small.astype("int16") - previous.astype("int16")))) / 255)
+                # En NIVEAUX pour normaliser l'agitation (même unité que la
+                # mesure de bouche), rapporté à la dynamique pour `detect_cuts`.
+                global_diff = float(np.mean(np.abs(
+                    small.astype("int16") - previous.astype("int16"))))
+                diffs.append(global_diff / 255)
                 for box in frame_boxes:
                     activity_by_box[id(box)] = _mouth_activity(
-                        previous, small, box, DETECT_SCALE)
+                        previous, small, box, DETECT_SCALE, global_diff)
             previous = small
             index += 1
     finally:
