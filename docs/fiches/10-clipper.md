@@ -1,7 +1,7 @@
 # 10 — clipper.py / clip_source.py
 
-> `clipper.py` (~690 lignes, logique pure + I/O) · `clip_source.py` (189
-> lignes, orchestrateur) · endpoints `/api/clipper/*` dans `webui.py` l.646-848
+> `clipper.py` (908 lignes, logique pure + I/O) · `clip_source.py` (223
+> lignes, orchestrateur) · endpoints `/api/clipper/*` dans `webui.py` l.670-901
 > ← [09 webui.py](09-webui.md)
 
 ## 1. Ce que fait ce sous-système, et en quoi il diffère de beatsync
@@ -31,27 +31,27 @@ explicite — pas de mode « sets / rave » sans voix (voir § 8).
 ## 2. Le pipeline en sept étapes
 
 ```
-1. Import de la source          webui.py l.667-771 (upload / lien YouTube → inbox → promotion)
-2. Transcription                clipper.transcribe            l.551 (I/O, mis en cache)
-3. Proposition de moments       clipper.propose_moments        l.493 (I/O, LLM)
-4. Recalage sur les phrases     clipper.snap_to_speech         l.55  (pur)
-5. Notation                     clipper.score_moment           l.520 (I/O, LLM)
-6. Classement                   clipper.rank_moments           l.125 (pur)
-7. Rendu                        clipper.render_clip            l.655 (I/O, ffmpeg)
+1. Import de la source          webui.py l.670-785 (upload / lien YouTube → inbox → promotion)
+2. Transcription                clipper.transcribe            l.715 (I/O, mis en cache)
+3. Proposition de moments       clipper.propose_moments       l.618 (I/O, LLM)
+4. Recalage sur les phrases     clipper.snap_to_speech        l.61  (pur)
+5. Notation                     clipper.score_moment          l.680 (I/O, LLM)
+6. Classement                   clipper.rank_moments          l.131 (pur)
+7. Rendu                        clipper.render_clip           l.854 (I/O, ffmpeg)
 ```
 
-`clip_source.process(conn, root, source_id, config, log)` (l.42) enchaîne
+`clip_source.process(conn, root, source_id, config, log)` (l.52) enchaîne
 2 → 7 pour une source, en écrivant le statut en base à chaque étape
 (`transcribing`/`analyzing`/`rendering`/`done`/`failed`) pour que l'UI suive
 l'avancement par polling (`GET /api/jobs/<job_id>`, mécanisme générique déjà
 utilisé par `generate_niche.py`).
 
-### 1. Import — `webui.py` l.667-771
+### 1. Import — `webui.py` l.670-785
 
-Deux voies : upload direct (`POST /api/clipper/sources`, l.667) ou import
-YouTube en **deux temps** (`POST /api/clipper/sources/link`, l.692, télécharge
+Deux voies : upload direct (`POST /api/clipper/sources`, l.670) ou import
+YouTube en **deux temps** (`POST /api/clipper/sources/link`, l.696, télécharge
 dans `data/clipper/_inbox/` sous le nom choisi par yt-dlp — inconnu avant la
-fin du téléchargement — puis `POST /api/clipper/inbox/<name>`, l.745,
+fin du téléchargement — puis `POST /api/clipper/inbox/<name>`, l.748,
 **déplace** le fichier vers la source et crée la ligne `clipper_sources`).
 
 Le téléchargement passe `--video --with-audio` à `fetch_tracks.py` : le
@@ -64,7 +64,7 @@ avec un message accusant le contenu.
 
 Deux gardes sur les slugs et la suppression, qui se répondent : `slug_for`
 reçoit l'**union** des slugs en base et des dossiers présents sur disque, et
-`DELETE /api/clipper/sources/<id>` (l.797) efface le dossier **avant** la
+`DELETE /api/clipper/sources/<id>` (l.809) efface le dossier **avant** la
 ligne, refuse en 409 tant qu'un job tourne (`transcribing`/`analyzing`/
 `rendering`) et rend 409 plutôt que 500 si `rmtree` échoue (handle ouvert sous
 Windows). Sans cet ensemble, un effacement raté laissait un dossier orphelin
@@ -72,7 +72,7 @@ dont un réupload du même nom récupérait le slug — et son `transcript.json`
 « Transcript en cache », puis des clips découpés aux timestamps d'une autre
 vidéo, en silence.
 
-La garde de validation d'URL (l.707-719), à connaître au bit près puisqu'elle
+La garde de validation d'URL (l.711-725), à connaître au bit près puisqu'elle
 protège contre une injection d'options yt-dlp :
 
 ```python
@@ -94,21 +94,21 @@ ligne = un argument** passé à yt-dlp : un espace ou un retour à la ligne y
 injecterait une option (`--exec`, `-o`, …). D'où le rejet de tout espacement
 plutôt qu'un simple `strip()`, et la liste blanche de `netloc` plutôt qu'un
 `startswith` — « plus facile à croire fiable qu'il ne l'est », dit la
-docstring de `download_clipper_source` (l.644-654).
+docstring de `download_clipper_source` (l.698-708).
 
-### 2. Transcription — `clipper.transcribe` l.551
+### 2. Transcription — `clipper.transcribe` l.715
 
-`has_audio` (l.596) est sondée **avant** de charger le modèle Whisper — sans
+`has_audio` (l.760) est sondée **avant** de charger le modèle Whisper — sans
 ça, une source muette fait planter le décodeur audio de faster-whisper avec
 une `IndexError` opaque plutôt que de dégrader proprement. faster-whisper
 (`WhisperModel(model, device="cpu", compute_type="int8")`) produit des mots
 horodatés, langue auto-détectée.
 
-### 3. Proposition — `clipper.propose_moments` l.493
+### 3. Proposition — `clipper.propose_moments` l.618
 
 Le transcript est d'abord découpé en **fenêtres** qui tiennent dans le contexte
-du modèle (`transcript_windows`, `digest_chars` caractères, coupé sur des
-phrases entières). Un appel LLM (via `_call_json`, l.441, détaillé § 4
+du modèle (`transcript_windows` l.585, `digest_chars` caractères, coupé sur des
+phrases entières). Un appel LLM (via `_call_json`, l.525, détaillé § 4
 ci-dessous) **par fenêtre** demande `max(2, ceil(count × OVERSHOOT / n))`
 candidats — au moins deux, sinon un passage tardif de l'épisode n'aurait qu'une
 proposition à opposer à tout le reste ; le classement (étape 6) a besoin de
@@ -122,18 +122,39 @@ caractères : sur une source d'une heure (~82 000 caractères), la seconde moiti
 de l'épisode n'était jamais vue du modèle, en silence — et 40 000 caractères
 (~17 400 tokens) ne tiennent dans aucun contexte local raisonnable.
 
+Une fenêtre part **toujours avec son contenu réel**. Le cas qui l'a fait
+mentir : `transcript_windows` isole bien une phrase plus longue que `max_chars`
+dans sa propre fenêtre, mais `transcript_digest` cassait ensuite à la première
+ligne trop longue et rendait `""` — le prompt disait littéralement « Propose 2
+moments. Transcription : (rien) ». Le modèle inventait alors des timestamps,
+`snap_to_speech` les recalait sur de vraies phrases, et ces candidats hors-sol
+concurrençaient les bons au classement pendant que le passage que la fenêtre
+devait sauver restait invisible. La perte de transcript n'était pas corrigée par
+le découpage, seulement déplacée d'un cran : `transcript_digest` émet désormais
+sa première phrase quoi qu'il arrive.
+
+Les bornes `min_dur`/`max_dur` sont **interpolées** dans le prompt système
+(`_propose_system` l.378) et rappelées dans le message utilisateur de chaque
+fenêtre. Codées en dur, elles mentaient à qui règle 20-45 s ; et le seul prompt
+système ne suffit visiblement pas — le modèle local de la tour proposait des
+fenêtres d'une seconde tant que la consigne n'était pas répétée près de la
+question.
+
 L'échec d'une fenêtre est journalisé et ne perd pas les autres ; la dégradation
 en `[]` ne concerne que le cas où toutes échouent — exactement comme
-`beatsync.generate_punchlines`. `propose_moments` et `score_moment` prennent un
+`beatsync.generate_punchlines`. Le parsing de la réponse est **entièrement**
+dans le `try` : `{"moments": 5}` ou `{"moments": null}` faisait s'échapper un
+`TypeError` qui emportait le traitement de toute la source, alors qu'une seule
+fenêtre sur quatorze était en cause. `propose_moments` et `score_moment` prennent un
 `log=None` : elles dégradent toujours en silence côté valeur de retour, mais
 **disent pourquoi** dans le journal du job, que l'interface affiche. Sans ça,
 un contexte dépassé ressemblait à « aucun candidat proposé par le LLM ».
 
-### 4. Recalage — `clipper.snap_to_speech` l.55
+### 4. Recalage — `clipper.snap_to_speech` l.61
 
 Étend/rétrécit chaque candidat sur des frontières de phrase entières, dans
 `[min_dur, max_dur]`. `None` si impossible : un clip de moins vaut mieux qu'un
-clip qui commence au milieu d'un mot. Le cœur de la fonction (l.76-88) :
+clip qui commence au milieu d'un mot. Le cœur de la fonction (l.82-94) :
 
 ```python
 # Trop long : on retire des phrases par la fin (le début porte le hook, il
@@ -155,30 +176,44 @@ Deux boucles asymétriques : celle qui raccourcit sacrifie toujours la **fin**
 (le hook, en tête, n'est jamais entamé) ; celle qui allonge n'absorbe qu'une
 phrase à la fois et s'arrête dès que `max_dur` serait dépassé.
 
-### 5. Notation — `clipper.score_moment` l.520
+### 5. Notation — `clipper.score_moment` l.680
 
 Un appel LLM par candidat retenu, sur le texte **recalé** (pas le brut) :
 trois notes 0-100 (hook / flow / value). Dégrade en zéros si le LLM échoue —
 le moment tombe en fin de classement, il ne fait pas échouer la source.
 
-### 6. Classement — `clipper.rank_moments` l.125
+Un appel par candidat, donc **borné** : `clip_source.SCORE_BUDGET` (3) plafonne
+le nombre de candidats notés à trois fois le lot demandé. Sans ce plafond, rien
+ne bornait le total — le plancher de deux candidats par fenêtre l'emporte dès
+qu'il y a plus de six fenêtres, soit ~28 notations sur une heure à
+`digest_chars=6000` et ~246 à `digest_chars=1000` (la borne basse, justement
+celle qu'on conseille au petit contexte). Les candidats gardés sont les
+premiers dans l'ordre des fenêtres, donc étalés sur la source ; **le journal dit
+combien tombent** — le projet interdit les troncatures silencieuses.
+
+La boucle journalise aussi sa progression (`[i/n] notation…`), comme celle du
+rendu. Sans ça, le journal restait muet des dizaines de minutes après
+« 28 candidat(s) après recalage », statut `analyzing` : le symptôme « rien ne
+se passe » exactement.
+
+### 6. Classement — `clipper.rank_moments` l.131
 
 Garde les `count` meilleurs par score, en écartant les doublons de position
 (deux candidats qui décrivent le même moment).
 
-### 7. Rendu — `clipper.render_clip` l.655
+### 7. Rendu — `clipper.render_clip` l.854
 
-Un seul appel ffmpeg par clip : suivi de visage (`track_faces`, l.616, OpenCV)
-→ lissage (`smooth_track`, l.183) → crop 9:16 suivi (`crop_expr`, l.233) →
+Un seul appel ffmpeg par clip : suivi de visage (`track_faces`, l.815, OpenCV)
+→ lissage (`smooth_track`, l.189) → crop 9:16 suivi (`crop_expr`, l.239) →
 scale 1080×1920 → sous-titres karaoké incrustés (fichier `.ass` généré par
-`build_ass`, l.305, supprimé après le rendu, police **embarquée** passée par
+`build_ass`, l.312, supprimé après le rendu, police **embarquée** passée par
 `fontsdir=` — voir § 3). Un clip qui échoue au rendu ne
 fait pas perdre les autres (`try/except` dans la boucle de
-`clip_source.process`, l.140-145) ; si **tous** les rendus échouent, la
+`clip_source.process`, l.174-179) ; si **tous** les rendus échouent, la
 source passe en `failed`.
 
-L'expression de crop (`crop_expr`, l.233-275) illustre pourquoi la zone morte
-de `smooth_track` (l.183, détaillée § 3 plus bas) n'est pas cosmétique : sans
+L'expression de crop (`crop_expr`, l.239-274) illustre pourquoi la zone morte
+de `smooth_track` (l.189, détaillée § 3 plus bas) n'est pas cosmétique : sans
 elle, cette compilation
 produirait un point ffmpeg par frame plutôt qu'un par seconde de mouvement
 réel. L'emboîtement en partant de la fin, chaque segment **interpolant**
@@ -196,7 +231,7 @@ for (time, x), (next_time, next_x) in zip(reversed(merged[:-1]),
 
 Des paliers secs ne lisseraient rien : le cadre resterait figé le temps que la
 zone morte cède, puis bondirait de plusieurs pour cent de la largeur en une
-frame — un saut de cadrage, pas un panoramique. `_ramp` (l.218) émet donc
+frame — un saut de cadrage, pas un panoramique. `_ramp` (l.224) émet donc
 `2*floor((X0+pente*(t-T0))/2)`, le `2*floor(…/2)` gardant `x` sur la grille
 paire qu'exige le chroma yuv420p.
 
@@ -206,29 +241,52 @@ Et la zone morte se compte en pixels **source** : `render_clip` passe
 l'image finale sur une source 720p contre 7 % en 4K, et deux interviews du
 même invité se cadreraient différemment selon la définition du rush.
 
+### `eval=frame` : une option qui n'existe plus, et qu'on sonde
+
+Cette expression de crop dépend du temps, donc ffmpeg doit la réévaluer à
+chaque frame. **Comment le demander dépend de la version installée**, et le
+piège coûte tous les rendus d'un coup :
+
+| | ffmpeg ≤ 7 | ffmpeg ≥ 8 |
+|---|---|---|
+| option `eval` du filtre `crop` | existe, vaut `init` par défaut | **supprimée** |
+| sans `eval=frame` | expression évaluée une fois : le cadre reste figé à sa position de départ, en silence | `x`/`y` sont marquées runtime-tunable (`T`), réévaluées par frame nativement |
+| avec `eval=frame` | correct | `Error applying option 'eval' to filter 'crop': Option not found` → **aucun clip ne sort** |
+
+Il n'y a donc pas de camp à choisir : la tour de production Windows n'a pas
+forcément la ffmpeg du Mac de développement. `crop_supports_eval` (l.778) lit
+la sortie de `ffmpeg -hide_banner -h filter=crop` et cherche une ligne
+d'option dont le **nom** est `eval` (pas la sous-chaîne « eval », que les
+descriptions contiennent : « when to evaluate »). Le résultat est mémorisé au
+niveau du module — c'est un sous-processus, on ne le paie pas une fois par
+clip. Une sonde en échec (ffmpeg absent, sortie inattendue) vaut « option
+absente » : c'est le comportement des versions récentes, et il ne casse rien
+sur elles. `render_clip` n'ajoute `:eval=frame` que si la sonde dit oui **et**
+que l'expression dépend du temps.
+
 ---
 
 ## 3. Les fonctions pures, une ligne chacune
 
 | Fonction | l. | Invariant |
 |---|---|---|
-| `sentences(words) -> list[(int,int)]` | 39 | Une phrase se termine sur ponctuation forte OU un blanc ≥ `SENTENCE_GAP` (0,6 s) — le silence est plus fiable que la ponctuation sur du français transcrit à l'oral |
-| `snap_to_speech(start, end, words, min_dur, max_dur) -> (float,float)\|None` | 55 | Recale sur des frontières de phrase entières ; `None` si aucune combinaison ne rentre dans `[min_dur, max_dur]` |
-| `moment_score(moment) -> float` | 110 | Moyenne pondérée `WEIGHTS` (hook 0,4 / flow 0,3 / value 0,3) ; une note absente ou `None` vaut 0 — un échec LLM fait tomber le moment en fin de liste, il ne plante pas le classement |
-| `rank_moments(moments, count) -> list[dict]` | 125 | Top `count` par score décroissant (tie-break sur `start`, pour la reproductibilité) ; deux moments qui se chevauchent à plus de `OVERLAP_MAX` (50 %) ne sont jamais gardés ensemble ; ne mute pas l'entrée |
-| `smooth_track(centers, default, dead_zone) -> list[float]` | 183 | Trous comblés (interpolation, ou valeur connue la plus proche en bord) puis moyenne glissante puis **zone morte** : le cadre ne bouge que si le centre s'écarte de plus de `dead_zone` de sa dernière position retenue |
-| `crop_size(src_w, src_h) -> (int,int)` | 208 | Rectangle 9:16 le plus large qui tienne dans la source, **les deux** dimensions paires (chroma 4:2:0 : une hauteur source impaire ferait échouer l'encodage yuv420p) ; une source déjà plus verticale que 9:16 n'est pas recadrée en largeur |
-| `crop_expr(track, sample_fps, crop_w, src_w) -> str` | 233 | Compile la trajectoire en expression ffmpeg `crop=x=…`, en **interpolant** linéairement d'un point au suivant (un palier sec téléporterait le cadre) ; une trajectoire immobile rend un simple nombre (pas d'`eval=frame` payé pour rien) ; un point par seconde, la zone morte a déjà supprimé ce qui bouge plus vite |
-| `ass_time(seconds) -> str` | 286 | `H:MM:SS.cc` — **tronque** les centièmes, n'arrondit pas (`round()` ferait passer 1,999 s à `.100`, trois chiffres pour un champ qui en attend deux, et le sous-titre disparaît) |
-| `build_ass(words, start, end, y=0.74, size=64) -> str` | 305 | Sous-titres karaoké ASS, temps rebasés sur `start` ; le mot en cours de prononciation passe en rouge, le reste de la ligne reste visible ; chaque `Dialogue` tient jusqu'au **mot suivant** du groupe (le borner sur la fin du mot éteint la ligne à chaque respiration, et le français parlé en est plein) ; le style nomme `Anton`, la police OFL **embarquée** que `beatsync` associe déjà au nom logique « impact » — « Impact » serait résolu par fontconfig et libass lui substituerait silencieusement une sans-serif |
-| `ffmpeg_path(path) -> str` | 345 | Chemin utilisable **à l'intérieur** d'une chaîne de filtre ffmpeg (`subtitles='<chemin>'`) : `:` échappé pour les lettres de lecteur Windows, apostrophe échappée en dernier (sinon le `\` qu'on introduit pour l'échapper serait lui-même mangé par le remplacement des séparateurs) |
-| `transcript_digest(words, max_chars) -> str` | 472 | Transcript compacté en lignes `[mm:ss] phrase`, tronqué à `max_chars` — un modèle local a une fenêtre finie, mieux vaut couper proprement entre deux lignes que de faire couper la réponse au milieu d'un JSON. `DIGEST_MAX_CHARS` (40 000) n'est plus qu'un plafond de sécurité pour l'usage direct : le découpage réel passe par `transcript_windows` |
-| `transcript_windows(words, max_chars) -> list[list[dict]]` | — | Fenêtres consécutives dont le digest tient dans `max_chars`, **sans jamais couper une phrase** ; une phrase seule plus longue forme sa propre fenêtre (la jeter perdrait du transcript) ; la concaténation des fenêtres redonne la liste d'origine |
-| `moment_text(words, start, end) -> str` | 487 | Concatène les mots dont la fenêtre `[start, end]` chevauche celle du mot |
+| `sentences(words) -> list[(int,int)]` | 45 | Une phrase se termine sur ponctuation forte OU un blanc ≥ `SENTENCE_GAP` (0,6 s) — le silence est plus fiable que la ponctuation sur du français transcrit à l'oral |
+| `snap_to_speech(start, end, words, min_dur, max_dur) -> (float,float)\|None` | 61 | Recale sur des frontières de phrase entières ; `None` si aucune combinaison ne rentre dans `[min_dur, max_dur]` |
+| `moment_score(moment) -> float` | 116 | Moyenne pondérée `WEIGHTS` (hook 0,4 / flow 0,3 / value 0,3) ; une note absente ou `None` vaut 0 — un échec LLM fait tomber le moment en fin de liste, il ne plante pas le classement |
+| `rank_moments(moments, count) -> list[dict]` | 131 | Top `count` par score décroissant (tie-break sur `start`, pour la reproductibilité) ; deux moments qui se chevauchent à plus de `OVERLAP_MAX` (50 %) ne sont jamais gardés ensemble ; ne mute pas l'entrée |
+| `smooth_track(centers, default, dead_zone) -> list[float]` | 189 | Trous comblés (interpolation, ou valeur connue la plus proche en bord) puis moyenne glissante puis **zone morte** : le cadre ne bouge que si le centre s'écarte de plus de `dead_zone` de sa dernière position retenue |
+| `crop_size(src_w, src_h) -> (int,int)` | 214 | Rectangle 9:16 le plus large qui tienne dans la source, **les deux** dimensions paires (chroma 4:2:0 : une hauteur source impaire ferait échouer l'encodage yuv420p) ; une source déjà plus verticale que 9:16 n'est pas recadrée en largeur |
+| `crop_expr(track, sample_fps, crop_w, src_w) -> str` | 239 | Compile la trajectoire en expression ffmpeg `crop=x=…`, en **interpolant** linéairement d'un point au suivant (un palier sec téléporterait le cadre) ; une trajectoire immobile rend un simple nombre (rien à réévaluer par frame, cf. § 4 bis) ; un point par seconde, la zone morte a déjà supprimé ce qui bouge plus vite |
+| `ass_time(seconds) -> str` | 293 | `H:MM:SS.cc` — **tronque** les centièmes, n'arrondit pas (`round()` ferait passer 1,999 s à `.100`, trois chiffres pour un champ qui en attend deux, et le sous-titre disparaît) |
+| `build_ass(words, start, end, y=0.74, size=64) -> str` | 312 | Sous-titres karaoké ASS, temps rebasés sur `start` ; le mot en cours de prononciation passe en rouge, le reste de la ligne reste visible ; chaque `Dialogue` tient jusqu'au **mot suivant** du groupe (le borner sur la fin du mot éteint la ligne à chaque respiration, et le français parlé en est plein) ; le style nomme `Anton`, la police OFL **embarquée** que `beatsync` associe déjà au nom logique « impact » — « Impact » serait résolu par fontconfig et libass lui substituerait silencieusement une sans-serif |
+| `ffmpeg_path(path) -> str` | 361 | Chemin utilisable **à l'intérieur** d'une chaîne de filtre ffmpeg (`subtitles='<chemin>'`) : `:` échappé pour les lettres de lecteur Windows, apostrophe échappée en dernier (sinon le `\` qu'on introduit pour l'échapper serait lui-même mangé par le remplacement des séparateurs) |
+| `transcript_digest(words, max_chars) -> str` | 563 | Transcript compacté en lignes `[mm:ss] phrase`, tronqué à `max_chars` — un modèle local a une fenêtre finie, mieux vaut couper proprement entre deux lignes que de faire couper la réponse au milieu d'un JSON. **La première phrase sort toujours**, même seule plus longue que `max_chars` : c'est la fenêtre « phrase géante » de `transcript_windows`, et sans cette exception son digest était vide (voir § 3). `DIGEST_MAX_CHARS` (40 000) n'est plus qu'un plafond de sécurité pour l'usage direct : le découpage réel passe par `transcript_windows` |
+| `transcript_windows(words, max_chars) -> list[list[dict]]` | 585 | Fenêtres consécutives dont le digest tient dans `max_chars`, **sans jamais couper une phrase** ; une phrase seule plus longue forme sa propre fenêtre (la jeter perdrait du transcript) ; la concaténation des fenêtres redonne la liste d'origine |
+| `moment_text(words, start, end) -> str` | 612 | Concatène les mots dont la fenêtre `[start, end]` chevauche celle du mot |
 
 ### Les couleurs ASS sont en BGR
 
-Dans `build_ass` (l.245-249) :
+Au-dessus de `build_ass` (l.277-280) :
 
 ```python
 # Rouge Dancing Dead #ff1e46. ASS code la couleur en BGR, pas en RGB : R=ff,
@@ -247,16 +305,16 @@ qui ne se voit qu'à l'œil, sur un rendu.
 
 | Fonction | l. | Rôle |
 |---|---|---|
-| `transcribe(video_path, model)` | 483 | faster-whisper, mots horodatés ; sonde `has_audio` avant de charger le modèle |
-| `track_faces(video_path, start, end)` | 548 | OpenCV, cascade `haarcascade_frontalface_default.xml`, échantillonné à `SAMPLE_FPS` (2 fps) |
-| `render_clip(video_path, start, end, out_path, *, words, config)` | 587 | un seul appel ffmpeg : crop suivi + scale + sous-titres |
-| `_call_json(system, user, schema, seed, name)` | 359 | un appel LLM rendant du JSON conforme à `schema` |
+| `transcribe(video_path, model)` | 715 | faster-whisper, mots horodatés ; sonde `has_audio` avant de charger le modèle |
+| `track_faces(video_path, start, end)` | 815 | OpenCV, cascade `haarcascade_frontalface_default.xml`, échantillonné à `SAMPLE_FPS` (2 fps) |
+| `render_clip(video_path, start, end, out_path, *, words, config)` | 854 | un seul appel ffmpeg : crop suivi + scale + sous-titres |
+| `_call_json(system, user, schema, seed, name)` | 525 | un appel LLM rendant du JSON conforme à `schema` |
 
 `_call_json` **n'est pas** `beatsync._call_llm` : celui-ci a le prompt
 punchline codé en dur et une signature sans schéma. `_call_json` prend
 `system`/`user`/`schema` en paramètres, pour servir aussi bien la proposition
 de moments (`_PROPOSE_SCHEMA`) que la notation (`_SCORE_SCHEMA`). Sa
-docstring (l.441-452) le dit explicitement :
+docstring (l.525-533) le dit explicitement :
 
 ```python
 def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> dict:
@@ -275,7 +333,7 @@ via `LLM_BACKEND`) et `_load_dotenv()` ; et la mécanique de repli est
 reproduite à l'identique — un dict `_JSON_BACKENDS` nom → nom de fonction,
 résolu par `globals()` au moment de l'appel pour rester monkeypatchable, et
 un essai du backend nommé par `LLM_FALLBACK` si le primaire lève. Et un détail
-d'API, l.400-402 :
+d'API, l.421-423 :
 
 ```python
 # L'API Messages n'expose pas de paramètre `seed` : on l'injecte dans le
@@ -344,7 +402,10 @@ relancer une analyse doit rendre les mêmes clips, pour pouvoir comparer un
 réglage à un autre sans le bruit d'un tirage différent.
 
 `OVERSHOOT` (1,5) n'est pas non plus un réglage : c'est un ratio interne entre
-candidats demandés et candidats gardés.
+candidats demandés et candidats gardés. Ce n'est un « +50 % » que sur une source
+assez courte pour tenir en **une seule fenêtre** de transcript : au-delà, le
+plancher de deux candidats par fenêtre (§ 3) l'emporte, et c'est
+`SCORE_BUDGET` (§ 5) qui borne réellement le travail.
 
 ---
 
@@ -359,16 +420,19 @@ sous-domaine :
 | `test_clipper_rank.py` | `moment_score` (pondération, note absente) et `rank_moments` (tri, chevauchements majoritaires écartés, déterminisme sur ex æquo, non-mutation) |
 | `test_clipper_track.py` | `_fill_holes`, `smooth_track` (zone morte, trous de bord), `crop_size` (dont hauteur impaire), `crop_expr` (interpolation, continuité à mi-chemin, bornes, valeurs paires) |
 | `test_clipper_ass.py` | `ass_time`, `build_ass` (en-tête, un événement par mot, rebasage, surlignage, échappement, absence de trou entre deux mots, police embarquée), `ffmpeg_path` (chemins Windows/POSIX/apostrophe) |
-| `test_clipper_llm.py` | `transcript_digest`, `transcript_windows` (découpe sur les phrases, fenêtre unique, phrase géante isolée, liste vide, aucun mot perdu), `moment_text`, `propose_moments` et `score_moment` **mockés** sur `_call_json` : conversion, entrées malformées ignorées, boucle sur les fenêtres et seeds décalées, une fenêtre en échec ne perd pas les autres, dégradation si le LLM échoue ou rend une racine non-objet **avec journalisation de la cause** ; le repli `LLM_FALLBACK` de `_call_json` ; et la remontée des erreurs LM Studio (corps d'un HTTP 400, `{"error": …}` sur un 200, réponse sans `choices`) via un `urlopen` monkeypatché |
-| `test_clip_source.py` | `slug_for`, et `process` de bout en bout (mocké) : pipeline complet, cache du transcript, source muette, candidat irrécalable ignoré, échec de rendu isolé, remplacement des clips au relancement, non-perte des clips précédents si le LLM est muet, cache de transcript corrompu ignoré |
+| `test_clipper_llm.py` | `transcript_digest` (dont le digest **non vide** d'une fenêtre « phrase géante »), `transcript_windows` (découpe sur les phrases, fenêtre unique, phrase géante isolée, liste vide, aucun mot perdu), `moment_text`, `propose_moments` et `score_moment` **mockés** sur `_call_json` : conversion, entrées malformées ignorées, `moments` qui n'est pas une liste, bornes de durée réglées rappelées dans le prompt, boucle sur les fenêtres et seeds décalées, une fenêtre en échec ne perd pas les autres, dégradation si le LLM échoue ou rend une racine non-objet **avec journalisation de la cause** ; le repli `LLM_FALLBACK` de `_call_json` ; la remontée des erreurs LM Studio (corps d'un HTTP 400, `{"error": …}` sur un 200, réponse sans `choices`, JSON illisible dont on montre un extrait) via un `urlopen` monkeypatché ; et `crop_supports_eval` (aide ffmpeg 7 vs 8, sonde en échec, mise en cache) sur un `subprocess.run` monkeypatché |
+| `test_clip_source.py` | `slug_for`, et `process` de bout en bout (mocké) : pipeline complet, cache du transcript, source muette, candidat irrécalable ignoré, échec de rendu isolé, remplacement des clips au relancement, non-perte des clips précédents si le LLM est muet, cache de transcript corrompu ignoré, budget de notation respecté **et annoncé**, progression `[i/n]` journalisée, bornes de durée transmises au LLM |
 | `test_clipper_api.py` | Endpoints `webui.py` : `coerce_clipper` (bornes, rejet non-numérique/modèle inconnu, `min_dur > max_dur`), upload/suppression d'une source (409 pendant un job, échec de `rmtree`, slug d'un dossier orphelin non réattribué, durée sondée), promotion refusée sans piste audio, lecture/statut/suppression d'un clip (avec garde anti-traversal), projection sans chemins disque dans `/api/state`, validation de l'URL YouTube (espacement, hôte, casse, type) |
 
 Ce qui n'est **pas** testé automatiquement, faute de pouvoir le faire tourner
 en CI sans dépendances lourdes : les trois fonctions d'I/O `transcribe`
 (faster-whisper), `track_faces` (OpenCV + décodage vidéo réel) et
 `render_clip` (ffmpeg réel) — seule leur logique pure sous-jacente
-(`smooth_track`, `crop_expr`, `build_ass`, `ass_time`, `ffmpeg_path`) est
-testée. Idem côté React : `frontend/src/features/clipper/` (`ClipperTab.tsx`,
+(`smooth_track`, `crop_expr`, `build_ass`, `ass_time`, `ffmpeg_path`) et la
+sonde `crop_supports_eval` (sur une aide ffmpeg factice) sont testées. La
+chaîne ffmpeg complète a été vérifiée à la main sur une source réelle (AV1
+1920×1080 sonore) après la correction `eval` : sortie 1080×1920 portant bien
+une piste vidéo et une piste audio. Idem côté React : `frontend/src/features/clipper/` (`ClipperTab.tsx`,
 `SourceDetail.tsx`) n'a pas de test automatisé.
 
 ---
