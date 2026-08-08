@@ -338,6 +338,9 @@ export function SettingsTab({
                 min={0.4}
                 max={5}
                 className="w-20"
+                // Sans recadrage sur le locuteur, le repli ne découpe pas en
+                // plans : le champ ne pilote plus rien, autant le dire.
+                disabled={(local.clipper.speaker_cuts ?? true) !== true}
                 value={local.clipper.min_shot ?? 1.2}
                 onChange={(e) => setClipper("min_shot", Number(e.target.value))}
               />

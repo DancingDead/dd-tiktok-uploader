@@ -144,6 +144,13 @@ def coerce_overrides(overrides: dict) -> dict:
             lo, hi = SLOW_BEATS_RANGE
             speed_ramp["slow_beats"] = int(max(lo, min(hi, value)))
         coerced["speed_ramp"] = speed_ramp
+    # Le bloc clipper d'un preset passe par la même coercion que celui des
+    # réglages globaux. Aucun preset n'en porte aujourd'hui, mais la règle du
+    # projet est « tout ce qui entre est coercé » : laisser une porte ouverte
+    # ici, c'est laisser un `min_shot` non borné arriver jusqu'à `speaker.py`
+    # le jour où l'éditeur de preset l'exposera.
+    if "clipper" in coerced:
+        coerced["clipper"] = coerce_clipper(coerced["clipper"] or {})
     return coerced
 
 
@@ -179,9 +186,14 @@ def coerce_clipper(settings: dict) -> dict:
     for key, (low, high) in CLIPPER_RANGES.items():
         if key not in settings:
             continue
+        value = settings[key]
+        # `isinstance(True, int)` vaut True et `float(True)` vaut 1,0 : sans
+        # cette garde, un booléen passerait pour une valeur numérique valide sur
+        # les CINQ champs. Même motif que `slow_beats` dans coerce_overrides.
+        if isinstance(value, bool):
+            raise ValueError(f"valeur non numérique pour {key} : {value!r}")
         try:
-            value = int(settings[key]) if key in CLIPPER_INT_KEYS \
-                else float(settings[key])
+            value = int(value) if key in CLIPPER_INT_KEYS else float(value)
         except (TypeError, ValueError):
             raise ValueError(f"valeur non numérique pour {key} : {settings[key]!r}")
         coerced[key] = max(low, min(high, value))

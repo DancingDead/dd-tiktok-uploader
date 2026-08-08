@@ -63,6 +63,28 @@ def test_coerce_borne_min_shot():
         coerce_clipper({"min_shot": "<script>"})
 
 
+def test_coerce_refuse_un_booleen_sur_les_cinq_champs_numeriques():
+    """`isinstance(True, int)` vaut True et `float(True)` vaut 1,0 : sans garde,
+    un booléen passe pour une valeur numérique valide. Le cas est le même sur
+    les cinq champs, l'exception ne doit pas être faite pour un seul."""
+    for cle in ("clip_count", "digest_chars", "min_dur", "max_dur", "min_shot"):
+        with pytest.raises(ValueError):
+            coerce_clipper({cle: True})
+        with pytest.raises(ValueError):
+            coerce_clipper({cle: False})
+
+
+def test_coerce_overrides_passe_le_bloc_clipper_par_coerce_clipper():
+    """« Tout ce qui entre est coercé » : le bloc clipper d'un preset ne doit
+    pas être la seule porte ouverte. Aucun preset n'en porte aujourd'hui, mais
+    l'éditeur peut l'exposer demain."""
+    from webui import coerce_overrides
+    out = coerce_overrides({"clipper": {"min_shot": "99", "clip_count": 999}})
+    assert out["clipper"] == {"clip_count": 30, "min_shot": 5.0}
+    with pytest.raises(ValueError):
+        coerce_overrides({"clipper": {"whisper_model": "'; DROP TABLE"}})
+
+
 def test_upload_puis_liste(client, tmp_path):
     up = client.post("/api/clipper/sources", data={
         "file": (io.BytesIO(b"faux mp4"), "Interview Kernel.mp4")})
