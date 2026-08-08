@@ -93,6 +93,8 @@ export type Overrides = {
     min_dur?: number
     max_dur?: number
     digest_chars?: number
+    speaker_cuts?: boolean
+    min_shot?: number
   }
 }
 

@@ -39,6 +39,30 @@ def test_coerce_ignore_les_cles_inconnues():
     assert coerce_clipper({"inconnu": 1}) == {}
 
 
+def test_coerce_accepte_le_booleen_speaker_cuts():
+    assert coerce_clipper({"speaker_cuts": True})["speaker_cuts"] is True
+    assert coerce_clipper({"speaker_cuts": False})["speaker_cuts"] is False
+    assert coerce_clipper({"speaker_cuts": "true"})["speaker_cuts"] is True
+    assert coerce_clipper({"speaker_cuts": "false"})["speaker_cuts"] is False
+
+
+def test_coerce_refuse_un_speaker_cuts_non_booleen():
+    """`bool("peut-etre")` vaut True : interpréter une faute de frappe comme une
+    activation serait le mauvais choix, on refuse plutôt."""
+    with pytest.raises(ValueError):
+        coerce_clipper({"speaker_cuts": "peut-etre"})
+    with pytest.raises(ValueError):
+        coerce_clipper({"speaker_cuts": 3})
+
+
+def test_coerce_borne_min_shot():
+    assert coerce_clipper({"min_shot": "2"})["min_shot"] == 2.0
+    assert coerce_clipper({"min_shot": 99})["min_shot"] == 5.0
+    assert coerce_clipper({"min_shot": 0})["min_shot"] == 0.4
+    with pytest.raises(ValueError):
+        coerce_clipper({"min_shot": "<script>"})
+
+
 def test_upload_puis_liste(client, tmp_path):
     up = client.post("/api/clipper/sources", data={
         "file": (io.BytesIO(b"faux mp4"), "Interview Kernel.mp4")})

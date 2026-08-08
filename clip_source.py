@@ -173,7 +173,7 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
         log(f"[{i}/{len(best)}] {moment['title']} · score {moment['score']:.0f}")
         try:
             clipper.render_clip(video, moment["start"], moment["end"], out,
-                                words=words, config=config)
+                                words=words, config=config, log=log)
         except Exception as exc:
             log(f"  échec du rendu : {exc}")
             continue   # un clip raté ne fait pas perdre les autres

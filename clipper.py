@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import speaker
 from speaker import (DEAD_ZONE, MAX_STEPS, OUT_H, OUT_W, crop_expr, crop_size,
                      smooth_track)
 
@@ -30,6 +31,13 @@ DEFAULTS = {
     # ~2600 tokens (mesuré à ~2,3 caractères par token sur du français horodaté),
     # ce qui laisse de la marge sur un modèle local chargé à 4096.
     "digest_chars": 6000,
+    # Recadrage sur celui qui parle, avec coupes franches. Désactivable : si la
+    # détection se comporte mal sur un contenu donné, on doit pouvoir revenir au
+    # suivi simple sans attendre un correctif.
+    "speaker_cuts": True,
+    # Durée minimale d'un plan, en secondes. En dessous le cadre clignote, au
+    # delà il reste sur quelqu'un qui ne parle plus.
+    "min_shot": 1.2,
 }
 
 # Un blanc de cette longueur vaut une fin de phrase, même sans ponctuation :
@@ -723,18 +731,30 @@ def track_faces(video_path: Path, start: float, end: float) -> list[float | None
 
 
 def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
-                words: list[dict], config: dict) -> None:
+                words: list[dict], config: dict, log=None) -> None:
     """Rend un short : recadrage suivi, mise à l'échelle, sous-titres incrustés.
-    Un seul appel ffmpeg. I/O."""
+    Un seul appel ffmpeg. I/O.
+
+    `log` est le journal du job : l'analyse du cadrage dure quelques secondes par
+    clip et dégrade en cadrage centré quand la source est illisible — sans
+    journal, ce repli est indiscernable d'une vidéo sans visage."""
     src_w, src_h = probe_size(video_path)
     crop_w, crop_h = crop_size(src_w, src_h)
-    # dead_zone en pixels SOURCE (track_faces travaille dans ce repère) : la
-    # fraction se rapporte donc à crop_w, pas à OUT_W — le crop est ensuite
-    # étiré vers OUT_W, si bien que DEAD_ZONE × crop_w vaut la même fraction de
-    # l'image finale quelle que soit la définition de la source.
-    track = smooth_track(track_faces(video_path, start, end),
-                         default=src_w / 2, dead_zone=DEAD_ZONE * crop_w)
-    expr = crop_expr(track, SAMPLE_FPS, crop_w, src_w)
+    if config.get("speaker_cuts", True):
+        segments = speaker.analyze_framing(
+            video_path, start, end, src_w, src_h,
+            min_shot=float(config.get("min_shot", speaker.MIN_SHOT)), log=log)
+    else:
+        # Repli : suivi lissé du plus grand visage, le comportement d'avant le
+        # recadrage sur le locuteur. C'est la porte de sortie quand la détection
+        # se comporte mal sur un contenu donné. dead_zone en pixels SOURCE
+        # (track_faces travaille dans ce repère), donc rapportée à crop_w — le
+        # crop est ensuite étiré vers OUT_W, si bien que DEAD_ZONE × crop_w vaut
+        # la même fraction de l'image finale quelle que soit la définition.
+        track = smooth_track(track_faces(video_path, start, end),
+                             default=src_w / 2, dead_zone=DEAD_ZONE * crop_w)
+        segments = speaker.track_to_segments(track, SAMPLE_FPS, crop_w, src_w)
+    expr = crop_expr(segments, crop_w, src_w)
 
     # Police EMBARQUÉE, comme beatsync : sans fontsdir, libass demande « Anton »
     # à fontconfig et lui substitue silencieusement une sans-serif quelconque
@@ -748,8 +768,13 @@ def render_clip(video_path: Path, start: float, end: float, out_path: Path, *,
     # `eval=frame` seulement si la ffmpeg installée connaît l'option (elle a
     # disparu en ffmpeg 8, où la passer fait échouer le rendu entier) ET si
     # l'expression dépend du temps (sinon on paie une évaluation par frame pour
-    # une constante).
-    evaluation = ":eval=frame" if "if(" in expr and crop_supports_eval() else ""
+    # une constante). Le test est délégué à `speaker.expr_needs_eval` : chercher
+    # « if( » ne marche plus, un segment unique non constant compile en une
+    # simple rampe sans condition — et sans `eval=frame` le cadre resterait figé,
+    # en silence.
+    evaluation = (":eval=frame"
+                  if speaker.expr_needs_eval(expr) and crop_supports_eval()
+                  else "")
     filters = (f"crop={crop_w}:{crop_h}:x='{expr}':y=0{evaluation},"
                f"scale={OUT_W}:{OUT_H}:flags=lanczos,"
                f"subtitles='{ffmpeg_path(ass_path)}'"

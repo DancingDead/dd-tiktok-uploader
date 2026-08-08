@@ -65,7 +65,13 @@ CLIPPER_RANGES = {"clip_count": (1, 30), "min_dur": (3.0, 180.0),
                   # Sous 1000 caractères une fenêtre ne porte plus de contexte
                   # exploitable ; au-delà de 60 000 aucun modèle local courant
                   # ne suit, et la fenêtre échouerait à chaque appel.
-                  "digest_chars": (1000, 60000)}
+                  "digest_chars": (1000, 60000),
+                  # Durée minimale d'un plan du recadrage sur le locuteur. Sous
+                  # 0,4 s le cadre clignote (c'est déjà le plancher qui
+                  # s'applique sur une coupe de la source) ; au-delà de 5 s le
+                  # cadre reste sur quelqu'un qui a fini de parler depuis
+                  # longtemps.
+                  "min_shot": (0.4, 5.0)}
 CLIPPER_INT_KEYS = ("clip_count", "digest_chars")
 ALLOWED_WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
 # Statuts qui signalent un job en cours sur la source : on refuse de la
@@ -179,6 +185,17 @@ def coerce_clipper(settings: dict) -> dict:
         except (TypeError, ValueError):
             raise ValueError(f"valeur non numérique pour {key} : {settings[key]!r}")
         coerced[key] = max(low, min(high, value))
+    if "speaker_cuts" in settings:
+        value = settings["speaker_cuts"]
+        if isinstance(value, bool):
+            coerced["speaker_cuts"] = value
+        elif isinstance(value, str) and value.lower() in ("true", "false"):
+            coerced["speaker_cuts"] = value.lower() == "true"
+        else:
+            # Ni booléen ni "true"/"false" : on refuse plutôt que d'interpréter.
+            # `bool("peut-etre")` vaut True, ce qui activerait la fonctionnalité
+            # sur une faute de frappe.
+            raise ValueError(f"speaker_cuts doit être un booléen : {value!r}")
     if "whisper_model" in settings:
         model = str(settings["whisper_model"])
         if model not in ALLOWED_WHISPER_MODELS:

@@ -37,7 +37,10 @@ export function SettingsTab({
     setLocal((s) => ({ ...s, accents: { ...s.accents, [key]: value } }))
   }
 
-  function setClipper(key: keyof Settings["clipper"], value: string | number) {
+  function setClipper(
+    key: keyof Settings["clipper"],
+    value: string | number | boolean,
+  ) {
     setLocal((s) => ({ ...s, clipper: { ...s.clipper, [key]: value } }))
   }
 
@@ -311,6 +314,37 @@ export function SettingsTab({
               transcription est découpée en plusieurs appels. À régler d'après le
               contexte du modèle chargé dans LM Studio, en comptant environ
               2,3 caractères par token (6000 caractères ≈ 2600 tokens).
+            </p>
+            <label className="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={local.clipper.speaker_cuts ?? true}
+                onCheckedChange={(v) => setClipper("speaker_cuts", v === true)}
+              />
+              Recadrer sur celui qui parle
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Le cadre suit l'intervenant qui parle et change de personne par une
+              coupe franche. Fiable sur une vidéo déjà montée en plans découpés,
+              beaucoup moins sur du plan large filmé à l'épaule, où le mouvement
+              de caméra couvre le signal. Décoche pour revenir au suivi simple du
+              plus grand visage.
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_min_shot">Durée minimale d'un plan (s)</Label>
+              <Input
+                id="clipper_min_shot"
+                type="number"
+                step="0.1"
+                min={0.4}
+                max={5}
+                className="w-20"
+                value={local.clipper.min_shot ?? 1.2}
+                onChange={(e) => setClipper("min_shot", Number(e.target.value))}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              En dessous, le cadre clignote ; au-delà, il reste sur quelqu'un qui
+              ne parle plus.
             </p>
           </CardContent>
         </Card>

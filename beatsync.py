@@ -88,6 +88,13 @@ DEFAULT_CONFIG = {
         "min_dur": 15.0,            # s : en dessous, un extrait n'a pas d'histoire
         "max_dur": 60.0,            # s : au-delà, ce n'est plus un short
         "digest_chars": 6000,       # caractères de transcript envoyés par appel LLM
+        # Recadrage sur celui qui parle, avec coupes franches. Désactivable : si la
+        # détection se comporte mal sur un contenu donné, on doit pouvoir revenir au
+        # suivi simple sans attendre un correctif.
+        "speaker_cuts": True,
+        # Durée minimale d'un plan, en secondes. En dessous le cadre clignote, au
+        # delà il reste sur quelqu'un qui ne parle plus.
+        "min_shot": 1.2,
     },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
