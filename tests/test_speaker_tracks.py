@@ -1,6 +1,7 @@
 import pytest
 
-from speaker import detect_cuts, iou, link_tracks, usable_tracks
+from speaker import (detect_cuts, iou, link_tracks, sampling_cadence,
+                     usable_tracks)
 
 
 def b(x, y=100, w=100, h=100, detected=True):
@@ -268,3 +269,34 @@ def test_une_piste_sans_aucune_mesure_est_ecartee():
     preuve qu'il parle, on ne lui donne pas le cadre."""
     t = {"id": 0, "boxes": {0: b(100, w=200, h=200)}, "activity": {}}
     assert usable_tracks([t], frame_h=1080) == []
+
+
+# --- sampling_cadence : la cadence visee n'est pas la cadence obtenue --------
+
+
+def test_une_source_multiple_de_la_cible_tombe_juste():
+    """30 images/s pour une cible de 10 : une image sur trois, et la cadence
+    obtenue vaut exactement la cible."""
+    assert sampling_cadence(30.0, 10.0) == (3, 10.0)
+
+
+def test_une_source_pal_ne_donne_pas_la_cadence_visee():
+    """25 images/s : on ne peut garder qu'une image sur deux, donc 12,5 et non
+    10. Confondre les deux etire toute la timeline d'un facteur 1,25 — les
+    segments couvrent alors 37,5 s pour une fenetre de 30 s."""
+    keep_every, obtenue = sampling_cadence(25.0, 10.0)
+    assert keep_every == 2
+    assert obtenue == pytest.approx(12.5)
+    assert obtenue != 10.0
+
+
+def test_les_cadences_de_cinema_et_ntsc():
+    assert sampling_cadence(24.0, 10.0)[1] == pytest.approx(12.0)
+    assert sampling_cadence(23.976, 10.0)[1] == pytest.approx(11.988)
+
+
+def test_une_source_plus_lente_que_la_cible_garde_toutes_ses_images():
+    """Un diaporama a 5 images/s : on ne peut pas en garder plus qu'il n'y en
+    a. `keep_every` ne descend pas sous 1, et la cadence obtenue est celle de
+    la source."""
+    assert sampling_cadence(5.0, 10.0) == (1, 5.0)

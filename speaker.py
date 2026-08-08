@@ -330,9 +330,9 @@ def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN,
 # Nombre de PASSES DE DÉTECTION distinctes qu'une piste doit compter pour être
 # prise au sérieux. Attention à l'unité : entre deux passes, les rectangles sont
 # tenus à leur dernière position, donc une piste vue une seule fois porte quand
-# même `DETECT_EVERY × FRAME_FPS` images. Compter les images laissait passer tous
+# même `DETECT_EVERY` secondes d'images. Compter les images laissait passer tous
 # les faux positifs — mesuré sur la fenêtre 60-90 s de la source d'essai : 39
-# pistes, dont 26 vues sur une seule passe, et zéro rejetée. Une personne à
+# pistes, dont 23 vues sur une seule passe, et zéro rejetée. Une personne à
 # l'écran est revue à la passe suivante ; un faux positif Haar, presque jamais.
 MIN_DETECTIONS = 2
 
@@ -516,6 +516,20 @@ CUT_RATIO = 5.0
 CUT_FLOOR = 0.15
 
 
+def sampling_cadence(source_fps: float,
+                     target_fps: float = FRAME_FPS) -> tuple[int, float]:
+    """(une image gardée sur N, cadence réellement obtenue). Pure.
+
+    `FRAME_FPS` est une cadence VISÉE : on ne peut garder qu'une image sur un
+    nombre entier, donc la cadence obtenue vaut `source_fps / N` et ne tombe
+    juste que si la source est un multiple de la cible. Une source PAL à 25
+    donne 12,5 images/s, du cinéma à 24 en donne 12, du NTSC à 23,976 en donne
+    11,988. Confondre les deux étire toute la timeline du même facteur, puisque
+    la suite convertit des indices d'image en secondes."""
+    keep_every = max(1, int(round(source_fps / target_fps)))
+    return keep_every, source_fps / keep_every
+
+
 def detect_cuts(diffs: list[float], ratio: float = CUT_RATIO,
                 floor: float = CUT_FLOOR) -> set[int]:
     """Indices d'images où le montage d'origine a coupé. `diffs[i]` est l'écart
@@ -552,8 +566,12 @@ def _mouth_activity(previous, current, box: dict, scale: float) -> float:
        au HAUT DU MÊME VISAGE (front et yeux) — même objet, même échelle de
        texture, même mouvement de caméra, donc le parasite s'annule des deux
        côtés du rapport. Premier plan 0,77 contre arrière-plan 0,575 en
-       médianes. Écartée : l'écart reste sous la marge de bascule
-       (`SWITCH_MARGIN`), donc il ne suffirait pas à décider.
+       médianes des moyennes par piste. Écartée sur décision : c'est un
+       changement de DÉFINITION du signal, pas un calage de constante, et
+       l'écart est trop modeste pour l'affirmer sur une seule source. Ces deux
+       médianes globales ne disent d'ailleurs rien du classement image par
+       image, seul critère qui décide vraiment — les mesurer correctement
+       demanderait de comparer les pistes sur les mêmes images.
 
     Décision (ronde 3) : on livre ce qui marche — le cadrage est bon sur du
     contenu à plans découpés — et on documente la limite sur le plan large en
@@ -571,11 +589,17 @@ def _mouth_activity(previous, current, box: dict, scale: float) -> float:
 
 
 def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
-                    src_h: int, *, min_shot: float = MIN_SHOT) -> list[dict]:
+                    src_h: int, *, min_shot: float = MIN_SHOT,
+                    log=None) -> list[dict]:
     """Segments de cadrage d'un clip : qui tient l'image et où couper.
 
     Décode le clip UNE fois, séquentiellement — c'est ce qui rend la mesure
-    d'agitation abordable. I/O."""
+    d'agitation abordable. I/O.
+
+    Une source illisible rend un cadrage centré plutôt que d'échouer — l'usine
+    ne bloque jamais — mais le signale via `log` : sans ça, un fichier corrompu
+    est indiscernable d'une vidéo sans visage, et les deux rendent la même
+    expression constante."""
     import cv2   # import paresseux : coûteux, inutile à la logique pure
     import numpy as np
 
@@ -598,19 +622,38 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
     try:
         capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
         source_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
-        keep_every = max(1, int(round(source_fps / FRAME_FPS)))
-        detect_every = max(1, int(round(DETECT_EVERY * FRAME_FPS)))
-        # Garde-fou : certains conteneurs rendent un POS_MSEC qui ne progresse
-        # pas (ou reste à 0). Sans plafond de lecture, la boucle décoderait le
-        # fichier entier au lieu de la fenêtre demandée.
+        # PIÈGE : `FRAME_FPS` est une cadence VISÉE, pas la cadence obtenue.
+        # Passer 10,0 à la suite étirerait la timeline d'un facteur 1,25 sur du
+        # PAL, et le cadre suivrait l'orateur avec un retard croissant.
+        keep_every, sample_fps = sampling_cadence(source_fps)
+        # Idem : l'intervalle entre deux détections vaut `DETECT_EVERY`
+        # SECONDES, donc il se compte dans la cadence réelle, pas la visée.
+        detect_every = max(1, int(round(DETECT_EVERY * sample_fps)))
+        # Bornes de lecture. La normale est temporelle et relative à la PREMIÈRE
+        # image réellement obtenue : un backend qui cale le seek sur l'image-clé
+        # précédente démarre avant `start`, et une borne absolue couperait
+        # d'autant avant `end` — tous les segments décalés, en silence.
+        duration_ms = (end - start) * 1000
+        origin = None
+        # Garde-fou distinct, en nombre d'images : si `POS_MSEC` reste figé (des
+        # conteneurs le font), la borne temporelle ne se déclenche jamais et la
+        # boucle décoderait le fichier entier. Le repli n'est pas indolore — le
+        # seek a probablement échoué lui aussi, donc on analyse alors le DÉBUT
+        # du fichier, pas la fenêtre demandée. Mieux vaut un cadrage faux qu'un
+        # décodage sans fin, mais ça reste un cadrage faux.
         max_raw = int((end - start) * source_fps) + 2
         previous = None
         boxes: list[dict] = []
         index = 0
         raw = 0
-        while capture.get(cv2.CAP_PROP_POS_MSEC) < end * 1000 and raw < max_raw:
+        while raw < max_raw:
+            position = capture.get(cv2.CAP_PROP_POS_MSEC)
             ok, frame = capture.read()
             if not ok:
+                break
+            if origin is None:
+                origin = position
+            if position - origin >= duration_ms:
                 break
             raw += 1
             if raw % keep_every:
@@ -643,6 +686,11 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
     finally:
         capture.release()
 
+    if not detections:
+        if log:
+            log(f"  cadrage : aucune image lisible dans {video_path.name} "
+                f"({start:.1f}-{end:.1f} s) — cadrage centré")
+        return []
     cuts = detect_cuts(diffs)
     tracks = link_tracks(detections)
     # `link_tracks` range les rectangles eux-mêmes (pas des copies) dans les
@@ -653,6 +701,6 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
             if value is not None:
                 track["activity"][frame_index] = value
     usable = usable_tracks(tracks, src_h)
-    timeline = speaker_timeline(usable, cuts, len(detections), FRAME_FPS,
+    timeline = speaker_timeline(usable, cuts, len(detections), sample_fps,
                                 min_shot=min_shot)
-    return crop_segments(timeline, usable, crop_w, src_w, FRAME_FPS)
+    return crop_segments(timeline, usable, crop_w, src_w, sample_fps)
