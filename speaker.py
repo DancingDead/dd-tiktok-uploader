@@ -12,6 +12,7 @@ segments — et seules la lecture vidéo et la détection OpenCV font de l'I/O.
 """
 
 from pathlib import Path
+from statistics import median
 
 # Format de sortie du lot 1 : vertical en dur, pas de preset de format.
 OUT_W, OUT_H = 1080, 1920
@@ -214,7 +215,12 @@ def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN,
 
 # Un visage sous cette fraction de la hauteur d'image n'est pas un interlocuteur
 # cadré mais une vignette — sur la source d'essai, trois « visages » de 70 px
-# sur 1080 étaient de l'habillage collé au bord.
+# sur 1080 étaient de l'habillage collé au bord. On juge sur la MÉDIANE des
+# hauteurs, pas le maximum, pour qu'un seul faux positif de grande taille ne
+# sauve pas une piste composée à 90 % de vignettes — cas réel : dix rectangles
+# à h=60 plus un à h=300 varié. La médiane rejette la piste ; le max l'aurait
+# gardée. Un visage qui s'approche (petit puis grand) reste gardé dès qu'il est
+# grand sur la moitié de sa piste.
 MIN_FACE_FRACTION = 0.06
 # Déplacement en dessous duquel une piste est jugée parfaitement immobile. Une
 # personne vivante bouge toujours de plus de deux pixels ; ce qui n'en bouge pas
@@ -233,11 +239,15 @@ def usable_tracks(tracks: list[dict], frame_h: int) -> list[dict]:
         boxes = list(track["boxes"].values())
         if not boxes:
             continue
-        # Trop petit : une vignette, pas quelqu'un de cadré.
-        if max(box["h"] for box in boxes) < MIN_FACE_FRACTION * frame_h:
+        # Trop petit : une vignette, pas quelqu'un de cadré. Médiane, pas max :
+        # un seul faux positif de grande taille ne doit pas sauver une piste
+        # composée de vignettes.
+        if median(box["h"] for box in boxes) < MIN_FACE_FRACTION * frame_h:
             continue
-        # Jamais agité : une affiche, un visage de dos, un faux positif.
-        if not any(value > 0 for value in track["activity"].values()):
+        # Jamais agité : une affiche, un visage de dos, un faux positif. Un dict
+        # activity vide est un cas réel (visage vu seulement à t=0) : sans mesure
+        # comparant avec l'image précédente, rien ne prouve qu'il parle.
+        if not track["activity"] or not any(value > 0 for value in track["activity"].values()):
             continue
         # Parfaitement immobile sur une durée significative : de l'habillage.
         if len(boxes) >= _STATIC_MIN_FRAMES:

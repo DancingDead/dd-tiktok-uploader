@@ -158,3 +158,27 @@ def test_les_pistes_conservees_gardent_leur_ordre():
 
 def test_aucune_piste():
     assert usable_tracks([], frame_h=1080) == []
+
+
+def test_un_faux_positif_isole_ne_sauve_pas_une_piste_de_vignettes():
+    """Dix vignettes plus une grande detection erronee : la piste reste de
+    l'habillage. Le maximum se laisserait tromper, la mediane non."""
+    boxes = {i: b(100 + i * 5, w=60, h=60) for i in range(10)}
+    boxes[10] = b(400, w=300, h=300)
+    assert usable_tracks([piste(0, boxes)], frame_h=1080) == []
+
+
+def test_un_visage_qui_s_approche_reste_conserve():
+    """Petit au debut, grand ensuite : grand sur la moitie de la piste, donc
+    conserve. La mediane ne doit pas rejeter ce cas legitime."""
+    boxes = {i: b(100 + i * 5, w=60, h=60) for i in range(5)}
+    boxes.update({i: b(100 + i * 5, w=300, h=300) for i in range(5, 11)})
+    assert [t["id"] for t in usable_tracks([piste(0, boxes)], frame_h=1080)] == [0]
+
+
+def test_une_piste_sans_aucune_mesure_est_ecartee():
+    """Cas reel : un visage vu seulement sur la premiere image echantillonnee
+    n'a pas d'image precedente avec quoi etre compare, donc aucune mesure. Sans
+    preuve qu'il parle, on ne lui donne pas le cadre."""
+    t = {"id": 0, "boxes": {0: b(100, w=200, h=200)}, "activity": {}}
+    assert usable_tracks([t], frame_h=1080) == []
