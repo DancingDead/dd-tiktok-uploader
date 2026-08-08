@@ -83,7 +83,13 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
     # 2-3. Proposition puis recalage.
     dbmod.set_clipper_source_status(conn, source_id, "analyzing")
     count = int(config["clip_count"])
-    raw = clipper.propose_moments(words, int(count * OVERSHOOT), SEED)
+    # `log` est transmis aux deux appels LLM : ils dégradent en silence par
+    # conception, et sans ça la vraie cause (contexte dépassé, serveur éteint,
+    # endpoint erroné) n'apparaissait nulle part.
+    digest_chars = int(config.get("digest_chars",
+                                  clipper.DEFAULTS["digest_chars"]))
+    raw = clipper.propose_moments(words, int(count * OVERSHOOT), SEED,
+                                  digest_chars=digest_chars, log=log)
     log(f"{len(raw)} candidat(s) proposé(s) par le LLM.")
 
     candidates = []
@@ -99,7 +105,7 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
     # 4. Notation, sur le texte recalé et non sur le brut.
     for moment in candidates:
         text = clipper.moment_text(words, moment["start"], moment["end"])
-        moment.update(clipper.score_moment(text, moment["title"], SEED))
+        moment.update(clipper.score_moment(text, moment["title"], SEED, log=log))
 
     # 5. Classement.
     best = clipper.rank_moments(candidates, count)
@@ -109,7 +115,11 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
     # clips d'un run précédent doivent rester intacts. Sans ça, relancer une
     # analyse avec le LLM éteint effaçait un bon lot et affichait « done ».
     if not best:
-        reason = ("aucun candidat proposé par le LLM" if not raw else
+        # Le message part dans la colonne `error`, affichée en rouge par l'UI :
+        # il renvoie au journal, seul endroit où l'erreur exacte du LLM est
+        # écrite. On reste factuel, la cause n'est pas devinable ici.
+        reason = ("aucun candidat proposé par le LLM : voir le journal du job "
+                  "pour l'erreur exacte" if not raw else
                   "aucun candidat n'a survécu au recalage")
         dbmod.set_clipper_source_status(conn, source_id, "failed", reason)
         log(f"Échec : {reason}.")

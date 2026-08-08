@@ -293,6 +293,25 @@ export function SettingsTab({
                 onChange={(e) => setClipper("max_dur", Number(e.target.value))}
               />
             </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_digest_chars">Transcript par appel</Label>
+              <Input
+                id="clipper_digest_chars"
+                type="number"
+                min={1000}
+                max={60000}
+                step={500}
+                className="w-24"
+                value={local.clipper.digest_chars ?? 6000}
+                onChange={(e) => setClipper("digest_chars", Number(e.target.value))}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Taille de transcript envoyée en une fois au modèle : au-delà, la
+              transcription est découpée en plusieurs appels. À régler d'après le
+              contexte du modèle chargé dans LM Studio, en comptant environ
+              2,3 caractères par token (6000 caractères ≈ 2600 tokens).
+            </p>
           </CardContent>
         </Card>
       </div>

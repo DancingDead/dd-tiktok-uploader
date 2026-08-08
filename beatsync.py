@@ -87,6 +87,7 @@ DEFAULT_CONFIG = {
         "clip_count": 8,            # nombre de shorts gardés par source
         "min_dur": 15.0,            # s : en dessous, un extrait n'a pas d'histoire
         "max_dur": 60.0,            # s : au-delà, ce n'est plus un short
+        "digest_chars": 6000,       # caractères de transcript envoyés par appel LLM
     },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats

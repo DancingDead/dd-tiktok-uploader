@@ -175,6 +175,95 @@ def test_lmstudio_signale_une_reponse_sans_choices(monkeypatch):
     assert "inattendu" in str(excinfo.value)
 
 
+def test_propose_journalise_la_cause_avant_de_degrader(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("contexte dépassé : 4646 > 4096")
+    monkeypatch.setattr(clipper, "_call_json", boom)
+    lignes = []
+    assert clipper.propose_moments(WORDS, 3, 7, log=lignes.append) == []
+    assert any("4646 > 4096" in ligne for ligne in lignes)
+
+
+def test_score_journalise_la_cause_avant_de_degrader(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("LM Studio éteint")
+    monkeypatch.setattr(clipper, "_call_json", boom)
+    lignes = []
+    assert clipper.score_moment("texte", "titre", 7, log=lignes.append)["hook"] == 0
+    assert any("LM Studio éteint" in ligne for ligne in lignes)
+
+
+# --- Correction 2 : découpage du transcript en fenêtres --------------------------
+
+
+def test_windows_rend_une_seule_fenetre_si_tout_tient():
+    assert clipper.transcript_windows(WORDS, 10_000) == [WORDS]
+
+
+def test_windows_ne_coupe_jamais_une_phrase():
+    fenetres = clipper.transcript_windows(WORDS, 30)
+    assert len(fenetres) > 1
+    # Chaque fenêtre commence en début de phrase : ici, « Le … violent. » puis
+    # « Et j'assume. ».
+    assert [f[0]["word"] for f in fenetres] == ["Le", "Et"]
+
+
+def test_windows_ne_perd_aucun_mot():
+    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
+    fenetres = clipper.transcript_windows(mots, 200)
+    assert len(fenetres) > 1
+    assert [m for f in fenetres for m in f] == mots
+
+
+def test_windows_isole_une_phrase_geante():
+    """Une phrase plus longue que max_chars forme sa propre fenêtre : la jeter
+    perdrait purement et simplement ce morceau de transcript."""
+    geante = [w(f"mot{i}", i * 0.1, i * 0.1 + 0.05) for i in range(100)]
+    geante[-1]["word"] = "fin."
+    suite = [w("Court.", 100.0, 100.4)]
+    fenetres = clipper.transcript_windows(geante + suite, 50)
+    assert fenetres[0] == geante
+    assert fenetres[-1] == suite
+
+
+def test_windows_liste_vide():
+    assert clipper.transcript_windows([], 1000) == []
+
+
+def test_propose_interroge_chaque_fenetre_et_concatene(monkeypatch):
+    appels = []
+
+    def faux(system, user, schema, seed, name):
+        appels.append(seed)
+        return {"moments": [{"start": len(appels), "end": len(appels) + 30,
+                             "title": f"fenêtre {len(appels)}"}]}
+    monkeypatch.setattr(clipper, "_call_json", faux)
+    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
+    fenetres = clipper.transcript_windows(mots, 200)
+    out = clipper.propose_moments(mots, 6, 7, digest_chars=200)
+    assert len(appels) == len(fenetres) > 1
+    # Seed décalée par fenêtre : déterministe, mais distincte d'une à l'autre.
+    assert appels == [7 + i for i in range(len(fenetres))]
+    assert len(out) == len(fenetres)
+
+
+def test_propose_ne_perd_pas_les_autres_fenetres_si_une_echoue(monkeypatch):
+    etat = {"n": 0}
+
+    def faux(system, user, schema, seed, name):
+        etat["n"] += 1
+        if etat["n"] == 1:
+            raise RuntimeError("contexte dépassé")
+        return {"moments": [{"start": 0, "end": 30, "title": f"ok {etat['n']}"}]}
+    monkeypatch.setattr(clipper, "_call_json", faux)
+    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
+    fenetres = clipper.transcript_windows(mots, 200)
+    lignes = []
+    out = clipper.propose_moments(mots, 6, 7, digest_chars=200, log=lignes.append)
+    assert len(out) == len(fenetres) - 1
+    assert any("contexte dépassé" in ligne for ligne in lignes)
+
+
 def test_clipper_defaults_match_beatsync():
     """`beatsync.DEFAULT_CONFIG["clipper"]` duplique clipper.DEFAULTS en littéral
     (pour ne pas importer clipper depuis beatsync et inverser la dépendance) :

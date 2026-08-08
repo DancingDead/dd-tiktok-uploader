@@ -25,6 +25,11 @@ DEFAULTS = {
     "clip_count": 8,            # nombre de shorts gardés par source
     "min_dur": 15.0,            # s : en dessous, un extrait n'a pas d'histoire
     "max_dur": 60.0,            # s : au-delà, ce n'est plus un short
+    # Transcript envoyé en une fois au modèle. Le bon réglage dépend du contexte
+    # du modèle chargé, que le code ne peut pas connaître : 6000 caractères font
+    # ~2600 tokens (mesuré à ~2,3 caractères par token sur du français horodaté),
+    # ce qui laisse de la marge sur un modèle local chargé à 4096.
+    "digest_chars": 6000,
 }
 
 # Un blanc de cette longueur vaut une fin de phrase, même sans ponctuation :
@@ -524,19 +529,51 @@ def _call_json(system: str, user: str, schema: dict, seed: int, name: str) -> di
     raise RuntimeError(f"backend LLM inconnu : {primary!r}")
 
 
+def _digest_line(words: list[dict], first: int, last: int) -> str:
+    """Une phrase du digest : `[mm:ss] texte`. Pure."""
+    start = words[first]["start"]
+    text = " ".join(x["word"].strip() for x in words[first:last + 1])
+    return f"[{int(start) // 60:02d}:{int(start) % 60:02d}] {text}"
+
+
 def transcript_digest(words: list[dict], max_chars: int = DIGEST_MAX_CHARS) -> str:
     """Transcript compacté en lignes `[mm:ss] phrase`, pour le prompt. Pure."""
     out: list[str] = []
     total = 0
     for first, last in sentences(words):
-        start = words[first]["start"]
-        text = " ".join(x["word"].strip() for x in words[first:last + 1])
-        line = f"[{int(start) // 60:02d}:{int(start) % 60:02d}] {text}"
+        line = _digest_line(words, first, last)
         if total + len(line) > max_chars:
             break
         out.append(line)
         total += len(line) + 1
     return "\n".join(out)
+
+
+def transcript_windows(words: list[dict], max_chars: int) -> list[list[dict]]:
+    """Découpe les mots en fenêtres consécutives dont le digest tient dans
+    `max_chars`, sans jamais couper une phrase. Pure.
+
+    C'est ce qui remplace la troncature : sur une source d'une heure, le digest
+    entier ferait ~82 000 caractères et tout ce qui dépassait la limite n'était
+    jamais vu du modèle — la seconde moitié de l'épisode ignorée en silence."""
+    windows: list[list[dict]] = []
+    first_word: int | None = None
+    last_word = 0
+    size = 0
+    for first, last in sentences(words):
+        line = len(_digest_line(words, first, last)) + 1
+        if first_word is not None and size + line > max_chars:
+            windows.append(words[first_word:last_word + 1])
+            first_word, size = None, 0
+        if first_word is None:
+            # Une phrase seule plus longue que max_chars forme sa propre
+            # fenêtre : la jeter perdrait du transcript, ce qu'on corrige ici.
+            first_word = first
+        last_word = last
+        size += line
+    if first_word is not None:
+        windows.append(words[first_word:last_word + 1])
+    return windows
 
 
 def moment_text(words: list[dict], start: float, end: float) -> str:
@@ -545,36 +582,60 @@ def moment_text(words: list[dict], start: float, end: float) -> str:
                     if x["end"] > start and x["start"] < end)
 
 
-def propose_moments(words: list[dict], count: int, seed: int) -> list[dict]:
-    """Candidats bruts du LLM. Dégrade en [] si le LLM échoue — l'usine ne
-    bloque jamais dessus, exactement comme generate_punchlines."""
-    user = (f"Propose {count} moments. Transcription :\n\n"
-            + transcript_digest(words)
-            + "\n\nRends start et end en SECONDES depuis le début de la vidéo.")
-    try:
-        data = _call_json(_PROPOSE_SYSTEM, user, _PROPOSE_SCHEMA, seed, "moments")
-        # Un modèle local rend parfois une racine qui n'est pas l'objet demandé
-        # (null, liste, nombre) : `strict: True` n'est pas honoré par tous.
-        # L'usine dégrade plutôt que de tomber.
-        raw_moments = data["moments"]
-    except Exception:
+def propose_moments(words: list[dict], count: int, seed: int, *,
+                    digest_chars: int = DEFAULTS["digest_chars"],
+                    log=None) -> list[dict]:
+    """Candidats bruts du LLM, demandés fenêtre par fenêtre. Dégrade en [] si
+    tous les appels échouent — l'usine ne bloque jamais sur le LLM, exactement
+    comme generate_punchlines — mais journalise alors la cause via `log`.
+
+    Le transcript entier ne tient pas dans le contexte d'un modèle local : il est
+    découpé en fenêtres (`transcript_windows`), chacune interrogée séparément.
+    Les timestamps du digest étant absolus, les candidats se concatènent sans
+    recalage. L'échec d'une fenêtre ne perd pas les autres."""
+    windows = transcript_windows(words, digest_chars)
+    if not windows:
         return []
+    # Au moins deux candidats par fenêtre : avec un seul, un passage tardif de
+    # l'épisode n'aurait qu'une proposition à opposer à tout le reste.
+    per_window = max(2, -(-count // len(windows)))
     moments = []
-    for raw in raw_moments:
+    for i, window in enumerate(windows):
+        if log and len(windows) > 1:
+            log(f"  fenêtre {i + 1}/{len(windows)}…")
+        user = (f"Propose {per_window} moments. Transcription :\n\n"
+                + transcript_digest(window, digest_chars)
+                + "\n\nRends start et end en SECONDES depuis le début de la vidéo.")
         try:
-            start, end = float(raw["start"]), float(raw["end"])
-        except (KeyError, TypeError, ValueError):
-            continue   # entrée malformée : on la jette, la source continue
-        if end <= start:
+            # Seed décalée par fenêtre : déterministe, mais deux fenêtres ne
+            # doivent pas partager le même tirage.
+            data = _call_json(_PROPOSE_SYSTEM, user, _PROPOSE_SCHEMA,
+                              seed + i, "moments")
+            # Un modèle local rend parfois une racine qui n'est pas l'objet
+            # demandé (null, liste, nombre) : `strict: True` n'est pas honoré
+            # par tous. L'usine dégrade plutôt que de tomber.
+            raw_moments = data["moments"]
+        except Exception as exc:
+            if log:
+                log(f"  fenêtre {i + 1}/{len(windows)} : échec du LLM ({exc})")
             continue
-        moments.append({"start": start, "end": end,
-                        "title": str(raw.get("title", ""))[:WHY_MAX]})
+        for raw in raw_moments:
+            try:
+                start, end = float(raw["start"]), float(raw["end"])
+            except (KeyError, TypeError, ValueError):
+                continue   # entrée malformée : on la jette, la source continue
+            if end <= start:
+                continue
+            moments.append({"start": start, "end": end,
+                            "title": str(raw.get("title", ""))[:WHY_MAX]})
     return moments
 
 
-def score_moment(text: str, title: str, seed: int) -> dict:
+def score_moment(text: str, title: str, seed: int, *, log=None) -> dict:
     """Notes hook/flow/value d'un candidat. Dégrade en zéros si le LLM échoue :
-    le moment tombe en fin de classement, il ne fait pas échouer la source."""
+    le moment tombe en fin de classement, il ne fait pas échouer la source. La
+    cause part dans `log` — sans ça, un échec systématique ressemble à un
+    classement médiocre."""
     user = f"Titre proposé : {title}\n\nTranscription de l'extrait :\n{text}"
     try:
         data = _call_json(_SCORE_SYSTEM, user, _SCORE_SCHEMA, seed, "score")
@@ -582,7 +643,9 @@ def score_moment(text: str, title: str, seed: int) -> dict:
         # l'usine dégrade plutôt que de tomber.
         if not isinstance(data, dict):
             raise ValueError("racine non-objet")
-    except Exception:
+    except Exception as exc:
+        if log:
+            log(f"  notation impossible ({exc}) : moment noté 0")
         return {"hook": 0, "flow": 0, "value": 0, "why": ""}
 
     def note(key: str) -> int:

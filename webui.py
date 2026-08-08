@@ -61,8 +61,12 @@ SLOW_BEATS_RANGE = (1, 8)
 # local ; un clip sous 3 s n'a pas d'histoire, au-delà de 180 s ce n'est plus un
 # short. Modèles Whisper : ceux que faster-whisper sait résoudre.
 CLIPPER_RANGES = {"clip_count": (1, 30), "min_dur": (3.0, 180.0),
-                  "max_dur": (3.0, 180.0)}
-CLIPPER_INT_KEYS = ("clip_count",)
+                  "max_dur": (3.0, 180.0),
+                  # Sous 1000 caractères une fenêtre ne porte plus de contexte
+                  # exploitable ; au-delà de 60 000 aucun modèle local courant
+                  # ne suit, et la fenêtre échouerait à chaque appel.
+                  "digest_chars": (1000, 60000)}
+CLIPPER_INT_KEYS = ("clip_count", "digest_chars")
 ALLOWED_WHISPER_MODELS = ("tiny", "base", "small", "medium", "large-v3")
 # Statuts qui signalent un job en cours sur la source : on refuse de la
 # supprimer tant qu'il tourne (il recréerait les dossiers derrière nous).

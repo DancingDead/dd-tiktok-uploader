@@ -87,7 +87,13 @@ export type Overrides = {
   format?: "vertical" | "carre" | "horizontal"
   end_scene?: { enabled?: boolean; beats?: number; freeze?: number; speed?: number }
   speed_ramp?: { interpolate?: boolean; slow_beats?: number }
-  clipper?: { whisper_model?: string; clip_count?: number; min_dur?: number; max_dur?: number }
+  clipper?: {
+    whisper_model?: string
+    clip_count?: number
+    min_dur?: number
+    max_dur?: number
+    digest_chars?: number
+  }
 }
 
 export type Preset = { id: number; name: string; overrides: Overrides }
