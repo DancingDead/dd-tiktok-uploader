@@ -456,3 +456,118 @@ def speaker_timeline(tracks: list[dict], cuts: set[int], n_frames: int,
         segments.append({"start": start_index / fps, "end": next_index / fps,
                          "track_id": track_id})
     return segments
+
+
+# --- I/O : lecture, détection, mesure ---------------------------------------
+
+# La parole agite la bouche à 5-10 Hz : en dessous de 10 images/s, l'information
+# n'existe tout simplement pas. C'est abordable parce qu'on décode le clip d'une
+# traite — une lecture séquentielle coûte 1,4 ms l'image contre 45 ms pour un
+# seek, mesuré sur la source d'essai.
+FRAME_FPS = 10.0
+# Une tête ne se déplace pas assez en un demi-quart de seconde pour justifier de
+# repayer une détection Haar : entre deux détections, on tient les rectangles à
+# leur dernière position et on n'y mesure que l'agitation de la bouche.
+DETECT_EVERY = 0.5
+# Haar en 960x540 coûte 8 ms contre 25 ms en pleine résolution, pour la même
+# détection à ces tailles de visage.
+DETECT_SCALE = 0.5
+# Écart global entre deux images (fraction de la dynamique) au-dessus duquel le
+# montage d'origine a changé de plan.
+CUT_THRESHOLD = 0.35
+
+
+def _mouth_activity(previous, current, box: dict, scale: float) -> float:
+    """Agitation du tiers inférieur d'un rectangle entre deux images réduites."""
+    x = int(box["x"] * scale)
+    y = int((box["y"] + box["h"] * 2 / 3) * scale)
+    w = max(1, int(box["w"] * scale))
+    h = max(1, int(box["h"] / 3 * scale))
+    a = previous[y:y + h, x:x + w]
+    b = current[y:y + h, x:x + w]
+    if a.size == 0 or a.shape != b.shape:
+        return 0.0
+    import numpy as np
+    return float(np.mean(np.abs(a.astype("int16") - b.astype("int16"))))
+
+
+def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
+                    src_h: int, *, min_shot: float = MIN_SHOT) -> list[dict]:
+    """Segments de cadrage d'un clip : qui tient l'image et où couper.
+
+    Décode le clip UNE fois, séquentiellement — c'est ce qui rend la mesure
+    d'agitation abordable. I/O."""
+    import cv2   # import paresseux : coûteux, inutile à la logique pure
+    import numpy as np
+
+    cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    capture = cv2.VideoCapture(str(video_path))
+    crop_w, _ = crop_size(src_w, src_h)
+    detections: list[list[dict]] = []
+    # Agitation mesurée, indexée par IDENTITÉ du rectangle (`id(box)`) et non par
+    # rang de détection : `link_tracks` range les rectangles en pistes sans dire
+    # d'où chacun vient, et deux rectangles de coordonnées identiques sur la même
+    # image (la cascade Haar en produit) rendraient une comparaison par valeur
+    # ambiguë. Les rectangles restent tous référencés par `detections` jusqu'au
+    # report, donc aucun `id` n'est recyclé entre-temps.
+    activity_by_box: dict[int, float] = {}
+    cuts: set[int] = set()
+    try:
+        capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
+        source_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+        keep_every = max(1, int(round(source_fps / FRAME_FPS)))
+        detect_every = max(1, int(round(DETECT_EVERY * FRAME_FPS)))
+        # Garde-fou : certains conteneurs rendent un POS_MSEC qui ne progresse
+        # pas (ou reste à 0). Sans plafond de lecture, la boucle décoderait le
+        # fichier entier au lieu de la fenêtre demandée.
+        max_raw = int((end - start) * source_fps) + 2
+        previous = None
+        boxes: list[dict] = []
+        index = 0
+        raw = 0
+        while capture.get(cv2.CAP_PROP_POS_MSEC) < end * 1000 and raw < max_raw:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            raw += 1
+            if raw % keep_every:
+                continue
+            small = cv2.cvtColor(
+                cv2.resize(frame, None, fx=DETECT_SCALE, fy=DETECT_SCALE),
+                cv2.COLOR_BGR2GRAY)
+            if index % detect_every == 0:
+                found = cascade.detectMultiScale(small, 1.15, 5, minSize=(30, 30))
+                boxes = [{"x": int(x / DETECT_SCALE), "y": int(y / DETECT_SCALE),
+                          "w": int(w / DETECT_SCALE), "h": int(h / DETECT_SCALE)}
+                         for x, y, w, h in found]
+            # Chaque image reçoit ses PROPRES rectangles : entre deux détections
+            # les coordonnées sont tenues, mais les objets doivent rester
+            # distincts pour que le report par identité soit sans ambiguïté.
+            frame_boxes = [dict(b) for b in boxes]
+            detections.append(frame_boxes)
+            if previous is not None:
+                # Coupe du montage d'origine : l'image entière change d'un coup.
+                if float(np.mean(np.abs(small.astype("int16")
+                                        - previous.astype("int16")))) / 255 > CUT_THRESHOLD:
+                    cuts.add(index)
+                for box in frame_boxes:
+                    activity_by_box[id(box)] = _mouth_activity(
+                        previous, small, box, DETECT_SCALE)
+            previous = small
+            index += 1
+    finally:
+        capture.release()
+
+    tracks = link_tracks(detections)
+    # `link_tracks` range les rectangles eux-mêmes (pas des copies) dans les
+    # pistes : l'identité suffit à reporter chaque mesure sur la bonne piste.
+    for track in tracks:
+        for frame_index, box in track["boxes"].items():
+            value = activity_by_box.get(id(box))
+            if value is not None:
+                track["activity"][frame_index] = value
+    usable = usable_tracks(tracks, src_h)
+    timeline = speaker_timeline(usable, cuts, len(detections), FRAME_FPS,
+                                min_shot=min_shot)
+    return crop_segments(timeline, usable, crop_w, src_w, FRAME_FPS)
