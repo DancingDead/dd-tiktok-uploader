@@ -375,13 +375,18 @@ WHY_MAX = 240
 # faire couper la réponse au milieu d'un JSON.
 DIGEST_MAX_CHARS = 40_000
 
-_PROPOSE_SYSTEM = (
-    "Tu es monteur pour un label de musique électronique. On te donne la "
-    "transcription horodatée d'une vidéo longue. Tu repères les moments qui "
-    "fonctionneraient seuls, sortis de leur contexte, en short vertical de "
-    "15 à 60 secondes : une idée qui se tient du début à la fin, avec une "
-    "accroche dans les premières secondes. Tu réponds en français."
-)
+def _propose_system(min_dur: float, max_dur: float) -> str:
+    """Prompt système de la proposition. Les bornes de durée y sont INTERPOLÉES,
+    pas codées en dur : `min_dur`/`max_dur` sont réglables, et un prompt qui
+    annonce « 15 à 60 secondes » à quelqu'un réglé sur 20–45 s ment au modèle."""
+    return (
+        "Tu es monteur pour un label de musique électronique. On te donne la "
+        "transcription horodatée d'une vidéo longue. Tu repères les moments qui "
+        "fonctionneraient seuls, sortis de leur contexte, en short vertical de "
+        f"{min_dur:g} à {max_dur:g} secondes : une idée qui se tient du début à "
+        "la fin, avec une accroche dans les premières secondes. Tu réponds en "
+        "français."
+    )
 _SCORE_SYSTEM = (
     "Tu notes un extrait vidéo court destiné à TikTok, sur trois critères, de "
     "0 à 100 : hook (les trois premières secondes retiennent-elles quelqu'un "
@@ -430,7 +435,7 @@ def _json_anthropic(system: str, user: str, schema: dict, seed: int,
         # nu ne dirait rien de ce que le modèle a réellement rendu.
         raise RuntimeError(
             f"réponse Anthropic sans texte : {str(resp.content)[:500]}") from None
-    return json.loads(text)
+    return _loads_or_explain(text, "contenu rendu par Anthropic")
 
 
 def _json_lmstudio(system: str, user: str, schema: dict, seed: int,
@@ -455,7 +460,8 @@ def _json_lmstudio(system: str, user: str, schema: dict, seed: int,
     # 300 s : un transcript d'une heure fait travailler un modèle local longtemps.
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
-            data = json.loads(resp.read())
+            body = resp.read()
+        data = _loads_or_explain(body, "réponse LM Studio")
     except urllib.error.HTTPError as exc:
         # LM Studio met son explication dans le CORPS de la réponse, pas dans le
         # statut : un dépassement de contexte sort en 400 en disant combien de
@@ -474,7 +480,24 @@ def _json_lmstudio(system: str, user: str, schema: dict, seed: int,
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(
             f"réponse LM Studio inexploitable : {str(data)[:500]}") from exc
-    return json.loads(content)
+    return _loads_or_explain(content, "contenu rendu par LM Studio")
+
+
+def _loads_or_explain(payload, what: str) -> dict:
+    """`json.loads` dont l'échec DIT ce qui a été reçu.
+
+    Le cas est fréquent avec un modèle local qui n'honore pas `strict: True` et
+    rend de la prose au lieu du JSON : une JSONDecodeError nue affiche
+    « Expecting value: line 1 column 1 » sans un caractère du corps, et
+    l'utilisateur n'a aucun moyen de savoir que son modèle a répondu en
+    français."""
+    try:
+        return json.loads(payload)
+    except (ValueError, TypeError) as exc:   # JSONDecodeError hérite de ValueError
+        text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) \
+            else str(payload)
+        raise RuntimeError(f"{what} : JSON illisible ({exc}) — "
+                           f"{text[:500]!r}") from exc
 
 
 def _response_excerpt(exc: "urllib.error.HTTPError") -> str:
@@ -538,12 +561,21 @@ def _digest_line(words: list[dict], first: int, last: int) -> str:
 
 
 def transcript_digest(words: list[dict], max_chars: int = DIGEST_MAX_CHARS) -> str:
-    """Transcript compacté en lignes `[mm:ss] phrase`, pour le prompt. Pure."""
+    """Transcript compacté en lignes `[mm:ss] phrase`, pour le prompt. Pure.
+
+    La PREMIÈRE phrase sort toujours, même si elle dépasse à elle seule
+    `max_chars` : c'est le cas de la fenêtre « phrase géante » que
+    `transcript_windows` isole exprès (un monologue sans silence ni ponctuation
+    forte). Sans cette exception, le digest de cette fenêtre était vide et le
+    prompt partait littéralement « Propose 2 moments. Transcription : (rien) » —
+    le modèle inventait alors des timestamps, et le passage que la fenêtre
+    devait sauver restait invisible. Mieux vaut un prompt trop long, qui échoue
+    bruyamment sur le contexte du modèle, qu'un prompt vide qui hallucine."""
     out: list[str] = []
     total = 0
     for first, last in sentences(words):
         line = _digest_line(words, first, last)
-        if total + len(line) > max_chars:
+        if out and total + len(line) > max_chars:
             break
         out.append(line)
         total += len(line) + 1
@@ -585,6 +617,8 @@ def moment_text(words: list[dict], start: float, end: float) -> str:
 
 def propose_moments(words: list[dict], count: int, seed: int, *,
                     digest_chars: int = DEFAULTS["digest_chars"],
+                    min_dur: float = DEFAULTS["min_dur"],
+                    max_dur: float = DEFAULTS["max_dur"],
                     log=None) -> list[dict]:
     """Candidats bruts du LLM, demandés fenêtre par fenêtre. Dégrade en [] si
     tous les appels échouent — l'usine ne bloque jamais sur le LLM, exactement
@@ -600,22 +634,33 @@ def propose_moments(words: list[dict], count: int, seed: int, *,
     # Au moins deux candidats par fenêtre : avec un seul, un passage tardif de
     # l'épisode n'aurait qu'une proposition à opposer à tout le reste.
     per_window = max(2, -(-count // len(windows)))
+    system = _propose_system(min_dur, max_dur)
     moments = []
     for i, window in enumerate(windows):
         if log and len(windows) > 1:
             log(f"  fenêtre {i + 1}/{len(windows)}…")
-        user = (f"Propose {per_window} moments. Transcription :\n\n"
+        # Les bornes de durée sont rappelées ici en plus du prompt système : le
+        # modèle local de la tour propose des fenêtres d'une seconde quand elles
+        # ne figurent que dans le système, visiblement trop loin de la question.
+        user = (f"Propose {per_window} moments, chacun d'une durée comprise "
+                f"entre {min_dur:g} et {max_dur:g} secondes. Transcription :\n\n"
                 + transcript_digest(window, digest_chars)
                 + "\n\nRends start et end en SECONDES depuis le début de la vidéo.")
         try:
             # Seed décalée par fenêtre : déterministe, mais deux fenêtres ne
             # doivent pas partager le même tirage.
-            data = _call_json(_PROPOSE_SYSTEM, user, _PROPOSE_SCHEMA,
-                              seed + i, "moments")
+            data = _call_json(system, user, _PROPOSE_SCHEMA, seed + i, "moments")
             # Un modèle local rend parfois une racine qui n'est pas l'objet
             # demandé (null, liste, nombre) : `strict: True` n'est pas honoré
             # par tous. L'usine dégrade plutôt que de tomber.
             raw_moments = data["moments"]
+            # …et parfois `moments` n'est pas non plus une liste (un nombre,
+            # null). L'itération est DANS le try : hors de lui, le TypeError
+            # s'échappait et faisait tomber tout le traitement de la source —
+            # une fenêtre mal formée perdait les treize autres.
+            if not isinstance(raw_moments, list):
+                raise TypeError(f"`moments` n'est pas une liste : "
+                                f"{type(raw_moments).__name__}")
         except Exception as exc:
             if log:
                 log(f"  fenêtre {i + 1}/{len(windows)} : échec du LLM ({exc})")

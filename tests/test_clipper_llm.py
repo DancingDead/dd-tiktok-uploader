@@ -227,42 +227,75 @@ def test_windows_isole_une_phrase_geante():
     assert fenetres[-1] == suite
 
 
-def test_windows_liste_vide():
-    assert clipper.transcript_windows([], 1000) == []
+def test_digest_d_une_fenetre_phrase_geante_n_est_pas_vide():
+    """La fenêtre que `transcript_windows` isole exprès doit partir au modèle
+    avec son contenu : `transcript_digest` la rendait vide (break sur la
+    première ligne trop longue) et le prompt disait « Transcription : (rien) »."""
+    geante = [w(f"mot{i}", i * 0.1, i * 0.1 + 0.05) for i in range(800)]
+    geante[-1]["word"] = "fin."
+    fenetres = clipper.transcript_windows(geante, 6000)
+    assert fenetres == [geante]
+    digest = clipper.transcript_digest(fenetres[0], 6000)
+    assert digest
+    assert "mot0" in digest and "fin." in digest
 
 
-def test_propose_interroge_chaque_fenetre_et_concatene(monkeypatch):
-    appels = []
-
-    def faux(system, user, schema, seed, name):
-        appels.append(seed)
-        return {"moments": [{"start": len(appels), "end": len(appels) + 30,
-                             "title": f"fenêtre {len(appels)}"}]}
-    monkeypatch.setattr(clipper, "_call_json", faux)
-    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
-    fenetres = clipper.transcript_windows(mots, 200)
-    out = clipper.propose_moments(mots, 6, 7, digest_chars=200)
-    assert len(appels) == len(fenetres) > 1
-    # Seed décalée par fenêtre : déterministe, mais distincte d'une à l'autre.
-    assert appels == [7 + i for i in range(len(fenetres))]
-    assert len(out) == len(fenetres)
-
-
-def test_propose_ne_perd_pas_les_autres_fenetres_si_une_echoue(monkeypatch):
-    etat = {"n": 0}
+def test_propose_envoie_le_texte_d_une_phrase_geante(monkeypatch):
+    """Bout en bout : aucune fenêtre ne part avec un prompt sans transcription."""
+    prompts = []
 
     def faux(system, user, schema, seed, name):
-        etat["n"] += 1
-        if etat["n"] == 1:
-            raise RuntimeError("contexte dépassé")
-        return {"moments": [{"start": 0, "end": 30, "title": f"ok {etat['n']}"}]}
+        prompts.append(user)
+        return {"moments": []}
     monkeypatch.setattr(clipper, "_call_json", faux)
-    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
-    fenetres = clipper.transcript_windows(mots, 200)
+    geante = [w(f"mot{i}", i * 0.1, i * 0.1 + 0.05) for i in range(800)]
+    geante[-1]["word"] = "fin."
+    clipper.propose_moments(geante, 4, 7, digest_chars=1500)
+    assert prompts and all("mot0" in prompt for prompt in prompts)
+
+
+def test_propose_ignore_une_liste_de_moments_qui_n_en_est_pas_une(monkeypatch):
+    """`{"moments": 5}` ou `null` : un TypeError qui s'échappe ferait tomber la
+    source entière, alors qu'une seule fenêtre est en cause."""
+    monkeypatch.setattr(clipper, "_call_json", lambda *a, **k: {"moments": 5})
     lignes = []
-    out = clipper.propose_moments(mots, 6, 7, digest_chars=200, log=lignes.append)
-    assert len(out) == len(fenetres) - 1
-    assert any("contexte dépassé" in ligne for ligne in lignes)
+    assert clipper.propose_moments(WORDS, 3, 7, log=lignes.append) == []
+    assert any("liste" in ligne for ligne in lignes)
+
+
+def test_propose_rappelle_les_bornes_de_duree_reglees(monkeypatch):
+    """Les bornes sont réglables : un prompt qui annonce « 15 à 60 secondes » à
+    quelqu'un réglé sur 20–45 s ment au modèle."""
+    vus = []
+
+    def faux(system, user, schema, seed, name):
+        vus.append((system, user))
+        return {"moments": []}
+    monkeypatch.setattr(clipper, "_call_json", faux)
+    clipper.propose_moments(WORDS, 2, 7, min_dur=20.0, max_dur=45.0)
+    system, user = vus[0]
+    assert "20 à 45 secondes" in system
+    assert "20 et 45 secondes" in user
+
+
+def test_json_illisible_montre_ce_qui_a_ete_recu(monkeypatch):
+    """Un modèle local qui n'honore pas `strict: True` rend de la prose : la
+    JSONDecodeError nue n'en montrait pas un caractère."""
+    body = json.dumps({"choices": [{"message": {
+        "content": "Bien sûr ! Voici les moments…"}}]}).encode()
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResponse(body))
+    with pytest.raises(Exception) as excinfo:
+        clipper._json_lmstudio("s", "u", {}, 7, "n")
+    assert "Bien sûr" in str(excinfo.value)
+
+
+def test_corps_http_non_json_remonte_avec_son_extrait(monkeypatch):
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResponse(b"<html>502 Bad Gateway</html>"))
+    with pytest.raises(Exception) as excinfo:
+        clipper._json_lmstudio("s", "u", {}, 7, "n")
+    assert "502 Bad Gateway" in str(excinfo.value)
 
 
 # --- Correction 3 : `eval=frame` n'existe plus sur ffmpeg 8 ----------------------
@@ -306,6 +339,44 @@ def test_sonde_eval_mise_en_cache(monkeypatch):
     clipper.crop_supports_eval()
     clipper.crop_supports_eval()
     assert len(appels) == 1
+
+
+def test_windows_liste_vide():
+    assert clipper.transcript_windows([], 1000) == []
+
+
+def test_propose_interroge_chaque_fenetre_et_concatene(monkeypatch):
+    appels = []
+
+    def faux(system, user, schema, seed, name):
+        appels.append(seed)
+        return {"moments": [{"start": len(appels), "end": len(appels) + 30,
+                             "title": f"fenêtre {len(appels)}"}]}
+    monkeypatch.setattr(clipper, "_call_json", faux)
+    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
+    fenetres = clipper.transcript_windows(mots, 200)
+    out = clipper.propose_moments(mots, 6, 7, digest_chars=200)
+    assert len(appels) == len(fenetres) > 1
+    # Seed décalée par fenêtre : déterministe, mais distincte d'une à l'autre.
+    assert appels == [7 + i for i in range(len(fenetres))]
+    assert len(out) == len(fenetres)
+
+
+def test_propose_ne_perd_pas_les_autres_fenetres_si_une_echoue(monkeypatch):
+    etat = {"n": 0}
+
+    def faux(system, user, schema, seed, name):
+        etat["n"] += 1
+        if etat["n"] == 1:
+            raise RuntimeError("contexte dépassé")
+        return {"moments": [{"start": 0, "end": 30, "title": f"ok {etat['n']}"}]}
+    monkeypatch.setattr(clipper, "_call_json", faux)
+    mots = [w("mot.", i * 0.5, i * 0.5 + 0.4) for i in range(200)]
+    fenetres = clipper.transcript_windows(mots, 200)
+    lignes = []
+    out = clipper.propose_moments(mots, 6, 7, digest_chars=200, log=lignes.append)
+    assert len(out) == len(fenetres) - 1
+    assert any("contexte dépassé" in ligne for ligne in lignes)
 
 
 def test_clipper_defaults_match_beatsync():
