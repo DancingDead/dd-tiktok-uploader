@@ -2,7 +2,7 @@
 
 > `clipper.py` (807 lignes, logique pure + I/O) · `clip_source.py` (223
 > lignes, orchestrateur) · `speaker.py` (744 lignes, cadrage : qui tient
-> l'image et où couper) · endpoints `/api/clipper/*` dans `webui.py` l.678-918
+> l'image et où couper) · endpoints `/api/clipper/*` dans `webui.py` l.689-929
 > ← [09 webui.py](09-webui.md)
 
 ## 1. Ce que fait ce sous-système, et en quoi il diffère de beatsync
@@ -32,7 +32,7 @@ explicite — pas de mode « sets / rave » sans voix (voir § 8).
 ## 2. Le pipeline en sept étapes
 
 ```
-1. Import de la source          webui.py l.678-802 (upload / lien YouTube → inbox → promotion)
+1. Import de la source          webui.py l.689-813 (upload / lien YouTube → inbox → promotion)
 2. Transcription                clipper.transcribe            l.596 (I/O, mis en cache)
 3. Proposition de moments       clipper.propose_moments       l.499 (I/O, LLM)
 4. Recalage sur les phrases     clipper.snap_to_speech        l.71  (pur)
@@ -47,12 +47,12 @@ explicite — pas de mode « sets / rave » sans voix (voir § 8).
 l'avancement par polling (`GET /api/jobs/<job_id>`, mécanisme générique déjà
 utilisé par `generate_niche.py`).
 
-### 1. Import — `webui.py` l.678-802
+### 1. Import — `webui.py` l.689-813
 
-Deux voies : upload direct (`POST /api/clipper/sources`, l.688) ou import
-YouTube en **deux temps** (`POST /api/clipper/sources/link`, l.714, télécharge
+Deux voies : upload direct (`POST /api/clipper/sources`, l.699) ou import
+YouTube en **deux temps** (`POST /api/clipper/sources/link`, l.725, télécharge
 dans `data/clipper/_inbox/` sous le nom choisi par yt-dlp — inconnu avant la
-fin du téléchargement — puis `POST /api/clipper/inbox/<name>`, l.766,
+fin du téléchargement — puis `POST /api/clipper/inbox/<name>`, l.777,
 **déplace** le fichier vers la source et crée la ligne `clipper_sources`).
 
 Le téléchargement passe `--video --with-audio` à `fetch_tracks.py` : le
@@ -65,7 +65,7 @@ avec un message accusant le contenu.
 
 Deux gardes sur les slugs et la suppression, qui se répondent : `slug_for`
 reçoit l'**union** des slugs en base et des dossiers présents sur disque, et
-`DELETE /api/clipper/sources/<id>` (l.827) efface le dossier **avant** la
+`DELETE /api/clipper/sources/<id>` (l.838) efface le dossier **avant** la
 ligne, refuse en 409 tant qu'un job tourne (`transcribing`/`analyzing`/
 `rendering`) et rend 409 plutôt que 500 si `rmtree` échoue (handle ouvert sous
 Windows). Sans cet ensemble, un effacement raté laissait un dossier orphelin
@@ -73,7 +73,7 @@ dont un réupload du même nom récupérait le slug — et son `transcript.json`
 « Transcript en cache », puis des clips découpés aux timestamps d'une autre
 vidéo, en silence.
 
-La garde de validation d'URL (l.728-742), à connaître au bit près puisqu'elle
+La garde de validation d'URL (l.740-754), à connaître au bit près puisqu'elle
 protège contre une injection d'options yt-dlp :
 
 ```python
@@ -95,7 +95,7 @@ ligne = un argument** passé à yt-dlp : un espace ou un retour à la ligne y
 injecterait une option (`--exec`, `-o`, …). D'où le rejet de tout espacement
 plutôt qu'un simple `strip()`, et la liste blanche de `netloc` plutôt qu'un
 `startswith` — « plus facile à croire fiable qu'il ne l'est », dit la
-docstring de `download_clipper_source` (l.717-727).
+docstring de `download_clipper_source` (l.727-737).
 
 ### 2. Transcription — `clipper.transcribe` l.596
 
@@ -480,7 +480,7 @@ Celles de `clipper.py` d'abord ; celles de `speaker.py` dans le second tableau.
 | Fonction (`clipper.py`) | l. | Invariant |
 |---|---|---|
 | `sentences(words) -> list[(int,int)]` | 55 | Une phrase se termine sur ponctuation forte OU un blanc ≥ `SENTENCE_GAP` (0,6 s) — le silence est plus fiable que la ponctuation sur du français transcrit à l'oral |
-| `snap_to_speech(start, end, words, min_dur, max_dur) -> (float,float)\|None` | 69 | Recale sur des frontières de phrase entières ; `None` si aucune combinaison ne rentre dans `[min_dur, max_dur]` |
+| `snap_to_speech(start, end, words, min_dur, max_dur) -> (float,float)\|None` | 71 | Recale sur des frontières de phrase entières ; `None` si aucune combinaison ne rentre dans `[min_dur, max_dur]` |
 | `moment_score(moment) -> float` | 126 | Moyenne pondérée `WEIGHTS` (hook 0,4 / flow 0,3 / value 0,3) ; une note absente ou `None` vaut 0 — un échec LLM fait tomber le moment en fin de liste, il ne plante pas le classement |
 | `rank_moments(moments, count) -> list[dict]` | 141 | Top `count` par score décroissant (tie-break sur `start`, pour la reproductibilité) ; deux moments qui se chevauchent à plus de `OVERLAP_MAX` (50 %) ne sont jamais gardés ensemble ; ne mute pas l'entrée |
 | `ass_time(seconds) -> str` | 174 | `H:MM:SS.cc` — **tronque** les centièmes, n'arrondit pas (`round()` ferait passer 1,999 s à `.100`, trois chiffres pour un champ qui en attend deux, et le sous-titre disparaît) |
