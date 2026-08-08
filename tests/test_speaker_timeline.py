@@ -73,14 +73,16 @@ def test_un_cadrage_initial_a_l_aveugle_ne_verrouille_pas_le_plan():
     assert tl[0]["end"] < 1.2      # la bascule n'a pas attendu le plancher
 
 
-def test_une_rafale_de_coupes_ne_produit_pas_de_plans_d_une_image():
-    """Toutes les images marquees comme coupe : sans plancher court, on
-    obtiendrait des plans de 0,1 s."""
-    a = piste(0, {i: (9.0 if (i // 10) % 2 == 0 else 0.0) for i in range(120)})
-    b = piste(1, {i: (0.0 if (i // 10) % 2 == 0 else 9.0) for i in range(120)})
-    tl = speaker_timeline([a, b], cuts=set(range(120)), n_frames=120, fps=FPS,
+def test_une_rafale_de_coupes_ne_produit_pas_de_plans_trop_courts():
+    """Trois intervenants se succedent vite. Chaque image est marquee comme
+    coupe de la source : sans plancher court, deux bascules a deux images
+    d'ecart produiraient un plan de 0,2 s."""
+    a = piste(0, {i: (9.0 if i < 10 else 0.0) for i in range(60)})
+    b = piste(1, {i: (9.0 if 10 <= i < 13 else 0.0) for i in range(60)})
+    c = piste(2, {i: (9.0 if i >= 13 else 0.0) for i in range(60)})
+    tl = speaker_timeline([a, b, c], cuts=set(range(60)), n_frames=60, fps=FPS,
                           min_shot=1.2)
-    assert len(tl) >= 2
+    assert len(tl) >= 3
     assert all(s["end"] - s["start"] >= 0.4 - 1e-6 for s in tl[:-1])
 
 
