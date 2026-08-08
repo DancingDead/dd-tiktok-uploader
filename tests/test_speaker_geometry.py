@@ -1,12 +1,12 @@
 import pytest
 
-from clipper import crop_expr, crop_size, smooth_track
+from speaker import crop_expr, crop_size, smooth_track
 
 
 def test_fill_holes_interpole_les_trous_interieurs():
     """Testé sur _fill_holes et non sur smooth_track : la moyenne glissante
     écraserait la rampe et le test ne dirait plus rien de l'interpolation."""
-    from clipper import _fill_holes
+    from speaker import _fill_holes
     assert _fill_holes([100.0, None, 300.0], 0.0) == \
         pytest.approx([100.0, 200.0, 300.0])
 
@@ -111,7 +111,7 @@ def test_crop_expr_produit_des_valeurs_paires():
 
 
 def test_crop_expr_borne_le_nombre_de_paliers():
-    from clipper import MAX_STEPS
+    from speaker import MAX_STEPS
     track = [float(i * 7 % 1500) for i in range(4000)]
     expr = crop_expr(track, 2.0, 400, 1920)
     assert expr.count("if(") <= MAX_STEPS
