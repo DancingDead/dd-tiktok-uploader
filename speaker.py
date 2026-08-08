@@ -327,6 +327,15 @@ def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN,
     return tracks
 
 
+# Nombre de PASSES DE DÉTECTION distinctes qu'une piste doit compter pour être
+# prise au sérieux. Attention à l'unité : entre deux passes, les rectangles sont
+# tenus à leur dernière position, donc une piste vue une seule fois porte quand
+# même `DETECT_EVERY × FRAME_FPS` images. Compter les images laissait passer tous
+# les faux positifs — mesuré sur la fenêtre 60-90 s de la source d'essai : 39
+# pistes, dont 26 vues sur une seule passe, et zéro rejetée. Une personne à
+# l'écran est revue à la passe suivante ; un faux positif Haar, presque jamais.
+MIN_DETECTIONS = 2
+
 # Un visage sous cette fraction de la hauteur d'image n'est pas un interlocuteur
 # cadré mais une vignette — sur la source d'essai, trois « visages » de 70 px
 # sur 1080 étaient de l'habillage collé au bord. On juge sur la MÉDIANE des
@@ -336,13 +345,21 @@ def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN,
 # gardée. Un visage qui s'approche (petit puis grand) reste gardé dès qu'il est
 # grand sur la moitié de sa piste.
 MIN_FACE_FRACTION = 0.06
-# Déplacement en dessous duquel une piste est jugée parfaitement immobile. Une
-# personne vivante bouge toujours de plus de deux pixels ; ce qui n'en bouge pas
-# est incrusté dans l'image.
-STATIC_TOLERANCE = 2
-# En deçà de ce nombre d'images, l'immobilité ne prouve rien : on ne rejette pas
-# une piste sur un échantillon trop court.
-_STATIC_MIN_FRAMES = 8
+# Déplacement, RAPPORTÉ À LA TAILLE DU RECTANGLE, en dessous duquel une piste est
+# jugée immobile — donc incrustée dans l'image. Une tolérance absolue ne peut pas
+# servir les deux échelles : 10 px sur une vignette de 70 px, c'est de
+# l'habillage ; 10 px sur un visage de 400 px, c'est un frémissement. Mesuré sur
+# la source d'essai : les trois faux visages de l'habillage (140-380 s) se
+# déplacent de 2,6 %, 5,9 % et 10,2 % de leur hauteur, tandis que le vrai
+# interlocuteur le plus statique de la fenêtre 60-90 s en parcourt 19 %. Le seuil
+# est posé au milieu de cet écart.
+STATIC_FRACTION = 0.15
+# En deçà de ce nombre de passes de détection, l'immobilité ne prouve rien : sur
+# une demi-seconde, un invité assis peut très bien ne pas parcourir 15 % de la
+# hauteur de son visage. On compte les passes et non les images — les images
+# tenues entre deux passes sont immobiles par construction et gonfleraient le
+# compte sans rien prouver (c'est ce que faisait l'ancien `_STATIC_MIN_FRAMES`).
+_STATIC_MIN_DETECTIONS = 4
 
 
 def usable_tracks(tracks: list[dict], frame_h: int) -> list[dict]:
@@ -352,6 +369,12 @@ def usable_tracks(tracks: list[dict], frame_h: int) -> list[dict]:
     for track in tracks:
         boxes = list(track["boxes"].values())
         if not boxes:
+            continue
+        # Vue une seule fois : la cascade Haar produit un faux positif par-ci
+        # par-là, jamais deux fois de suite au même endroit. Les rectangles tenus
+        # entre deux passes ne comptent pas — ce sont des copies, pas des preuves.
+        n_detections = sum(1 for box in boxes if box.get("detected"))
+        if n_detections < MIN_DETECTIONS:
             continue
         # Trop petit : une vignette, pas quelqu'un de cadré. Médiane, pas max :
         # un seul faux positif de grande taille ne doit pas sauver une piste
@@ -363,12 +386,15 @@ def usable_tracks(tracks: list[dict], frame_h: int) -> list[dict]:
         # comparant avec l'image précédente, rien ne prouve qu'il parle.
         if not track["activity"] or not any(value > 0 for value in track["activity"].values()):
             continue
-        # Parfaitement immobile sur une durée significative : de l'habillage.
-        if len(boxes) >= _STATIC_MIN_FRAMES:
+        # Immobile sur une durée significative, à l'échelle de sa propre taille :
+        # de l'habillage. La comparaison se fait sur la hauteur médiane du
+        # rectangle, la même grandeur que celle du filtre de taille ci-dessus.
+        if n_detections >= _STATIC_MIN_DETECTIONS:
             xs = [box["x"] for box in boxes]
             ys = [box["y"] for box in boxes]
-            if (max(xs) - min(xs) <= STATIC_TOLERANCE
-                    and max(ys) - min(ys) <= STATIC_TOLERANCE):
+            tolerance = STATIC_FRACTION * median(box["h"] for box in boxes)
+            if (max(xs) - min(xs) <= tolerance
+                    and max(ys) - min(ys) <= tolerance):
                 continue
         kept.append(track)
     return kept
@@ -472,9 +498,34 @@ DETECT_EVERY = 0.5
 # Haar en 960x540 coûte 8 ms contre 25 ms en pleine résolution, pour la même
 # détection à ces tailles de visage.
 DETECT_SCALE = 0.5
-# Écart global entre deux images (fraction de la dynamique) au-dessus duquel le
-# montage d'origine a changé de plan.
-CUT_THRESHOLD = 0.35
+# Une coupe du montage d'origine est un écart inter-images qui SORT DE LA
+# DISTRIBUTION du clip, pas qui dépasse une valeur absolue : un seuil fixe ne peut
+# pas servir à la fois un plateau fixe et une captation agitée. Mesuré sur la
+# source d'essai — fenêtre 60-90 s (caméra à l'épaule, écart médian 0,037) : les
+# trois vraies coupes valent 0,217 / 0,189 / 0,196, et les pics de flou de
+# filé montent jusqu'à 0,170. Le rapport les sépare (5 × 0,037 = 0,185), un seuil
+# absolu bas ne le ferait pas.
+CUT_RATIO = 5.0
+# Plancher absolu, indispensable quand le clip est calme : fenêtre 150-180 s
+# (longs plans fixes, écart médian 0,017), où 5 × médiane = 0,084 relèverait 17
+# candidats dont 10 faux. Les vraies coupes y valent 0,177 à 0,199 et le pire
+# flou de filé 0,125 : le plancher est posé entre les deux. Il coûte une vraie
+# coupe sur huit (une transition douce à 0,129), ce qui est le bon compromis —
+# une coupe manquée laisse simplement `MIN_SHOT` s'appliquer, alors qu'une fausse
+# coupe autorise un plan de 0,4 s là où aucun saut du montage ne le masque.
+CUT_FLOOR = 0.15
+
+
+def detect_cuts(diffs: list[float], ratio: float = CUT_RATIO,
+                floor: float = CUT_FLOOR) -> set[int]:
+    """Indices d'images où le montage d'origine a coupé. `diffs[i]` est l'écart
+    entre l'image i-1 et l'image i, en fraction de la dynamique ; `diffs[0]` n'a
+    pas de sens (aucune image ne précède la première) et ne participe donc ni au
+    calcul de la médiane ni au relevé. Pure."""
+    if len(diffs) < 2:
+        return set()
+    threshold = max(ratio * median(diffs[1:]), floor)
+    return {i for i in range(1, len(diffs)) if diffs[i] > threshold}
 
 
 def _mouth_activity(previous, current, box: dict, scale: float) -> float:
@@ -512,7 +563,10 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
     # ambiguë. Les rectangles restent tous référencés par `detections` jusqu'au
     # report, donc aucun `id` n'est recyclé entre-temps.
     activity_by_box: dict[int, float] = {}
-    cuts: set[int] = set()
+    # Écart avec l'image précédente, image par image. Le critère de coupe est
+    # relatif à la distribution du clip entier : il ne peut donc être appliqué
+    # qu'une fois tout le clip lu, pas au fil de la boucle.
+    diffs: list[float] = [0.0]
     try:
         capture.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
         source_fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
@@ -536,7 +590,8 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
             small = cv2.cvtColor(
                 cv2.resize(frame, None, fx=DETECT_SCALE, fy=DETECT_SCALE),
                 cv2.COLOR_BGR2GRAY)
-            if index % detect_every == 0:
+            is_pass = index % detect_every == 0
+            if is_pass:
                 found = cascade.detectMultiScale(small, 1.15, 5, minSize=(30, 30))
                 boxes = [{"x": int(x / DETECT_SCALE), "y": int(y / DETECT_SCALE),
                           "w": int(w / DETECT_SCALE), "h": int(h / DETECT_SCALE)}
@@ -544,13 +599,14 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
             # Chaque image reçoit ses PROPRES rectangles : entre deux détections
             # les coordonnées sont tenues, mais les objets doivent rester
             # distincts pour que le report par identité soit sans ambiguïté.
-            frame_boxes = [dict(b) for b in boxes]
+            # `detected` distingue le rectangle réellement détecté de sa copie
+            # tenue — sans quoi une piste vue une seule fois paraîtrait durer
+            # `detect_every` images et passerait pour quelqu'un de présent.
+            frame_boxes = [dict(b, detected=is_pass) for b in boxes]
             detections.append(frame_boxes)
             if previous is not None:
-                # Coupe du montage d'origine : l'image entière change d'un coup.
-                if float(np.mean(np.abs(small.astype("int16")
-                                        - previous.astype("int16")))) / 255 > CUT_THRESHOLD:
-                    cuts.add(index)
+                diffs.append(float(np.mean(np.abs(
+                    small.astype("int16") - previous.astype("int16")))) / 255)
                 for box in frame_boxes:
                     activity_by_box[id(box)] = _mouth_activity(
                         previous, small, box, DETECT_SCALE)
@@ -559,6 +615,7 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
     finally:
         capture.release()
 
+    cuts = detect_cuts(diffs)
     tracks = link_tracks(detections)
     # `link_tracks` range les rectangles eux-mêmes (pas des copies) dans les
     # pistes : l'identité suffit à reporter chaque mesure sur la bonne piste.
