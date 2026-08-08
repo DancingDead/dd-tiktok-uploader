@@ -210,3 +210,41 @@ def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN,
                 tracks.append({"id": len(tracks), "boxes": {index: box},
                                "activity": {}})
     return tracks
+
+
+# Un visage sous cette fraction de la hauteur d'image n'est pas un interlocuteur
+# cadré mais une vignette — sur la source d'essai, trois « visages » de 70 px
+# sur 1080 étaient de l'habillage collé au bord.
+MIN_FACE_FRACTION = 0.06
+# Déplacement en dessous duquel une piste est jugée parfaitement immobile. Une
+# personne vivante bouge toujours de plus de deux pixels ; ce qui n'en bouge pas
+# est incrusté dans l'image.
+STATIC_TOLERANCE = 2
+# En deçà de ce nombre d'images, l'immobilité ne prouve rien : on ne rejette pas
+# une piste sur un échantillon trop court.
+_STATIC_MIN_FRAMES = 8
+
+
+def usable_tracks(tracks: list[dict], frame_h: int) -> list[dict]:
+    """Ne garde que les pistes qui peuvent être un interlocuteur qui parle.
+    Conserve l'ordre d'entrée. Pure."""
+    kept = []
+    for track in tracks:
+        boxes = list(track["boxes"].values())
+        if not boxes:
+            continue
+        # Trop petit : une vignette, pas quelqu'un de cadré.
+        if max(box["h"] for box in boxes) < MIN_FACE_FRACTION * frame_h:
+            continue
+        # Jamais agité : une affiche, un visage de dos, un faux positif.
+        if not any(value > 0 for value in track["activity"].values()):
+            continue
+        # Parfaitement immobile sur une durée significative : de l'habillage.
+        if len(boxes) >= _STATIC_MIN_FRAMES:
+            xs = [box["x"] for box in boxes]
+            ys = [box["y"] for box in boxes]
+            if (max(xs) - min(xs) <= STATIC_TOLERANCE
+                    and max(ys) - min(ys) <= STATIC_TOLERANCE):
+                continue
+        kept.append(track)
+    return kept

@@ -1,6 +1,6 @@
 import pytest
 
-from speaker import iou, link_tracks
+from speaker import iou, link_tracks, usable_tracks
 
 
 def b(x, y=100, w=100, h=100):
@@ -99,3 +99,62 @@ def test_la_borne_d_anciennete_est_reglable():
     detections = [[b(100)]] + [[] for _ in range(10)] + [[b(100)]]
     assert len(link_tracks(detections, max_gap=3)) == 2
     assert len(link_tracks(detections, max_gap=30)) == 1
+
+
+# --- usable_tracks : filtrage des pistes qui peuvent être un interlocuteur ---
+
+
+def piste(id_, boxes, activity=None):
+    return {"id": id_, "boxes": boxes,
+            "activity": activity if activity is not None else
+            {i: 5.0 for i in boxes}}
+
+
+def test_une_piste_normale_est_conservee():
+    t = piste(0, {0: b(100, w=200, h=200), 1: b(110, w=200, h=200)})
+    assert [x["id"] for x in usable_tracks([t], frame_h=1080)] == [0]
+
+
+def test_un_visage_trop_petit_est_ecarte():
+    """60 px sur 1080 = 5,5 %, sous le seuil : c'est une vignette."""
+    t = piste(0, {0: b(100, w=60, h=60), 1: b(110, w=60, h=60)})
+    assert usable_tracks([t], frame_h=1080) == []
+
+
+def test_une_piste_jamais_agitee_est_ecartee():
+    """Une affiche, un visage de dos, un faux positif : ça ne parle pas."""
+    t = piste(0, {0: b(100, w=200, h=200), 1: b(110, w=200, h=200)},
+              activity={0: 0.0, 1: 0.0})
+    assert usable_tracks([t], frame_h=1080) == []
+
+
+def test_un_habillage_parfaitement_immobile_est_ecarte():
+    """Rectangle au pixel près identique sur toute la durée : de l'habillage.
+    Il porte de l'agitation (compression, bruit) mais ne bouge pas d'un pixel."""
+    fixe = b(88, y=92, w=200, h=200)
+    t = piste(0, {i: dict(fixe) for i in range(40)})
+    assert usable_tracks([t], frame_h=1080) == []
+
+
+def test_une_personne_qui_bouge_a_peine_reste_conservee():
+    """Trois pixels de déplacement suffisent à prouver qu'il y a quelqu'un."""
+    t = piste(0, {i: b(100 + (i % 2) * 3, w=200, h=200) for i in range(40)})
+    assert [x["id"] for x in usable_tracks([t], frame_h=1080)] == [0]
+
+
+def test_une_piste_trop_courte_pour_juger_l_immobilite_est_conservee():
+    """Sur deux images, l'immobilité ne prouve rien — on ne rejette pas."""
+    fixe = b(88, y=92, w=200, h=200)
+    t = piste(0, {0: dict(fixe), 1: dict(fixe)})
+    assert [x["id"] for x in usable_tracks([t], frame_h=1080)] == [0]
+
+
+def test_les_pistes_conservees_gardent_leur_ordre():
+    a = piste(0, {i: b(100, w=200, h=200) for i in range(5)})
+    petit = piste(1, {i: b(400, w=50, h=50) for i in range(5)})
+    c = piste(2, {i: b(800, w=200, h=200) for i in range(5)})
+    assert [x["id"] for x in usable_tracks([a, petit, c], frame_h=1080)] == [0, 2]
+
+
+def test_aucune_piste():
+    assert usable_tracks([], frame_h=1080) == []
