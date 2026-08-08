@@ -76,3 +76,26 @@ def test_les_pistes_portent_un_dictionnaire_d_agitation_vide():
 def test_ids_attribues_dans_l_ordre_d_apparition():
     tracks = link_tracks([[b(100)], [b(100), b(800)]])
     assert [t["id"] for t in tracks] == [0, 1]
+
+
+def test_une_piste_trop_ancienne_ne_capture_pas_un_nouveau_visage():
+    """Une personne sort du cadre ; longtemps apres, quelqu'un d'autre apparait
+    au meme endroit. Sans borne d'anciennete, les deux fusionneraient sous la
+    meme identite et le cadrage tiendrait l'un en croyant tenir l'autre."""
+    detections = [[b(100)]] + [[] for _ in range(40)] + [[b(100)]]
+    tracks = link_tracks(detections, max_gap=30)
+    assert len(tracks) == 2
+
+
+def test_un_trou_court_ne_casse_pas_la_piste():
+    """La cascade rate un visage quelques images : c'est le cas que la
+    tolerance existe pour couvrir."""
+    detections = [[b(100)]] + [[] for _ in range(5)] + [[b(100)]]
+    tracks = link_tracks(detections, max_gap=30)
+    assert len(tracks) == 1
+
+
+def test_la_borne_d_anciennete_est_reglable():
+    detections = [[b(100)]] + [[] for _ in range(10)] + [[b(100)]]
+    assert len(link_tracks(detections, max_gap=3)) == 2
+    assert len(link_tracks(detections, max_gap=30)) == 1

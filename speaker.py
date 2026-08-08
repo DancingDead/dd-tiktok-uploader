@@ -153,6 +153,15 @@ def crop_expr(track: list[float], sample_fps: float, crop_w: int,
 # ne soit décidée.
 IOU_MIN = 0.3
 
+# Ancienneté maximale d'une piste (en images échantillonnées) avant qu'elle ne
+# soit plus candidate à l'appariement. La cascade rate un visage pendant quelques
+# images (tête tournée, flou de mouvement) — ce qui se compte en fractions de
+# seconde, pas en dizaines. À 10 images/s (cadence d'échantillonnage prévue), 30
+# images = 3 secondes, assez pour couvrir les occlusions légitimes sans risquer
+# que deux personnes distinctes (une qui sort du cadre, une autre qui y arrive
+# longtemps après au même endroit) se fusionnent sous la même identité.
+TRACK_MAX_AGE = 30
+
 
 def iou(a: dict, b: dict) -> float:
     """Recouvrement de deux rectangles, rapporté à leur union. Pure."""
@@ -165,22 +174,27 @@ def iou(a: dict, b: dict) -> float:
     return inter / union if union > 0 else 0.0
 
 
-def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN) -> list[dict]:
+def link_tracks(detections: list[list[dict]], iou_min: float = IOU_MIN,
+                max_gap: int = TRACK_MAX_AGE) -> list[dict]:
     """Relie les détections image par image en pistes persistantes.
 
     Une piste non appariée sur une image n'est pas close : la cascade rate
     régulièrement un visage (tête tournée, flou de mouvement), et rouvrir une
     piste ferait passer la même personne pour une nouvelle — donc une coupe
     injustifiée. Elle reste donc candidate à l'appariement sur sa DERNIÈRE
-    position connue. Pure."""
+    position connue — tant que cette position n'est pas trop ancienne. Pure."""
     tracks: list[dict] = []
     for index, boxes in enumerate(detections):
         # Appariement glouton par recouvrement décroissant : le meilleur couple
         # est figé d'abord, ce qui évite qu'un visage vole l'appariement d'un
-        # autre quand deux personnes se rapprochent.
+        # autre quand deux personnes se rapprochent. Les pistes plus anciennes que
+        # max_gap images ne sont pas candidates : sans cette borne, une personne
+        # qui sort du cadre puis un autre visage au même endroit fusionneraient.
+        last_seen = {t: max(track["boxes"]) for t, track in enumerate(tracks)}
         pairs = sorted(
-            ((iou(track["boxes"][max(track["boxes"])], box), t, d)
+            ((iou(track["boxes"][last_seen[t]], box), t, d)
              for t, track in enumerate(tracks)
+             if index - last_seen[t] <= max_gap
              for d, box in enumerate(boxes)),
             key=lambda p: (-p[0], p[1], p[2]))
         used_tracks: set[int] = set()
