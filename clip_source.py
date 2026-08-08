@@ -18,9 +18,19 @@ ROOT = Path(__file__).parent
 # analyse doit rendre les mêmes clips, sans quoi on ne peut pas comparer un
 # réglage à un autre.
 SEED = 1337
-# On demande 50 % de candidats en plus que ce qu'on garde : le classement a
-# besoin de matière à trier, et le recalage en rejette une partie.
+# Combien de candidats on demande au LLM par rapport à ce qu'on garde : le
+# classement a besoin de matière à trier, et le recalage en rejette une partie.
+# Ce n'est un « +50 % » que sur une source courte (une seule fenêtre de
+# transcript) : `propose_moments` impose un plancher de 2 candidats PAR FENÊTRE,
+# qui l'emporte dès qu'il y en a plus de 6 — d'où le plafond de notation
+# ci-dessous, sans quoi rien ne bornerait le nombre d'appels LLM.
 OVERSHOOT = 1.5
+# Candidats notés au maximum, par clip demandé. Chaque notation est un appel LLM
+# d'une poignée de secondes : sur une source d'une heure à digest_chars=1000,
+# ~82 fenêtres proposent ~246 candidats, soit des dizaines de minutes de
+# notation pour un lot de 8 clips. Trois fois le lot laisse largement de quoi
+# classer.
+SCORE_BUDGET = 3
 
 
 def slug_for(title: str, existing: set[str]) -> str:
@@ -89,7 +99,9 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
     digest_chars = int(config.get("digest_chars",
                                   clipper.DEFAULTS["digest_chars"]))
     raw = clipper.propose_moments(words, int(count * OVERSHOOT), SEED,
-                                  digest_chars=digest_chars, log=log)
+                                  digest_chars=digest_chars,
+                                  min_dur=float(config["min_dur"]),
+                                  max_dur=float(config["max_dur"]), log=log)
     log(f"{len(raw)} candidat(s) proposé(s) par le LLM.")
 
     candidates = []
@@ -102,8 +114,20 @@ def process(conn, root: Path, source_id: int, config: dict, log=print) -> int:
         candidates.append({**moment, "start": snapped[0], "end": snapped[1]})
     log(f"{len(candidates)} candidat(s) après recalage.")
 
-    # 4. Notation, sur le texte recalé et non sur le brut.
-    for moment in candidates:
+    # 4. Notation, sur le texte recalé et non sur le brut. Un appel LLM par
+    # candidat, donc borné : au-delà du budget, on garde les premiers dans
+    # l'ordre des fenêtres (couverture chronologique de la source) et on DIT
+    # combien tombent — le projet interdit les troncatures silencieuses.
+    budget = count * SCORE_BUDGET
+    if len(candidates) > budget:
+        log(f"{len(candidates) - budget} candidat(s) écarté(s) faute de budget "
+            f"de notation (plafond {budget} = {count} clips × {SCORE_BUDGET}).")
+        candidates = candidates[:budget]
+    # Progression journalisée comme la boucle de rendu : sans ça, le journal
+    # restait muet pendant des dizaines de minutes en statut `analyzing`, et
+    # l'utilisateur ne voyait que « rien ne se passe ».
+    for i, moment in enumerate(candidates, 1):
+        log(f"[{i}/{len(candidates)}] notation…")
         text = clipper.moment_text(words, moment["start"], moment["end"])
         moment.update(clipper.score_moment(text, moment["title"], SEED, log=log))
 

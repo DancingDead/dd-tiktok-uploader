@@ -185,6 +185,51 @@ def test_tous_les_rendus_echouent(source, monkeypatch):
     assert get_clipper_source(conn, sid)["status"] == "failed"
 
 
+def test_la_notation_est_bornee_et_le_dit(source, monkeypatch):
+    """Rien ne bornait le nombre d'appels LLM de notation : ~82 fenêtres à
+    digest_chars=1000 en produisent des centaines. On coupe — et on le DIT, le
+    projet interdit les troncatures silencieuses."""
+    conn, root, sid = source
+    # Beaucoup de candidats recalables, tous sur la même plage utilisable.
+    _mock_all(monkeypatch, root,
+              [{"start": 0.0, "end": 40.0, "title": f"m{i}"} for i in range(40)])
+    notes = []
+    monkeypatch.setattr(clipper, "score_moment",
+                        lambda *a, **k: notes.append(1) or
+                        {"hook": 80, "flow": 70, "value": 60, "why": "ok"})
+    lignes = []
+    config = {**clipper.DEFAULTS, "clip_count": 2}
+    clip_source.process(conn, root, sid, config, log=lignes.append)
+
+    budget = 2 * clip_source.SCORE_BUDGET
+    assert len(notes) == budget
+    assert any("écarté" in ligne and "budget" in ligne for ligne in lignes)
+
+
+def test_la_notation_journalise_sa_progression(source, monkeypatch):
+    """Sans ça, le journal restait muet pendant des dizaines de minutes en
+    statut `analyzing` — le symptôme « rien ne se passe »."""
+    conn, root, sid = source
+    _mock_all(monkeypatch, root,
+              [{"start": 0.0, "end": 40.0, "title": "a"},
+               {"start": 20.0, "end": 58.0, "title": "b"}])
+    lignes = []
+    clip_source.process(conn, root, sid, clipper.DEFAULTS, log=lignes.append)
+    assert any("[1/2] notation" in ligne for ligne in lignes)
+    assert any("[2/2] notation" in ligne for ligne in lignes)
+
+
+def test_les_bornes_de_duree_reglees_partent_au_llm(source, monkeypatch):
+    conn, root, sid = source
+    _mock_all(monkeypatch, root, [{"start": 0.0, "end": 40.0, "title": "M"}])
+    vus = {}
+    monkeypatch.setattr(clipper, "propose_moments",
+                        lambda *a, **k: vus.update(k) or [])
+    clip_source.process(conn, root, sid, {**clipper.DEFAULTS, "min_dur": 20.0,
+                                          "max_dur": 45.0}, log=lambda m: None)
+    assert (vus["min_dur"], vus["max_dur"]) == (20.0, 45.0)
+
+
 def test_un_cache_de_transcript_corrompu_est_ignore(source, monkeypatch):
     """Un processus tue en pleine ecriture laisse un JSON tronque. Il doit
     valoir cache absent, sinon la source est condamnee : cache.is_file()
