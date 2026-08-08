@@ -106,12 +106,28 @@ horodatés, langue auto-détectée.
 
 ### 3. Proposition — `clipper.propose_moments` l.493
 
-Un appel LLM (via `_call_json`, l.441, détaillé § 4 ci-dessous) demande
-`count × OVERSHOOT` (1,5×) candidats à partir d'un digest
-compact de la transcription (`transcript_digest`, l.472) : le classement
-(étape 6) a besoin de matière à trier, et le recalage (étape 4) en rejette
-une partie. Dégrade en `[]` si le LLM échoue — exactement comme
-`beatsync.generate_punchlines`.
+Le transcript est d'abord découpé en **fenêtres** qui tiennent dans le contexte
+du modèle (`transcript_windows`, `digest_chars` caractères, coupé sur des
+phrases entières). Un appel LLM (via `_call_json`, l.441, détaillé § 4
+ci-dessous) **par fenêtre** demande `max(2, ceil(count × OVERSHOOT / n))`
+candidats — au moins deux, sinon un passage tardif de l'épisode n'aurait qu'une
+proposition à opposer à tout le reste ; le classement (étape 6) a besoin de
+matière à trier et le recalage (étape 4) en rejette une partie. La seed de la
+fenêtre `i` vaut `seed + i` : déterministe, mais distincte d'une fenêtre à
+l'autre. Les timestamps du digest étant absolus, les candidats se concatènent
+sans recalage.
+
+Avant ce découpage, le prompt portait le transcript entier tronqué à 40 000
+caractères : sur une source d'une heure (~82 000 caractères), la seconde moitié
+de l'épisode n'était jamais vue du modèle, en silence — et 40 000 caractères
+(~17 400 tokens) ne tiennent dans aucun contexte local raisonnable.
+
+L'échec d'une fenêtre est journalisé et ne perd pas les autres ; la dégradation
+en `[]` ne concerne que le cas où toutes échouent — exactement comme
+`beatsync.generate_punchlines`. `propose_moments` et `score_moment` prennent un
+`log=None` : elles dégradent toujours en silence côté valeur de retour, mais
+**disent pourquoi** dans le journal du job, que l'interface affiche. Sans ça,
+un contexte dépassé ressemblait à « aucun candidat proposé par le LLM ».
 
 ### 4. Recalage — `clipper.snap_to_speech` l.55
 
@@ -206,7 +222,8 @@ même invité se cadreraient différemment selon la définition du rush.
 | `ass_time(seconds) -> str` | 286 | `H:MM:SS.cc` — **tronque** les centièmes, n'arrondit pas (`round()` ferait passer 1,999 s à `.100`, trois chiffres pour un champ qui en attend deux, et le sous-titre disparaît) |
 | `build_ass(words, start, end, y=0.74, size=64) -> str` | 305 | Sous-titres karaoké ASS, temps rebasés sur `start` ; le mot en cours de prononciation passe en rouge, le reste de la ligne reste visible ; chaque `Dialogue` tient jusqu'au **mot suivant** du groupe (le borner sur la fin du mot éteint la ligne à chaque respiration, et le français parlé en est plein) ; le style nomme `Anton`, la police OFL **embarquée** que `beatsync` associe déjà au nom logique « impact » — « Impact » serait résolu par fontconfig et libass lui substituerait silencieusement une sans-serif |
 | `ffmpeg_path(path) -> str` | 345 | Chemin utilisable **à l'intérieur** d'une chaîne de filtre ffmpeg (`subtitles='<chemin>'`) : `:` échappé pour les lettres de lecteur Windows, apostrophe échappée en dernier (sinon le `\` qu'on introduit pour l'échapper serait lui-même mangé par le remplacement des séparateurs) |
-| `transcript_digest(words, max_chars) -> str` | 472 | Transcript compacté en lignes `[mm:ss] phrase`, tronqué à `max_chars` — un modèle local a une fenêtre finie, mieux vaut couper proprement entre deux lignes que de faire couper la réponse au milieu d'un JSON |
+| `transcript_digest(words, max_chars) -> str` | 472 | Transcript compacté en lignes `[mm:ss] phrase`, tronqué à `max_chars` — un modèle local a une fenêtre finie, mieux vaut couper proprement entre deux lignes que de faire couper la réponse au milieu d'un JSON. `DIGEST_MAX_CHARS` (40 000) n'est plus qu'un plafond de sécurité pour l'usage direct : le découpage réel passe par `transcript_windows` |
+| `transcript_windows(words, max_chars) -> list[list[dict]]` | — | Fenêtres consécutives dont le digest tient dans `max_chars`, **sans jamais couper une phrase** ; une phrase seule plus longue forme sa propre fenêtre (la jeter perdrait du transcript) ; la concaténation des fenêtres redonne la liste d'origine |
 | `moment_text(words, start, end) -> str` | 487 | Concatène les mots dont la fenêtre `[start, end]` chevauche celle du mot |
 
 ### Les couleurs ASS sont en BGR
@@ -305,6 +322,7 @@ diverger en silence. Ils s'éditent dans l'onglet **Réglages**, carte
 | `clip_count` | `8` | nombre de shorts gardés par source |
 | `min_dur` | `15.0` | s, en dessous un extrait n'a pas d'histoire |
 | `max_dur` | `60.0` | s, au-delà ce n'est plus un short |
+| `digest_chars` | `6000` | caractères de transcript envoyés en un appel LLM (≈ 2600 tokens, à ~2,3 caractères par token) |
 
 Bornées côté serveur par `coerce_clipper` (`webui.py`, `CLIPPER_RANGES`) —
 même motif que `coerce_overrides` pour beatsync : ces valeurs finissent dans
@@ -314,6 +332,7 @@ source, pas au formulaire.
 | Clé | Bornes | Pourquoi |
 |---|---|---|
 | `clip_count` | `[1, 30]` | au-delà de 30, ça sature un modèle local |
+| `digest_chars` | `[1000, 60000]` | sous 1000 une fenêtre ne porte plus de contexte exploitable ; au-delà de 60 000, aucun modèle local courant ne suit et chaque fenêtre échouerait |
 | `min_dur` / `max_dur` | `[3.0, 180.0]` | sous 3 s pas d'histoire, au-delà de 180 s ce n'est plus un short |
 | `whisper_model` | `tiny\|base\|small\|medium\|large-v3` | liste blanche, seuls les modèles que faster-whisper sait résoudre |
 | `min_dur` vs `max_dur` | `min_dur <= max_dur` | refusé en 400 : une inversion ne rend aucun clip et la source finit en `failed` avec un message accusant le recalage |
@@ -340,7 +359,7 @@ sous-domaine :
 | `test_clipper_rank.py` | `moment_score` (pondération, note absente) et `rank_moments` (tri, chevauchements majoritaires écartés, déterminisme sur ex æquo, non-mutation) |
 | `test_clipper_track.py` | `_fill_holes`, `smooth_track` (zone morte, trous de bord), `crop_size` (dont hauteur impaire), `crop_expr` (interpolation, continuité à mi-chemin, bornes, valeurs paires) |
 | `test_clipper_ass.py` | `ass_time`, `build_ass` (en-tête, un événement par mot, rebasage, surlignage, échappement, absence de trou entre deux mots, police embarquée), `ffmpeg_path` (chemins Windows/POSIX/apostrophe) |
-| `test_clipper_llm.py` | `transcript_digest`, `moment_text`, `propose_moments` et `score_moment` **mockés** sur `_call_json` : conversion, entrées malformées ignorées, dégradation si le LLM échoue ou rend une racine non-objet ; et le repli `LLM_FALLBACK` de `_call_json` |
+| `test_clipper_llm.py` | `transcript_digest`, `transcript_windows` (découpe sur les phrases, fenêtre unique, phrase géante isolée, liste vide, aucun mot perdu), `moment_text`, `propose_moments` et `score_moment` **mockés** sur `_call_json` : conversion, entrées malformées ignorées, boucle sur les fenêtres et seeds décalées, une fenêtre en échec ne perd pas les autres, dégradation si le LLM échoue ou rend une racine non-objet **avec journalisation de la cause** ; le repli `LLM_FALLBACK` de `_call_json` ; et la remontée des erreurs LM Studio (corps d'un HTTP 400, `{"error": …}` sur un 200, réponse sans `choices`) via un `urlopen` monkeypatché |
 | `test_clip_source.py` | `slug_for`, et `process` de bout en bout (mocké) : pipeline complet, cache du transcript, source muette, candidat irrécalable ignoré, échec de rendu isolé, remplacement des clips au relancement, non-perte des clips précédents si le LLM est muet, cache de transcript corrompu ignoré |
 | `test_clipper_api.py` | Endpoints `webui.py` : `coerce_clipper` (bornes, rejet non-numérique/modèle inconnu, `min_dur > max_dur`), upload/suppression d'une source (409 pendant un job, échec de `rmtree`, slug d'un dossier orphelin non réattribué, durée sondée), promotion refusée sans piste audio, lecture/statut/suppression d'un clip (avec garde anti-traversal), projection sans chemins disque dans `/api/state`, validation de l'URL YouTube (espacement, hôte, casse, type) |
 
