@@ -1,3 +1,8 @@
+import io
+import json
+import urllib.error
+import urllib.request
+
 import pytest
 
 import beatsync
@@ -116,6 +121,58 @@ def test_call_json_remonte_l_erreur_sans_repli(monkeypatch):
     monkeypatch.setattr(clipper, "_json_lmstudio", eteint)
     with pytest.raises(OSError):
         clipper._call_json("s", "u", {}, 7, "n")
+
+
+# --- Correction 1 : l'erreur réelle du serveur doit remonter --------------------
+
+
+class _FakeResponse(io.BytesIO):
+    """Réponse d'urlopen : un contexte qui rend des octets."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_lmstudio_remonte_le_message_d_erreur_d_un_200(monkeypatch):
+    """LM Studio répond 200 avec {"error": ...} quand le chemin de l'endpoint est
+    mauvais : sans garde, data["choices"] lève un KeyError nu et le message du
+    serveur — le seul qui explique quoi que ce soit — est perdu."""
+    body = json.dumps({"error": "Unexpected endpoint or method."}).encode()
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResponse(body))
+    with pytest.raises(Exception) as excinfo:
+        clipper._json_lmstudio("s", "u", {}, 7, "n")
+    assert "Unexpected endpoint or method." in str(excinfo.value)
+
+
+def test_lmstudio_remonte_le_corps_d_une_erreur_http(monkeypatch):
+    """Le dépassement de contexte sort en HTTP 400 avec l'explication dans le
+    corps : c'est le corps qu'il faut montrer, pas le code seul."""
+    message = ("Trying to keep the first 4646 tokens when context the overflows. "
+               "However, the model is loaded with context length of only 4096 tokens.")
+    body = json.dumps({"error": message}).encode()
+
+    def boom(*a, **k):
+        raise urllib.error.HTTPError("http://x/v1/chat/completions", 400,
+                                     "Bad Request", {}, io.BytesIO(body))
+    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    with pytest.raises(Exception) as excinfo:
+        clipper._json_lmstudio("s", "u", {}, 7, "n")
+    assert "400" in str(excinfo.value)
+    assert "context length of only 4096 tokens" in str(excinfo.value)
+
+
+def test_lmstudio_signale_une_reponse_sans_choices(monkeypatch):
+    body = json.dumps({"objet": "inattendu"}).encode()
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: _FakeResponse(body))
+    with pytest.raises(Exception) as excinfo:
+        clipper._json_lmstudio("s", "u", {}, 7, "n")
+    assert "inexploitable" in str(excinfo.value)
+    assert "inattendu" in str(excinfo.value)
 
 
 def test_clipper_defaults_match_beatsync():

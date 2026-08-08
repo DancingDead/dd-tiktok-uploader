@@ -13,6 +13,7 @@ centre.
 import json
 import os
 import subprocess
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -409,12 +410,21 @@ def _json_anthropic(system: str, user: str, schema: dict, seed: int,
     # L'API Messages n'expose pas de paramètre `seed` : on l'injecte dans le
     # texte du prompt pour la reproductibilité, comme le fait _punchline_user_prompt.
     user_with_seed = user + f"\n\n(variation n°{seed})"
+    # Les erreurs du SDK (clé absente, quota, surcharge) remontent telles quelles :
+    # leur message dit déjà ce qui ne va pas, l'emballer le rendrait plus opaque.
     resp = anthropic.Anthropic(timeout=300).messages.create(
         model=os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8"),
         max_tokens=4096, system=system,
         messages=[{"role": "user", "content": user_with_seed}],
         output_config={"format": {"type": "json_schema", "schema": schema}})
-    return json.loads(next(b.text for b in resp.content if b.type == "text"))
+    try:
+        text = next(b.text for b in resp.content if b.type == "text")
+    except StopIteration:
+        # Réponse sans bloc texte (refus, arrêt sur max_tokens) : un StopIteration
+        # nu ne dirait rien de ce que le modèle a réellement rendu.
+        raise RuntimeError(
+            f"réponse Anthropic sans texte : {str(resp.content)[:500]}") from None
+    return json.loads(text)
 
 
 def _json_lmstudio(system: str, user: str, schema: dict, seed: int,
@@ -437,9 +447,45 @@ def _json_lmstudio(system: str, user: str, schema: dict, seed: int,
         base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
     # 300 s : un transcript d'une heure fait travailler un modèle local longtemps.
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        data = json.loads(resp.read())
-    return json.loads(data["choices"][0]["message"]["content"])
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        # LM Studio met son explication dans le CORPS de la réponse, pas dans le
+        # statut : un dépassement de contexte sort en 400 en disant combien de
+        # tokens le prompt fait et combien le modèle accepte. Sans le corps,
+        # l'utilisateur ne voit qu'un « HTTP Error 400 » qui n'aide personne.
+        raise RuntimeError(
+            f"LM Studio a répondu HTTP {exc.code} : "
+            f"{_response_excerpt(exc)}") from exc
+    # Un chemin d'endpoint erroné (/chat/completions au lieu de
+    # /v1/chat/completions) rend un 200 portant {"error": ...} : sans ce test, la
+    # ligne suivante lève un KeyError nu et le message du serveur est perdu.
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(f"LM Studio : {_error_message(data['error'])}")
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(
+            f"réponse LM Studio inexploitable : {str(data)[:500]}") from exc
+    return json.loads(content)
+
+
+def _response_excerpt(exc: "urllib.error.HTTPError") -> str:
+    """Corps d'une réponse HTTP en erreur, tronqué. Un corps illisible ne doit
+    pas masquer le code HTTP, seule information qui reste alors."""
+    try:
+        return exc.read().decode("utf-8", "replace")[:500]
+    except Exception:
+        return "(corps illisible)"
+
+
+def _error_message(error) -> str:
+    """Message d'une erreur LM Studio : tantôt une chaîne, tantôt un objet à la
+    mode OpenAI portant `message`."""
+    if isinstance(error, dict):
+        return str(error.get("message") or error)[:500]
+    return str(error)[:500]
 
 
 # Nom de fonction par backend, résolu via globals() au moment de l'appel pour
