@@ -139,7 +139,7 @@ image. Le message explique les trois causes possibles.
 
 Volontairement : la base SQLite (`db.py`), l'interface (`webui.py`), la boucle
 de lot (`generate_niche.py`), le téléchargement (`fetch_tracks.py`), et le
-clipper (`clipper.py`/`clip_source.py`, [fiche 10](10-clipper.md)) — un second
+clipper (`clipper.py`/`clip_source.py`/`speaker.py`, [fiche 10](10-clipper.md)) — un second
 front de l'usine qui ne partage ni musique ni EDL avec ce pipeline.
 
 `beatsync.py` est utilisable **seul**, en CLI, sans base ni serveur :
