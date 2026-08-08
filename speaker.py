@@ -528,26 +528,36 @@ def detect_cuts(diffs: list[float], ratio: float = CUT_RATIO,
     return {i for i in range(1, len(diffs)) if diffs[i] > threshold}
 
 
-# Plancher du dénominateur de normalisation, en niveaux de gris. Une image
-# parfaitement statique donne un écart global nul : sans plancher, la division
-# lève une erreur, et juste au-dessus elle amplifierait le seul bruit de
-# compression jusqu'à des scores absurdes. Mesuré sur la source d'essai : l'écart
-# global descend à 0,61 niveau sur les plans les plus fixes, et sa médiane vaut
-# 4,3 à 9,4 niveaux — un plancher à 1 niveau ne borne donc que les images
-# réellement immobiles.
-GLOBAL_FLOOR = 1.0
+def _mouth_activity(previous, current, box: dict, scale: float) -> float:
+    """Agitation du tiers inférieur d'un rectangle entre deux images réduites.
 
+    LIMITE CONNUE, mesurée sur la source d'essai — à lire avant de vouloir
+    améliorer le cadrage sur du plan large en mouvement :
 
-def _mouth_activity(previous, current, box: dict, scale: float,
-                    global_diff: float) -> float:
-    """Agitation du tiers inférieur d'un rectangle, RAPPORTÉE à l'agitation de
-    l'image entière.
+    1. La mesure est biaisée par la TAILLE du visage : corrélation de −0,64
+       entre la hauteur du rectangle et l'agitation, sur 16 pistes. La fenêtre
+       de bouche d'un visage de 112 px fait une vingtaine de pixels de haut, sur
+       une zone fine et texturée où l'écart par pixel est structurellement plus
+       grand que sur la peau lisse d'un gros plan. Résultat : pendant un
+       panoramique, les figurants d'arrière-plan scorent 21,9 contre 13,7 pour
+       l'interlocuteur au premier plan, et le cadre choisit au hasard.
+    2. Normaliser par un facteur GLOBAL à l'image (l'écart inter-images, déjà
+       calculé pour `detect_cuts`) ne corrige PAS ce biais, et ne peut pas le
+       corriger : `speaker_timeline` compare les pistes entre elles SUR LES
+       MÊMES IMAGES, or diviser tous les scores d'une image par le même nombre
+       en laisse l'ordre inchangé. Essayé et mesuré : sortie identique segment
+       par segment. Un biais qui dépend de la région ne se corrige pas par un
+       facteur commun à toute l'image.
+    3. La seule piste testée qui classait dans le bon sens : rapporter la bouche
+       au HAUT DU MÊME VISAGE (front et yeux) — même objet, même échelle de
+       texture, même mouvement de caméra, donc le parasite s'annule des deux
+       côtés du rapport. Premier plan 0,77 contre arrière-plan 0,575 en
+       médianes. Écartée : l'écart reste sous la marge de bascule
+       (`SWITCH_MARGIN`), donc il ne suffirait pas à décider.
 
-    Une différence d'images ne distingue pas une bouche qui bouge d'une image
-    entière qui bouge : pendant un panoramique, la zone de la bouche change
-    énormément sans que personne ne parle. Ce qui doit compter, c'est de combien
-    la bouche bouge PLUS que le reste de l'image, d'où la division par l'écart
-    global — déjà calculé pour la détection de coupe, donc gratuit."""
+    Décision (ronde 3) : on livre ce qui marche — le cadrage est bon sur du
+    contenu à plans découpés — et on documente la limite sur le plan large en
+    panoramique, plutôt que d'empiler des correctifs sans modèle derrière."""
     x = int(box["x"] * scale)
     y = int((box["y"] + box["h"] * 2 / 3) * scale)
     w = max(1, int(box["w"] * scale))
@@ -557,8 +567,7 @@ def _mouth_activity(previous, current, box: dict, scale: float,
     if a.size == 0 or a.shape != b.shape:
         return 0.0
     import numpy as np
-    mouth = float(np.mean(np.abs(a.astype("int16") - b.astype("int16"))))
-    return mouth / max(global_diff, GLOBAL_FLOOR)
+    return float(np.mean(np.abs(a.astype("int16") - b.astype("int16"))))
 
 
 def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
@@ -624,14 +633,11 @@ def analyze_framing(video_path: Path, start: float, end: float, src_w: int,
             frame_boxes = [dict(b, detected=is_pass) for b in boxes]
             detections.append(frame_boxes)
             if previous is not None:
-                # En NIVEAUX pour normaliser l'agitation (même unité que la
-                # mesure de bouche), rapporté à la dynamique pour `detect_cuts`.
-                global_diff = float(np.mean(np.abs(
-                    small.astype("int16") - previous.astype("int16"))))
-                diffs.append(global_diff / 255)
+                diffs.append(float(np.mean(np.abs(
+                    small.astype("int16") - previous.astype("int16")))) / 255)
                 for box in frame_boxes:
                     activity_by_box[id(box)] = _mouth_activity(
-                        previous, small, box, DETECT_SCALE, global_diff)
+                        previous, small, box, DETECT_SCALE)
             previous = small
             index += 1
     finally:

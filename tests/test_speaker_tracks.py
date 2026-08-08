@@ -268,39 +268,3 @@ def test_une_piste_sans_aucune_mesure_est_ecartee():
     preuve qu'il parle, on ne lui donne pas le cadre."""
     t = {"id": 0, "boxes": {0: b(100, w=200, h=200)}, "activity": {}}
     assert usable_tracks([t], frame_h=1080) == []
-
-
-# --- _mouth_activity : la bouche rapportee a l'agitation de l'image ----------
-
-
-def _paire(mouvement_bouche, mouvement_global):
-    """Deux images grises 100x100 : le fond bouge de `mouvement_global`, et la
-    bande du bas (la bouche d'un rectangle qui couvre tout) bouge en plus."""
-    import numpy as np
-    avant = np.full((100, 100), 100, dtype="uint8")
-    apres = np.full((100, 100), 100 + mouvement_global, dtype="uint8")
-    apres[66:, :] = 100 + mouvement_global + mouvement_bouche
-    return avant, apres
-
-
-def test_l_agitation_est_rapportee_a_l_agitation_globale():
-    """Meme mouvement de bouche, deux fois plus de mouvement d'image : le score
-    doit etre deux fois plus faible. Sans cela, un panoramique fait passer tout
-    le monde pour bavard."""
-    from speaker import _mouth_activity
-    box = {"x": 0, "y": 0, "w": 100, "h": 100}
-    avant, apres = _paire(10, 0)
-    calme = _mouth_activity(avant, apres, box, 1.0, global_diff=10.0)
-    agite = _mouth_activity(avant, apres, box, 1.0, global_diff=20.0)
-    assert calme == pytest.approx(2 * agite)
-
-
-def test_une_image_parfaitement_statique_ne_divise_pas_par_zero():
-    """Ecart global nul : la division doit etre bornee par le plancher, pas
-    lever une erreur ni renvoyer un infini."""
-    from speaker import _mouth_activity
-    box = {"x": 0, "y": 0, "w": 100, "h": 100}
-    avant, apres = _paire(10, 0)
-    valeur = _mouth_activity(avant, apres, box, 1.0, global_diff=0.0)
-    assert valeur > 0
-    assert valeur < float("inf")
