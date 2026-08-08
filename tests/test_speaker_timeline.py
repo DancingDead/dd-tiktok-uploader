@@ -1,6 +1,6 @@
 import pytest
 
-from speaker import speaker_timeline
+from speaker import speaker_timeline, crop_segments, crop_expr
 
 
 def piste(id_, activity):
@@ -128,3 +128,80 @@ def test_deterministe():
 
 def test_clip_vide():
     assert speaker_timeline([], cuts=set(), n_frames=0, fps=FPS) == []
+
+
+def piste_pos(id_, positions):
+    """`positions` : dict index d'image -> x du CENTRE du visage."""
+    return {"id": id_,
+            "boxes": {i: {"x": int(x) - 100, "y": 0, "w": 200, "h": 200}
+                      for i, x in positions.items()},
+            "activity": {i: 5.0 for i in positions}}
+
+
+def test_segments_centres_quand_aucune_piste():
+    tl = [{"start": 0.0, "end": 5.0, "track_id": None}]
+    seg = crop_segments(tl, [], crop_w=600, src_w=1920)
+    assert seg == [{"start": 0.0, "end": 5.0, "x_start": 660, "x_end": 660}]
+
+
+def test_segment_cale_sur_le_visage_de_sa_piste():
+    """Visage centré en x=900 → crop de 600 large ancré en 900-300 = 600."""
+    a = piste_pos(0, {i: 900 for i in range(50)})
+    tl = [{"start": 0.0, "end": 5.0, "track_id": 0}]
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920)
+    assert seg[0]["x_start"] == 600 and seg[0]["x_end"] == 600
+
+
+def test_un_visage_qui_derive_donne_un_segment_qui_interpole():
+    a = piste_pos(0, {i: 500 + i * 10 for i in range(50)})
+    tl = [{"start": 0.0, "end": 5.0, "track_id": 0}]
+    seg = crop_segments(tl, [a], crop_w=600, src_w=1920)
+    assert seg[0]["x_start"] < seg[0]["x_end"]
+
+
+def test_les_x_sont_pairs_et_bornes_dans_l_image():
+    a = piste_pos(0, {i: 0 for i in range(10)})
+    z = piste_pos(1, {i: 5000 for i in range(10)})
+    tl = [{"start": 0.0, "end": 1.0, "track_id": 0},
+          {"start": 1.0, "end": 2.0, "track_id": 1}]
+    seg = crop_segments(tl, [a, z], crop_w=600, src_w=1920)
+    assert seg[0]["x_start"] == 0
+    assert seg[1]["x_start"] == 1320          # 1920 - 600
+    assert all(s[k] % 2 == 0 for s in seg for k in ("x_start", "x_end"))
+
+
+def test_une_piste_absente_de_la_timeline_ne_plante_pas():
+    """Robustesse : un track_id inconnu retombe sur le cadrage centré."""
+    tl = [{"start": 0.0, "end": 5.0, "track_id": 42}]
+    seg = crop_segments(tl, [], crop_w=600, src_w=1920)
+    assert seg[0]["x_start"] == 660
+
+
+def test_expr_constante_quand_tout_est_immobile():
+    seg = [{"start": 0.0, "end": 5.0, "x_start": 300, "x_end": 300}]
+    assert crop_expr(seg, crop_w=600, src_w=1920) == "300"
+
+
+def test_expr_saute_sec_entre_deux_segments():
+    """C'est le cœur de la fonctionnalité : une coupe, pas un glissement."""
+    seg = [{"start": 0.0, "end": 2.0, "x_start": 100, "x_end": 100},
+           {"start": 2.0, "end": 4.0, "x_start": 900, "x_end": 900}]
+    assert crop_expr(seg, crop_w=600, src_w=1920) == "if(lt(t,2),100,900)"
+
+
+def test_expr_interpole_a_l_interieur_d_un_segment():
+    seg = [{"start": 0.0, "end": 2.0, "x_start": 100, "x_end": 300}]
+    expr = crop_expr(seg, crop_w=600, src_w=1920)
+    assert "2*floor(" in expr and "t" in expr
+
+
+def test_expr_sans_segment_rend_le_centre():
+    assert crop_expr([], crop_w=600, src_w=1920) == "660"
+
+
+def test_expr_borne_le_nombre_de_paliers():
+    from speaker import MAX_STEPS
+    seg = [{"start": i * 0.4, "end": (i + 1) * 0.4,
+            "x_start": (i * 40) % 1200, "x_end": (i * 40) % 1200}
+           for i in range(400)]
+    assert crop_expr(seg, crop_w=600, src_w=1920).count("if(") <= MAX_STEPS

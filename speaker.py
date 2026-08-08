@@ -108,41 +108,72 @@ def _ramp(t0: float, x0: int, t1: float, x1: int) -> str:
     return f"2*floor(({x0}+{slope:g}*{elapsed})/2)"
 
 
-def crop_expr(track: list[float], sample_fps: float, crop_w: int,
-              src_w: int) -> str:
-    """Compile la trajectoire en expression FFmpeg pour `crop=x=…`, en
-    interpolant linéairement entre les points de la trajectoire. Une trajectoire
-    immobile rend un simple nombre — ce qui évite de demander une réévaluation
-    par frame (`eval=frame`, quand la ffmpeg installée connaît encore l'option,
-    voir `crop_supports_eval`) pour une constante. Pure."""
+def _anchor(center: float, crop_w: int, src_w: int) -> int:
+    """x du crop pour un visage centré en `center`, borné dans l'image et pair."""
+    return _even(min(max(0.0, center - crop_w / 2), max(0, src_w - crop_w)))
+
+
+def crop_segments(timeline: list[dict], tracks: list[dict], crop_w: int,
+                  src_w: int) -> list[dict]:
+    """Traduit la timeline en segments de cadrage. Un segment porte le x de son
+    début et celui de sa fin : le cadre suit doucement l'orateur pendant un plan
+    long, mais saute d'un segment à l'autre. Pure."""
     centre = _even(max(0, (src_w - crop_w) / 2))
-    if not track:
+    by_id = {t["id"]: t for t in tracks}
+    segments = []
+    for entry in timeline:
+        track = by_id.get(entry["track_id"])
+        if track is None or not track["boxes"]:
+            segments.append({**{k: entry[k] for k in ("start", "end")},
+                             "x_start": centre, "x_end": centre})
+            continue
+        indices = sorted(track["boxes"])
+        first, last = track["boxes"][indices[0]], track["boxes"][indices[-1]]
+        segments.append({
+            "start": entry["start"], "end": entry["end"],
+            "x_start": _anchor(first["x"] + first["w"] / 2, crop_w, src_w),
+            "x_end": _anchor(last["x"] + last["w"] / 2, crop_w, src_w)})
+    return segments
+
+
+def track_to_segments(centers: list[float], sample_fps: float, crop_w: int,
+                      src_w: int) -> list[dict]:
+    """Convertit une trajectoire plate en segments d'une image chacun. Sert au
+    chemin de repli (`speaker_cuts` désactivé), qui raisonne encore en
+    trajectoire — `crop_expr` fusionnera les paliers identiques. Pure."""
+    return [{"start": i / sample_fps, "end": (i + 1) / sample_fps,
+             "x_start": _anchor(x, crop_w, src_w),
+             "x_end": _anchor(x, crop_w, src_w)}
+            for i, x in enumerate(centers)]
+
+
+def crop_expr(segments: list[dict], crop_w: int, src_w: int) -> str:
+    """Compile les segments en expression FFmpeg pour `crop=x=…`.
+
+    Interpole À L'INTÉRIEUR d'un segment (l'orateur peut bouger pendant un plan
+    long) et SAUTE SEC entre deux segments — c'est la coupe demandée, un
+    glissement d'un visage à l'autre se lirait comme une dérive. Une suite
+    entièrement immobile rend une constante, ce qui évite de demander une
+    réévaluation par frame (voir `clipper.crop_supports_eval`). Pure."""
+    centre = _even(max(0, (src_w - crop_w) / 2))
+    if not segments:
         return str(centre)
+    # Plafond de paliers : au-delà l'expression devient illisible et coûteuse.
+    # Le dernier segment retenu est prolongé jusqu'à la fin plutôt que tronqué,
+    # pour que le cadre ne reparte jamais au centre en cours de clip.
+    if len(segments) > MAX_STEPS:
+        segments = segments[:MAX_STEPS - 1] + [
+            {**segments[MAX_STEPS - 1], "end": segments[-1]["end"]}]
+    if all(s["x_start"] == s["x_end"] == segments[0]["x_start"]
+           for s in segments):
+        return str(segments[0]["x_start"])
 
-    xs = [_even(min(max(0.0, c - crop_w / 2), max(0, src_w - crop_w)))
-          for c in track]
-    # Un point par seconde suffit : la zone morte a déjà supprimé tout ce qui
-    # bouge plus vite, et un palier par frame ferait exploser l'expression.
-    step = max(1, int(round(sample_fps)))
-    keyed = [(i / sample_fps, xs[i]) for i in range(0, len(xs), step)]
-    # Paliers consécutifs identiques fusionnés : c'est le cas courant (plan fixe).
-    merged: list[tuple[float, int]] = []
-    for time, x in keyed:
-        if not merged or merged[-1][1] != x:
-            merged.append((time, x))
-    if len(merged) > MAX_STEPS:
-        keep = max(1, len(merged) // MAX_STEPS + 1)
-        merged = merged[::keep]
-    if len(merged) == 1:
-        return str(merged[0][1])
-
-    # Emboîtement en partant de la fin : chaque segment interpole jusqu'au point
-    # suivant ; après le dernier point, le cadre tient sa valeur.
-    expr = str(merged[-1][1])
-    for (time, x), (next_time, next_x) in zip(reversed(merged[:-1]),
-                                              reversed(merged[1:])):
-        expr = (f"if(lt(t,{next_time:g}),"
-                f"{_ramp(time, x, next_time, next_x)},{expr})")
+    expr = _ramp(segments[-1]["start"], segments[-1]["x_start"],
+                 segments[-1]["end"], segments[-1]["x_end"])
+    for segment in reversed(segments[:-1]):
+        inner = _ramp(segment["start"], segment["x_start"],
+                      segment["end"], segment["x_end"])
+        expr = f"if(lt(t,{segment['end']:g}),{inner},{expr})"
     return expr
 
 
