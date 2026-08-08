@@ -45,13 +45,43 @@ def test_pas_de_bascule_sous_la_marge():
 
 
 def test_min_shot_empeche_le_clignotement():
-    """La domination alterne toutes les 0,3 s ; avec min_shot à 1,2 s le cadre
-    ne peut pas changer plus vite qu'une fois par 1,2 s."""
-    a = piste(0, {i: (9.0 if (i // 3) % 2 == 0 else 0.5) for i in range(120)})
-    b = piste(1, {i: (0.5 if (i // 3) % 2 == 0 else 9.0) for i in range(120)})
+    """La domination alterne toutes les 1,0 s (plus lentement que la fenêtre
+    glissante de 0,6 s, pour que les bascules aient réellement lieu) ; avec
+    min_shot à 1,2 s le cadre ne peut pas changer plus vite qu'une fois par
+    1,2 s. Le test exige aussi plusieurs segments : sinon `durees[:-1]` est
+    vide et la garantie ne serait pas vérifiée."""
+    a = piste(0, {i: (9.0 if (i // 10) % 2 == 0 else 0.0) for i in range(120)})
+    b = piste(1, {i: (0.0 if (i // 10) % 2 == 0 else 9.0) for i in range(120)})
     tl = speaker_timeline([a, b], cuts=set(), n_frames=120, fps=FPS, min_shot=1.2)
+    assert len(tl) >= 2
     durees = [s["end"] - s["start"] for s in tl]
     assert all(d >= 1.2 - 1e-6 for d in durees[:-1])
+
+
+def test_un_cadrage_initial_a_l_aveugle_ne_verrouille_pas_le_plan():
+    """Personne ne parle sur les premieres images : le choix initial est
+    arbitraire (egalite a zero, on prend le plus petit id). Il ne doit pas
+    bloquer le plancher contre celui qui prend la parole ensuite.
+
+    La fenetre de mesure etant centree, elle voit 0,3 s dans le futur : pour
+    que le choix initial soit vraiment aveugle, la parole doit commencer bien
+    au-dela de cette demi-fenetre."""
+    a = piste(0, {i: 0.0 for i in range(100)})
+    b = piste(1, {i: (0.0 if i < 10 else 9.0) for i in range(100)})
+    tl = speaker_timeline([a, b], cuts=set(), n_frames=100, fps=FPS, min_shot=1.2)
+    assert tl[-1]["track_id"] == 1
+    assert tl[0]["end"] < 1.2      # la bascule n'a pas attendu le plancher
+
+
+def test_une_rafale_de_coupes_ne_produit_pas_de_plans_d_une_image():
+    """Toutes les images marquees comme coupe : sans plancher court, on
+    obtiendrait des plans de 0,1 s."""
+    a = piste(0, {i: (9.0 if (i // 10) % 2 == 0 else 0.0) for i in range(120)})
+    b = piste(1, {i: (0.0 if (i // 10) % 2 == 0 else 9.0) for i in range(120)})
+    tl = speaker_timeline([a, b], cuts=set(range(120)), n_frames=120, fps=FPS,
+                          min_shot=1.2)
+    assert len(tl) >= 2
+    assert all(s["end"] - s["start"] >= 0.4 - 1e-6 for s in tl[:-1])
 
 
 def test_une_coupe_de_la_source_autorise_une_bascule_plus_tot():

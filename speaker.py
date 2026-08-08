@@ -272,21 +272,29 @@ SWITCH_MARGIN = 1.5
 # moins d'une seconde ; sans plancher, le cadre ferait des allers-retours qui se
 # lisent comme un bug et non comme un montage.
 MIN_SHOT = 1.2
+# Plancher réduit qui s'applique quand même sur une coupe de la source. La
+# coupe rend le SAUT invisible, mais pas un plan d'un dixième de seconde
+# regardable : sans ce second plancher, une rafale de coupes rapprochées (ou
+# même une seule plage de coupes) désactiverait complètement MIN_SHOT.
+CUT_MIN_SHOT = 0.4
 
 
 def _windowed_activity(track: dict, index: int, half: int) -> float:
     """Agitation moyenne d'une piste autour d'une image. Une image sans mesure
-    compte pour zéro : un visage non détecté ne parle pas, de notre point de vue."""
+    compte pour zéro : un visage non détecté ne parle pas, de notre point de vue.
+    `half >= 1`, donc la fenêtre contient toujours au moins 3 échantillons."""
     values = [track["activity"].get(i, 0.0)
               for i in range(index - half, index + half + 1)]
-    return sum(values) / len(values) if values else 0.0
+    return sum(values) / len(values)
 
 
 def speaker_timeline(tracks: list[dict], cuts: set[int], n_frames: int,
                      fps: float, min_shot: float = MIN_SHOT) -> list[dict]:
     """Qui tient le cadre, à chaque instant. Segments contigus couvrant tout le
-    clip ; `track_id` à None quand aucune piste ne s'impose (cadrage centré).
-    Pure."""
+    clip. `track_id` ne vaut None que s'il n'y a AUCUNE piste candidate
+    (cadrage centré) : dès qu'une piste existe, on tient toujours le dernier
+    cadrage plutôt que de recentrer — y compris en silence total, où recentrer
+    se lirait comme une panne. Pure."""
     if n_frames <= 0:
         return []
     if not tracks:
@@ -294,25 +302,38 @@ def speaker_timeline(tracks: list[dict], cuts: set[int], n_frames: int,
 
     half = max(1, int(round(ACTIVITY_WINDOW * fps / 2)))
     min_frames = max(1, int(round(min_shot * fps)))
+    cut_min_frames = max(1, int(round(CUT_MIN_SHOT * fps)))
     current = None
     since = 0
+    # Le plancher ne protège qu'un cadrage choisi en connaissance de cause. Le
+    # tout premier choix, à `index == 0`, peut être fait à l'aveugle (silence
+    # total : le départage `-k` élit alors arbitrairement l'identifiant le
+    # plus petit) — ce choix ne doit pas verrouiller le plan pendant min_shot,
+    # sans quoi le premier qui parle vraiment serait tenu à l'écart. `armed`
+    # ne passe à True qu'au moment d'un choix appuyé sur un score positif.
+    armed = False
     boundaries: list[tuple[int, int | None]] = []
     for index in range(n_frames):
         scores = {t["id"]: _windowed_activity(t, index, half) for t in tracks}
         best = max(scores, key=lambda k: (scores[k], -k))
         if current is None:
             current, since = best, index
+            armed = scores[best] > 0
             boundaries.append((index, current))
             continue
-        # Une coupe de la source rend le saut invisible : min_shot ne s'y
-        # applique pas.
-        libre = index in cuts or (index - since) >= min_frames
+        if not armed:
+            libre = True
+        elif index in cuts:
+            libre = (index - since) >= cut_min_frames
+        else:
+            libre = (index - since) >= min_frames
         # Marge de bascule : le tenant garde la main tant qu'il n'est pas
-        # nettement dépassé. Un tenant à zéro (silence) n'est pas dépassé non
-        # plus — on tient plutôt que de recentrer.
+        # nettement dépassé. Si tous les scores sont nuls (silence total),
+        # personne n'est dépassé : on tient plutôt que de recentrer.
         domine = scores[best] > SWITCH_MARGIN * scores[current] and scores[best] > 0
         if best != current and libre and domine:
             current, since = best, index
+            armed = True
             boundaries.append((index, current))
 
     segments = []
