@@ -2,4 +2,5 @@
 # Les lignes commençant par # sont ignorées.
 # Puis :  uv run python fetch_tracks.py
 # Les mp3 arrivent dans tracks/
-https://www.youtube.com/watch?v=qi2rByJed-E
+https://www.youtube.com/watch?v=2rP0J-bFjMs
+https://www.youtube.com/watch?v=XNwnSUq4BD0

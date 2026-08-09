@@ -3,12 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from db import (add_member, connect, create_niche, create_preset,
-                create_video, delete_niche, delete_preset, effective_config,
-                get_niche, list_members, list_niches, list_presets,
-                list_videos, niche_clips_dir, niche_links_path, set_password,
-                set_video_status, slugify, update_niche, update_preset,
-                verify_member)
+from db import (add_member, connect, create_clipper_clip, create_clipper_source,
+                create_niche, create_preset, create_video, delete_clipper_clip,
+                delete_clipper_source, delete_niche, delete_preset, effective_config,
+                get_clipper_source, get_niche, list_clipper_clips,
+                list_clipper_sources, list_members, list_niches, list_presets,
+                list_videos, niche_clips_dir, niche_links_path, set_clipper_clip_status,
+                set_clipper_source_status, set_password, set_video_status, slugify,
+                update_niche, update_preset, verify_member)
 
 
 @pytest.fixture
@@ -236,3 +238,60 @@ def test_delete_video_removes_row(conn, tmp_path):
     delete_video(conn, vid)
     assert list_videos(conn, niche_id=nid) == []
     delete_video(conn, vid)   # id inconnu : no-op, pas d'erreur
+
+
+def test_clipper_source_crud(tmp_path):
+    conn = connect(tmp_path / "platform.db")
+    sid = create_clipper_source(
+        conn, title="Interview Kernel", slug="interview-kernel",
+        path="data/clipper/interview-kernel/source.mp4", duration=3600.0,
+        created_at="2026-08-07T10:00:00")
+
+    source = get_clipper_source(conn, sid)
+    assert source["title"] == "Interview Kernel"
+    assert source["status"] == "pending"       # statut initial
+    assert source["error"] is None
+
+    set_clipper_source_status(conn, sid, "failed", "aucune parole détectée")
+    assert get_clipper_source(conn, sid)["error"] == "aucune parole détectée"
+
+    assert [s["id"] for s in list_clipper_sources(conn)] == [sid]
+    delete_clipper_source(conn, sid)
+    assert get_clipper_source(conn, sid) is None
+
+
+def test_clipper_clips_sorted_by_score_and_cascade(tmp_path):
+    conn = connect(tmp_path / "platform.db")
+    sid = create_clipper_source(
+        conn, title="Live", slug="live", path="p.mp4", duration=600.0,
+        created_at="2026-08-07T10:00:00")
+
+    def add(title, score):
+        return create_clipper_clip(
+            conn, source_id=sid, start=10.0, end=40.0, title=title,
+            hook=80, flow=70, value=60, score=score, why="parce que",
+            file=f"data/clipper/live/clips/{title}.mp4")
+
+    add("faible", 41.0)
+    add("fort", 88.0)
+
+    clips = list_clipper_clips(conn, sid)
+    assert [c["title"] for c in clips] == ["fort", "faible"]   # score décroissant
+    assert clips[0]["status"] == "proposed"
+
+    set_clipper_clip_status(conn, clips[0]["id"], "approved")
+    assert list_clipper_clips(conn, sid)[0]["status"] == "approved"
+
+    # Supprimer la source emporte ses clips (ON DELETE CASCADE + PRAGMA actif).
+    delete_clipper_source(conn, sid)
+    assert list_clipper_clips(conn, sid) == []
+
+
+def test_clipper_tables_created_on_existing_db(tmp_path):
+    """Une base créée avant le clipper doit gagner les tables à la reconnexion."""
+    path = tmp_path / "platform.db"
+    connect(path).close()
+    conn = connect(path)
+    tables = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {"clipper_sources", "clipper_clips"} <= tables

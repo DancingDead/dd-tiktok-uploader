@@ -76,6 +76,26 @@ DEFAULT_CONFIG = {
         "model": "claude-opus-4-8",     # modèle de génération
         "font": "impact",               # police embarquée : impact|classique|sobre|condensee|douce|elegante
     },
+    # Onglet Clipper : vidéo longue → shorts. Littéral volontairement dupliqué
+    # de clipper.DEFAULTS : importer clipper ici inverserait la dépendance
+    # (beatsync est le cœur du montage, clipper un second front indépendant) et
+    # paierait son import à chaque `import beatsync`. Le test
+    # test_clipper_defaults_match_beatsync (tests/test_clipper_llm.py) garde
+    # les deux alignés sans les coupler.
+    "clipper": {
+        "whisper_model": "small",   # taille du modèle faster-whisper
+        "clip_count": 8,            # nombre de shorts gardés par source
+        "min_dur": 15.0,            # s : en dessous, un extrait n'a pas d'histoire
+        "max_dur": 60.0,            # s : au-delà, ce n'est plus un short
+        "digest_chars": 6000,       # caractères de transcript envoyés par appel LLM
+        # Recadrage sur celui qui parle, avec coupes franches. Désactivable : si la
+        # détection se comporte mal sur un contenu donné, on doit pouvoir revenir au
+        # suivi simple sans attendre un correctif.
+        "speaker_cuts": True,
+        # Durée minimale d'un plan, en secondes. En dessous le cadre clignote, au
+        # delà il reste sur quelqu'un qui ne parle plus.
+        "min_shot": 1.2,
+    },
     "delogo": True,                     # gomme la zone du logo Crunchyroll (coin haut-gauche)
     "phrase_beats": 16,                 # fin de fenêtre calée sur des phrases de N beats
     "crf": 20,

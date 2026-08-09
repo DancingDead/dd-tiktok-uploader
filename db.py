@@ -49,6 +49,32 @@ CREATE TABLE IF NOT EXISTS videos (
   created_at TEXT NOT NULL,
   error TEXT
 );
+CREATE TABLE IF NOT EXISTS clipper_sources (
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  slug TEXT UNIQUE NOT NULL,
+  path TEXT NOT NULL,
+  duration REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending','transcribing','analyzing','rendering','done','failed')),
+  error TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS clipper_clips (
+  id INTEGER PRIMARY KEY,
+  source_id INTEGER NOT NULL REFERENCES clipper_sources(id) ON DELETE CASCADE,
+  start REAL NOT NULL,
+  end REAL NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  hook INTEGER NOT NULL DEFAULT 0,
+  flow INTEGER NOT NULL DEFAULT 0,
+  value INTEGER NOT NULL DEFAULT 0,
+  score REAL NOT NULL DEFAULT 0,
+  why TEXT NOT NULL DEFAULT '',
+  file TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'proposed'
+    CHECK (status IN ('proposed','approved','rejected','posted'))
+);
 """
 
 
@@ -258,6 +284,82 @@ def set_video_status(conn: sqlite3.Connection, video_id: int, status: str,
 def delete_video(conn: sqlite3.Connection, video_id: int) -> None:
     """Retire la ligne vidéo (le fichier sur disque est géré par l'appelant)."""
     conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
+    conn.commit()
+
+
+# --- Clipper : sources longues et clips extraits ---------------------------------
+
+
+def clipper_source_dir(data_root: Path, slug: str) -> Path:
+    return data_root / "clipper" / slug
+
+
+def create_clipper_source(conn: sqlite3.Connection, *, title: str, slug: str,
+                          path: str, duration: float, created_at: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO clipper_sources (title, slug, path, duration, created_at)"
+        " VALUES (?,?,?,?,?)", (title, slug, path, float(duration), created_at))
+    conn.commit()
+    return cur.lastrowid
+
+
+def get_clipper_source(conn: sqlite3.Connection, source_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM clipper_sources WHERE id = ?",
+                       (source_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_clipper_sources(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM clipper_sources ORDER BY created_at DESC, id DESC")]
+
+
+def set_clipper_source_status(conn: sqlite3.Connection, source_id: int,
+                              status: str, error: str | None = None) -> None:
+    conn.execute("UPDATE clipper_sources SET status = ?, error = ? WHERE id = ?",
+                 (status, error, source_id))
+    conn.commit()
+
+
+def delete_clipper_source(conn: sqlite3.Connection, source_id: int) -> None:
+    """Retire la source (et ses clips, par cascade). Les fichiers sur disque
+    sont gérés par l'appelant, comme pour delete_video."""
+    conn.execute("DELETE FROM clipper_sources WHERE id = ?", (source_id,))
+    conn.commit()
+
+
+def create_clipper_clip(conn: sqlite3.Connection, *, source_id: int, start: float,
+                        end: float, title: str, hook: int, flow: int, value: int,
+                        score: float, why: str, file: str) -> int:
+    cur = conn.execute(
+        "INSERT INTO clipper_clips (source_id, start, end, title, hook, flow,"
+        " value, score, why, file) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (source_id, float(start), float(end), title, int(hook), int(flow),
+         int(value), float(score), why, file))
+    conn.commit()
+    return cur.lastrowid
+
+
+def list_clipper_clips(conn: sqlite3.Connection,
+                       source_id: int | None = None) -> list[dict]:
+    query, params = "SELECT * FROM clipper_clips WHERE 1=1", []
+    if source_id is not None:
+        query += " AND source_id = ?"
+        params.append(source_id)
+    # id en second critère : deux clips ex æquo gardent un ordre stable.
+    return [dict(r) for r in conn.execute(query + " ORDER BY score DESC, id ASC",
+                                          params)]
+
+
+def set_clipper_clip_status(conn: sqlite3.Connection, clip_id: int,
+                            status: str) -> None:
+    conn.execute("UPDATE clipper_clips SET status = ? WHERE id = ?",
+                 (status, clip_id))
+    conn.commit()
+
+
+def delete_clipper_clip(conn: sqlite3.Connection, clip_id: int) -> None:
+    conn.execute("DELETE FROM clipper_clips WHERE id = ?", (clip_id,))
     conn.commit()
 
 

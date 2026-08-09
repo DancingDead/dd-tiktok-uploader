@@ -44,3 +44,16 @@ def test_ytdlp_args_video_mode():
     selector = args[args.index("-f") + 1]
     for alternative in selector.split("/"):
         assert "[height<=1080]" in alternative, alternative
+    # Le catalogue clips/ de beatsync n'a que faire du son : le défaut ne doit
+    # pas changer, sinon tout le catalogue serait à retélécharger.
+    assert "+ba" not in selector
+    assert "--merge-output-format" not in args
+
+
+def test_ytdlp_args_video_avec_audio_muxe_une_piste_son():
+    """Sans +ba, yt-dlp rend le meilleur flux VIDÉO SEULE et la source du
+    clipper arrive muette — donc condamnée avant la transcription."""
+    args = ytdlp_args(Path("inbox"), video=True, with_audio=True)
+    selector = args[args.index("-f") + 1]
+    assert "+ba" in selector
+    assert args[args.index("--merge-output-format") + 1] == "mp4"

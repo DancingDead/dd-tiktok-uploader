@@ -2,6 +2,8 @@
 
 > Fiche 00 · les 6 sous-systèmes et ce qui les relie.
 > Détail : [01](01-analyse-audio.md) · [02](02-scan-clips.md) · [03](03-cadrage.md) · [04](04-build-edl.md) · [05](05-punchlines.md) · [06](06-rendu.md)
+> Voir aussi : [10 — clipper](10-clipper.md), un **sous-système parallèle** —
+> vidéo longue parlée → shorts classés, pas une étape de ce pipeline.
 
 ## L'idée en une phrase
 
@@ -131,11 +133,14 @@ image. Le message explique les trois causes possibles.
 | régler la fenêtre / le drop | [01](01-analyse-audio.md) + [03](03-cadrage.md) |
 | toucher aux effets visuels | [06 — rendu](06-rendu.md) |
 | changer de modèle LLM | [05 — punchlines](05-punchlines.md) |
+| découper une vidéo longue en shorts (pas du montage aux beats) | [10 — clipper](10-clipper.md) |
 
 ## Ce qui n'est pas dans beatsync.py
 
 Volontairement : la base SQLite (`db.py`), l'interface (`webui.py`), la boucle
-de lot (`generate_niche.py`), le téléchargement (`fetch_tracks.py`).
+de lot (`generate_niche.py`), le téléchargement (`fetch_tracks.py`), et le
+clipper (`clipper.py`/`clip_source.py`/`speaker.py`, [fiche 10](10-clipper.md)) — un second
+front de l'usine qui ne partage ni musique ni EDL avec ce pipeline.
 
 `beatsync.py` est utilisable **seul**, en CLI, sans base ni serveur :
 

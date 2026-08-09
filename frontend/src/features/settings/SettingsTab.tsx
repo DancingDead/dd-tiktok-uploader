@@ -15,6 +15,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
+// Doit rester aligné sur webui.ALLOWED_WHISPER_MODELS : le serveur refuse en
+// 400 tout autre nom (il finit dans un chargement de modèle faster-whisper).
+const WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3"]
+
 export function SettingsTab({
   state,
   refresh,
@@ -31,6 +35,13 @@ export function SettingsTab({
 
   function setAccent(key: keyof Settings["accents"], value: boolean) {
     setLocal((s) => ({ ...s, accents: { ...s.accents, [key]: value } }))
+  }
+
+  function setClipper(
+    key: keyof Settings["clipper"],
+    value: string | number | boolean,
+  ) {
+    setLocal((s) => ({ ...s, clipper: { ...s.clipper, [key]: value } }))
   }
 
   async function save() {
@@ -218,6 +229,126 @@ export function SettingsTab({
                 }
               />
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Clipper</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="whisper_model">Modèle de transcription</Label>
+              <Select
+                value={local.clipper.whisper_model ?? "small"}
+                onValueChange={(v) => setClipper("whisper_model", v)}
+              >
+                <SelectTrigger id="whisper_model" className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {WHISPER_MODELS.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Plus le modèle est gros, meilleure est la transcription — et plus
+              l'analyse est longue : la transcription dure environ une fois la
+              durée de la vidéo en « small », plusieurs fois en « large-v3 ».
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clip_count">Shorts par source</Label>
+              <Input
+                id="clip_count"
+                type="number"
+                min={1}
+                max={30}
+                className="w-20"
+                value={local.clipper.clip_count ?? 8}
+                onChange={(e) => setClipper("clip_count", Number(e.target.value))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_min_dur">Durée min … s</Label>
+              <Input
+                id="clipper_min_dur"
+                type="number"
+                min={3}
+                max={180}
+                className="w-20"
+                value={local.clipper.min_dur ?? 15}
+                onChange={(e) => setClipper("min_dur", Number(e.target.value))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_max_dur">Durée max … s</Label>
+              <Input
+                id="clipper_max_dur"
+                type="number"
+                min={3}
+                max={180}
+                className="w-20"
+                value={local.clipper.max_dur ?? 60}
+                onChange={(e) => setClipper("max_dur", Number(e.target.value))}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_digest_chars">Transcript par appel</Label>
+              <Input
+                id="clipper_digest_chars"
+                type="number"
+                min={1000}
+                max={60000}
+                step={500}
+                className="w-24"
+                value={local.clipper.digest_chars ?? 6000}
+                onChange={(e) => setClipper("digest_chars", Number(e.target.value))}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Taille de transcript envoyée en une fois au modèle : au-delà, la
+              transcription est découpée en plusieurs appels. À régler d'après le
+              contexte du modèle chargé dans LM Studio, en comptant environ
+              2,3 caractères par token (6000 caractères ≈ 2600 tokens).
+            </p>
+            <label className="flex items-center gap-3 text-sm">
+              <Checkbox
+                checked={local.clipper.speaker_cuts ?? true}
+                onCheckedChange={(v) => setClipper("speaker_cuts", v === true)}
+              />
+              Recadrer sur celui qui parle
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Le cadre suit l'intervenant qui parle et change de personne par une
+              coupe franche. Fiable sur une vidéo déjà montée en plans découpés,
+              beaucoup moins sur du plan large filmé à l'épaule, où le mouvement
+              de caméra couvre le signal. Décoche pour revenir au suivi simple du
+              plus grand visage.
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="clipper_min_shot">Durée minimale d'un plan (s)</Label>
+              <Input
+                id="clipper_min_shot"
+                type="number"
+                step="0.1"
+                min={0.4}
+                max={5}
+                className="w-20"
+                // Sans recadrage sur le locuteur, le repli ne découpe pas en
+                // plans : le champ ne pilote plus rien, autant le dire.
+                disabled={(local.clipper.speaker_cuts ?? true) !== true}
+                value={local.clipper.min_shot ?? 1.2}
+                onChange={(e) => setClipper("min_shot", Number(e.target.value))}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              En dessous, le cadre clignote ; au-delà, il reste sur quelqu'un qui
+              ne parle plus.
+            </p>
           </CardContent>
         </Card>
       </div>
