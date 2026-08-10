@@ -247,6 +247,15 @@ def _run_job(job_id: str, argv: list[str]) -> None:
         _jobs[job_id]["status"] = "done" if process.returncode == 0 else "failed"
 
 
+def running_job_names(prefix: str) -> list[str]:
+    """Noms des jobs en cours dont le nom commence par `prefix`. Sert aux
+    gardes d'exclusion entre opérations qui se marchent dessus (rognage
+    pendant une génération, par exemple)."""
+    with _jobs_lock:
+        return sorted(job["name"] for job in _jobs.values()
+                      if job["status"] == "running" and job["name"].startswith(prefix))
+
+
 def start_job(name: str, argv: list[str]) -> str:
     with _jobs_lock:
         for job in _jobs.values():
@@ -341,6 +350,15 @@ def create_app(root: Path | None = None):
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
     # Le catalogue « clips » contient les deux : une image se monte en flash court.
     CLIP_EXTS = VIDEO_EXTS | IMAGE_EXTS
+    # Formats rognables. `.webm` en est exclu : le temporaire hérite du suffixe
+    # de la source et le rognage réencode en libx264, que le muxeur WebM refuse
+    # (« Only VP8 or VP9 or AV1 video and Vorbis or Opus audio are supported »,
+    # code 234) — l'action échouait donc SYSTÉMATIQUEMENT. Renommer la sortie
+    # en .mp4 casserait les sélections de clips des niches, qui référencent le
+    # chemin ; l'upload et le montage continuent d'accepter le .webm, seul le
+    # rognage le refuse. Retiré de VIDEO_EXTS plutôt qu'ici, il disparaîtrait
+    # aussi du catalogue et du Clipper.
+    TRIMMABLE_EXTS = VIDEO_EXTS - {".webm"}
 
     @app.get("/api/state")
     def state():
@@ -482,7 +500,20 @@ def create_app(root: Path | None = None):
             return jsonify({"error": "chemin invalide"}), 400
         if not target.is_file():
             return jsonify({"error": "fichier introuvable"}), 404
-        target.unlink()
+        try:
+            target.unlink()
+        except OSError as exc:
+            # Sous Windows, supprimer un fichier qu'un autre process tient
+            # ouvert lève PermissionError — et c'est le cas courant ici : un
+            # rognage ou une génération lit ce clip. Le contrat du projet est
+            # « 400/409, jamais 500 », et le Clipper traite déjà ce cas en 409.
+            # La référence en base n'est PAS retirée : le fichier est toujours
+            # là, une niche qui le perdrait de sa sélection sans qu'il
+            # disparaisse du disque serait pire que l'échec.
+            return jsonify({"error":
+                            f"suppression de {safe} refusée ({exc}) — un autre "
+                            f"programme tient le fichier (rognage ou génération "
+                            f"en cours, lecteur, antivirus). Réessaie plus tard."}), 409
         ref = prefix + safe
         field = "tracks" if prefix == "tracks/" else "clips"
         conn = get_conn()
@@ -552,9 +583,11 @@ def create_app(root: Path | None = None):
         import trim_clip as trimmod
 
         safe = Path(name).name  # neutralise toute traversée de chemin
-        # VIDEO_EXTS et non CLIP_EXTS : ce dernier contient aussi les images,
-        # et rogner un .jpg n'a pas de sens (monté en flash court, sans durée).
-        if Path(safe).suffix.lower() not in VIDEO_EXTS:
+        # TRIMMABLE_EXTS et non CLIP_EXTS : ce dernier contient aussi les
+        # images, et rogner un .jpg n'a pas de sens (monté en flash court, sans
+        # durée). Ni VIDEO_EXTS, qui contient le .webm, incompatible avec le
+        # réencodage H.264 (voir la constante).
+        if Path(safe).suffix.lower() not in TRIMMABLE_EXTS:
             return jsonify({"error": f"format non rognable : {safe}"}), 400
         base = paths["clips"].resolve()
         target = (base / safe).resolve()
@@ -562,6 +595,26 @@ def create_app(root: Path | None = None):
             return jsonify({"error": "chemin invalide"}), 400
         if not target.is_file():
             return jsonify({"error": "clip introuvable"}), 404
+
+        # Aucune génération ne doit tourner : `load_clips` et `scan_clips` ont
+        # déjà lu la durée du clip et l'EDL est calculé dessus. Rogner sous
+        # leurs pieds donne, sous macOS, des segments noirs (un `-ss` au-delà
+        # de la fin du clip devenu court) sans rien qui pointe vers le rognage ;
+        # sous Windows, un `replace` refusé parce que la génération tient un
+        # handle — deux minutes d'encodage perdues et une erreur incompréhensible.
+        # La garde est volontairement grossière (n'importe quelle génération,
+        # pas seulement celles qui sélectionnent CE clip) : savoir précisément
+        # quels clips un lot en cours utilise demanderait de rejouer sa
+        # sélection, alors que les générations sont longues mais rares et que
+        # le risque est une perte de travail des deux côtés. Même précédent que
+        # `DELETE /api/clipper/sources/<id>`.
+        en_cours = running_job_names("gen-")
+        if en_cours:
+            return jsonify({"error":
+                            f"une génération tourne ({', '.join(en_cours)}) et lit "
+                            f"les clips du catalogue : rogner maintenant produirait "
+                            f"des segments noirs ou ferait échouer le lot. Attends la "
+                            f"fin de la génération, puis relance le rognage."}), 409
 
         body = request.json or {}
         # Un JSON valide mais non-objet (liste, nombre…) ferait planter le
