@@ -18,6 +18,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -83,8 +84,13 @@ def ffmpeg_trim_args(source: Path, target: Path, start: float,
         # donnée dont on n'a pas besoin n'est pas une raison de la détruire.
         # `copy` est un no-op quand il n'y a pas de piste.
         "-c:a", "copy", "-movflags", "+faststart",
-        # Mêmes flags que le reste du projet : sans eux, l'encodeur date le
-        # fichier et deux encodages identiques diffèrent octet à octet.
+        # Même invariant que le reste du projet (sans eux, l'encodeur date le
+        # fichier et deux encodages identiques diffèrent octet à octet), mais
+        # pas la même écriture : beatsync pose la forme globale
+        # `-bitexact -map_metadata -1`, ici les trois formes séparées
+        # (conteneur, vidéo, audio) et pas de `-map_metadata -1`. Les
+        # métadonnées de la source sont volontairement conservées : ce fichier
+        # reste un clip du catalogue, pas une sortie finale.
         "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
         str(target),
     ]
@@ -95,6 +101,38 @@ def ffmpeg_trim_args(source: Path, target: Path, start: float,
 # qu'un fichier voisin parce que `load_clips` et `/api/state` parcourent
 # `clips/` et prendraient un `xxx.trim.mp4` oublié pour un vrai clip.
 TRIM_DIR_NAME = ".trim"
+# Âge au-delà duquel un temporaire de `.trim/` est considéré comme mort et
+# supprimé. 24 h : très au-dessus du rognage le plus long (quelques minutes),
+# donc aucun risque d'effacer le temporaire d'un rognage en cours, y compris
+# celui d'un autre process.
+TRIM_MAX_AGE = 24 * 3600
+
+
+def purge_temporaires(temp_dir: Path, max_age: float = TRIM_MAX_AGE,
+                      now: float | None = None, log=print) -> list[str]:
+    """Supprime les temporaires morts de `.trim/` et rend leurs noms. I/O.
+
+    Chaque `kill -9`, coupure de courant ou `replace` refusé laisse dans ce
+    dossier un mp4 partiel de plusieurs centaines de mégaoctets. Or `.trim/`
+    est invisible par construction : ni l'interface, ni `load_clips`, ni la
+    colonne Taille ne le montrent — personne n'ira l'inspecter, et le premier
+    symptôme serait une génération qui échoue sur disque plein."""
+    now = time.time() if now is None else now
+    purges = []
+    for entry in temp_dir.glob("*"):
+        try:
+            if not entry.is_file() or now - entry.stat().st_mtime <= max_age:
+                continue
+            entry.unlink()
+        except OSError as exc:
+            # Le ménage n'est pas la mission : un temporaire verrouillé
+            # (antivirus sous Windows) ne doit pas empêcher le rognage.
+            log(f"(temporaire {entry.name} non supprimé : {exc})")
+            continue
+        purges.append(entry.name)
+    if purges:
+        log(f"Nettoyage de {TRIM_DIR_NAME}/ : {len(purges)} temporaire(s) mort(s) supprimé(s)")
+    return purges
 
 
 def probe_duration(path: Path) -> float:
@@ -119,10 +157,12 @@ def probe_duration(path: Path) -> float:
 
 def trim_clip(path: Path, start, end, log=print) -> None:
     """Rogne le clip en place. Le fichier d'origine n'est remplacé qu'après un
-    code retour FFmpeg nul : une interruption laisse le clip intact. I/O."""
+    code retour FFmpeg nul ET une vérification de la durée produite : une
+    interruption, comme une source illisible, laisse le clip intact. I/O."""
     start, end = coerce_bounds(start, end, probe_duration(path))
     temp_dir = path.parent / TRIM_DIR_NAME
     temp_dir.mkdir(exist_ok=True)
+    purge_temporaires(temp_dir, log=log)
     # Nom unique par exécution (PID), pas juste `path.name` : deux rognages
     # du même clip peuvent tourner en même temps (double-clic sur « Rogner »,
     # ou relance d'un job qui semble figé alors qu'il encode toujours). Avec
@@ -137,6 +177,12 @@ def trim_clip(path: Path, start, end, log=print) -> None:
     args = ffmpeg_trim_args(path, temp, start, end)
     log(f"Rognage de {path.name} : {start:.2f} s → {end:.2f} s "
         f"({end - start:.2f} s)…")
+    # Le temporaire n'est gardé que dans UN cas : ffmpeg a produit un fichier
+    # bon et c'est le `replace` qui a été refusé. C'est le mode d'échec attendu
+    # sous Windows (antivirus, indexeur, lecteur d'aperçu, génération en cours
+    # qui tient un handle) et le seul où jeter le temporaire jetterait deux
+    # minutes d'encodage réussi.
+    garder_temporaire = False
     try:
         # Pas de check=True : un CalledProcessError n'expose que le code retour,
         # jamais le stderr de ffmpeg — or c'est ce message que l'utilisateur
@@ -145,6 +191,25 @@ def trim_clip(path: Path, start, end, log=print) -> None:
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n"
                                f"{result.stderr}")
+        # Un code retour nul ne dit PAS que le fichier produit est complet.
+        # ffmpeg traite une erreur de démuxage rencontrée en cours de flux
+        # comme une fin de fichier : il journalise (« partial file »,
+        # « Invalid NAL unit size »), s'arrête là où il en est, et sort en 0.
+        # Sur un clip dont une zone est illisible (téléchargement interrompu
+        # puis repris, flux AV1 abîmé), un rognage [5, 180] rendait ainsi 27 s
+        # de vidéo, promues en silence par-dessus l'original — 140 s de rushes
+        # détruites, avec un « OK » dans le journal et un toast de succès.
+        # `-xerror` ne suffirait pas : il ne couvre pas le `partial file` du
+        # démuxeur. Le contrôle de durée, si. Marge END_TOLERANCE : la
+        # dernière frame ne tombe jamais pile sur la borne demandée.
+        produite = probe_duration(temp)
+        attendue = end - start
+        if produite < attendue - END_TOLERANCE:
+            raise RuntimeError(
+                f"source illisible : ffmpeg n'a produit que {produite:.2f} s "
+                f"au lieu de {attendue:.2f} s (le fichier s'interrompt en cours "
+                f"de lecture). {path.name} est INCHANGÉ. Réimporte le clip "
+                f"avant de le rogner.")
         # Un code retour nul ne garantit que la fin du process ffmpeg, pas que
         # ses données ont quitté le cache du système de fichiers. Sur une
         # coupure de courant juste après le `replace`, le renommage peut être
@@ -163,10 +228,30 @@ def trim_clip(path: Path, start, end, log=print) -> None:
         # `replace` est atomique sur le même volume : à aucun instant le clip
         # n'est ni l'ancien ni le nouveau. Cette atomicité protège des autres
         # PROCESSUS, pas du cache disque — d'où le fsync juste au-dessus.
-        temp.replace(path)
+        try:
+            temp.replace(path)
+        except OSError as exc:
+            # Le fichier produit est bon : le nommer pour que l'utilisateur
+            # puisse le récupérer à la main (ou relancer une fois le verrou
+            # levé) plutôt que de recommencer deux minutes d'encodage avec la
+            # même probabilité d'échec.
+            garder_temporaire = True
+            raise RuntimeError(
+                f"remplacement de {path.name} refusé ({exc}) — un autre "
+                f"programme tient le fichier (lecteur, antivirus, indexeur, "
+                f"ou une génération en cours). Le clip d'origine est intact "
+                f"et le fichier rogné est conservé ici : {temp}") from exc
         log(f"OK — {path.name} rogné")
     finally:
-        temp.unlink(missing_ok=True)
+        if not garder_temporaire:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError as exc:
+                # Un `unlink` refusé APRÈS un `replace` réussi ne dit rien du
+                # rognage, qui a abouti : le laisser remonter transformerait
+                # un succès en échec sous les yeux de l'utilisateur. On le
+                # signale dans le journal et rien de plus.
+                log(f"(temporaire {temp.name} non supprimé : {exc})")
         # Pas de rmdir sur temp_dir : clips/.trim/ est partagé par tous les
         # rognages en cours, y compris ceux de clips DIFFÉRENTS. Si celui-ci
         # est le dernier à finir mais qu'un autre rognage vient tout juste de
@@ -175,8 +260,12 @@ def trim_clip(path: Path, start, end, log=print) -> None:
         # sous ses pieds le dossier où il s'apprête à écrire — échec non
         # reproductible, sans rapport apparent avec ce rognage-ci. Un dossier
         # `.trim` vide est de toute façon invisible de `load_clips` et
-        # `/api/state` : c'est exactement la propriété recherchée, donc le
-        # laisser traîner ne coûte rien.
+        # `/api/state` : c'est exactement la propriété recherchée pour le
+        # DOSSIER, donc le laisser traîner ne coûte rien. Son CONTENU, lui,
+        # coûte des centaines de mégaoctets par temporaire mort et hérite de
+        # la même invisibilité — d'où le `purge_temporaires` en tête de
+        # rognage, qui nettoie ce que ce `finally` ne peut pas voir (les
+        # temporaires d'exécutions tuées avant d'y arriver).
 
 
 def main() -> None:
