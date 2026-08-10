@@ -1,5 +1,4 @@
-import { useCallback, useState } from "react"
-import { toast } from "sonner"
+import { useState } from "react"
 
 import type { AppState } from "@/lib/api"
 import { api } from "@/lib/api"
@@ -9,30 +8,23 @@ import { PageHeader } from "@/components/PageHeader"
 import { AssetSection } from "./AssetSection"
 import { TrimDialog } from "./TrimDialog"
 
+// Rognages en cours, indexés par nom de clip. Un seul job à la fois ne suffit
+// pas : rogner B pendant que A tourne écrasait A, ce qui rendait à sa ligne son
+// bouton de suppression alors que son ffmpeg travaillait encore — précisément le
+// chemin destructif que le verrouillage ferme. Motif d'`analyzeJobs` (ClipperTab).
+export type TrimJobs = Record<string, string>
+
 type Props = {
   state: AppState
   refresh: () => Promise<void>
+  trimJobs: TrimJobs
+  onTrimStarted: (name: string, jobId: string) => void
 }
 
 // Ressources partagées du label : les niches y piochent sons et clips.
-export function Catalogue({ state, refresh }: Props) {
+export function Catalogue({ state, refresh, trimJobs, onTrimStarted }: Props) {
   // Clip dont la modale de rognage est ouverte.
   const [trimming, setTrimming] = useState<string | null>(null)
-  // Rognage en cours : le nom sert à neutraliser les actions de sa ligne.
-  const [trimJob, setTrimJob] = useState<{ id: string; name: string } | null>(null)
-
-  const onTrimDone = useCallback(
-    (status: "done" | "failed") => {
-      refresh()
-      // Un job terminé n'a plus de journal à suivre : le laisser en place le
-      // rejouerait en entier (nouveau tick, nouveau « done », nouveau toast) au
-      // prochain remontage du JobLog — motif d'`analyzeJobs` dans ClipperTab.
-      setTrimJob(null)
-      if (status === "done") toast.success("clip rogné")
-      else toast.error("le rognage a échoué — voir le journal")
-    },
-    [refresh]
-  )
 
   return (
     <>
@@ -76,28 +68,45 @@ export function Catalogue({ state, refresh }: Props) {
           onDownload={api.downloadClips}
           refresh={refresh}
           onTrim={setTrimming}
-          busyName={trimJob?.name ?? null}
+          busyNames={Object.keys(trimJobs)}
         />
       </TabsContent>
     </Tabs>
-
-    {/* Hors des Tabs, donc toujours monté : un rognage dure environ deux
-        minutes, et Radix démonte le contenu de l'onglet inactif — suivre le
-        job depuis l'onglet Clips le laisserait tomber au premier passage sur
-        Sons (JobLog arrête son polling au démontage). */}
-    {trimJob && (
-      <div className="pt-4">
-        <p className="text-sm text-muted-foreground">Rognage de « {trimJob.name} » en cours…</p>
-        <JobLog jobId={trimJob.id} onDone={onTrimDone} />
-      </div>
-    )}
 
     <TrimDialog
       name={trimming}
       onClose={() => setTrimming(null)}
       // `trimming` porte encore le nom : la modale appelle onStarted AVANT onClose.
-      onStarted={(jobId) => trimming && setTrimJob({ id: jobId, name: trimming })}
+      onStarted={(jobId) => trimming && onTrimStarted(trimming, jobId)}
     />
     </>
+  )
+}
+
+// Journal des rognages en cours. Monté par <Shell/> et NON par <Catalogue/> :
+// un rognage dure environ deux minutes, et quitter l'onglet démonte le
+// Catalogue en entier — le polling de JobLog s'arrête à son démontage, donc
+// plus de refresh(), plus de toast, et la ligne resterait verrouillée à vie.
+// Seul son affichage est réservé à l'onglet Catalogue (motif de ClipperTab).
+export function TrimJobsPanel({
+  jobs,
+  visible,
+  onDone,
+}: {
+  jobs: TrimJobs
+  visible: boolean
+  onDone: (name: string, status: "done" | "failed") => void
+}) {
+  const names = Object.keys(jobs)
+  if (names.length === 0) return null
+  return (
+    <div className={visible ? "pt-4 space-y-3" : "hidden"}>
+      {names.map((name) => (
+        <div key={name}>
+          <p className="text-sm text-muted-foreground">Rognage de « {name} » en cours…</p>
+          <JobLog jobId={jobs[name]} onDone={(status) => onDone(name, status)} />
+        </div>
+      ))}
+    </div>
   )
 }

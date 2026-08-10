@@ -34,10 +34,13 @@ type Props = SectionConfig & {
   refresh: () => Promise<void>
   // Absent pour les sons : les morceaux du label n'ont pas d'intro à retirer.
   onTrim?: (name: string) => void
-  // Asset dont un rognage est en cours : ses actions sont neutralisées. Rien
+  // Assets dont un rognage est en cours : leurs actions sont neutralisées. Rien
   // n'interverrouille rognage et suppression côté serveur — supprimer pendant
   // un rognage laisserait le remplacement final recréer le fichier effacé.
-  busyName?: string | null
+  // Une liste et non un seul nom : deux rognages peuvent tourner en parallèle
+  // (le serveur nomme ses jobs par clip), et le second ne doit pas déverrouiller
+  // la ligne du premier.
+  busyNames?: string[]
 }
 
 // Le serveur ne rogne que les vidéos (une image n'a pas de durée) : inutile de
@@ -65,7 +68,7 @@ export function AssetSection({
   onDownload,
   refresh,
   onTrim,
-  busyName,
+  busyNames,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [newLink, setNewLink] = useState("")
@@ -209,34 +212,39 @@ export function AssetSection({
               </TableCell>
             </TableRow>
           ) : (
-            assets.map((a) => (
-              <TableRow key={a.name}>
-                <TableCell className="font-medium">{a.name}</TableCell>
-                <TableCell className="text-muted-foreground">{a.size_mb} Mo</TableCell>
-                <TableCell>
-                  <div className="flex gap-1">
-                    {onTrim && isTrimmable(a.name) && (
+            assets.map((a) => {
+              const busy = busyNames?.includes(a.name) ?? false
+              return (
+                <TableRow key={a.name}>
+                  <TableCell className="font-medium">{a.name}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {busy ? "rognage…" : `${a.size_mb} Mo`}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      {onTrim && isTrimmable(a.name) && (
+                        <IconButton
+                          tip="Rogner le début et la fin"
+                          className="size-8 text-muted-foreground"
+                          disabled={busy}
+                          onClick={() => onTrim(a.name)}
+                        >
+                          <Scissors />
+                        </IconButton>
+                      )}
                       <IconButton
-                        tip="Rogner le début et la fin"
+                        tip="Supprimer du catalogue"
                         className="size-8 text-muted-foreground"
-                        disabled={busyName === a.name}
-                        onClick={() => onTrim(a.name)}
+                        disabled={busy}
+                        onClick={() => askDelete(a.name)}
                       >
-                        <Scissors />
+                        <Trash2 />
                       </IconButton>
-                    )}
-                    <IconButton
-                      tip="Supprimer du catalogue"
-                      className="size-8 text-muted-foreground"
-                      disabled={busyName === a.name}
-                      onClick={() => askDelete(a.name)}
-                    >
-                      <Trash2 />
-                    </IconButton>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })
           )}
         </TableBody>
       </Table>

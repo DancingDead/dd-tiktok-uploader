@@ -36,6 +36,10 @@ export function TrimDialog({ name, onClose, onStarted }: Props) {
   const [start, setStart] = useState("0")
   const [end, setEnd] = useState("")
   const [sending, setSending] = useState(false)
+  // Le navigateur ne décode pas tout (l'AV1 est le cas majoritaire du
+  // catalogue) : sans aperçu, ni la durée ni « prendre ici » ne fonctionnent.
+  // À dire explicitement, sinon le champ de fin reste vide sans raison visible.
+  const [preview, setPreview] = useState<"loading" | "ok" | "unavailable">("loading")
 
   // Le composant reste monté entre deux ouvertures : sans ce reset, les bornes
   // du clip précédent s'appliqueraient au suivant.
@@ -43,6 +47,7 @@ export function TrimDialog({ name, onClose, onStarted }: Props) {
     setStart("0")
     setEnd("")
     setSending(false)
+    setPreview("loading")
   }, [name])
 
   const startVal = Number.parseFloat(start)
@@ -97,11 +102,29 @@ export function TrimDialog({ name, onClose, onStarted }: Props) {
             className="max-h-[45vh] w-full rounded bg-black"
             onLoadedMetadata={(e) => {
               // Sans ça, il faudrait saisir la fin même pour ne couper que le
-              // début — le cas le plus fréquent.
+              // début — le cas le plus fréquent. Une durée NaN ou Infinity
+              // (métadonnées lues mais piste non décodable, flux sans durée)
+              // compte comme une absence d'aperçu, pas comme un silence.
               const d = e.currentTarget.duration
-              if (Number.isFinite(d)) setEnd(String(tenth(d)))
+              if (Number.isFinite(d) && d > 0) {
+                setEnd(String(tenth(d)))
+                setPreview("ok")
+              } else {
+                setPreview("unavailable")
+              }
             }}
+            // Décodage refusé net (codec non supporté, fichier illisible) :
+            // même conclusion, l'utilisateur saisira les bornes à la main.
+            onError={() => setPreview("unavailable")}
           />
+        )}
+
+        {preview === "unavailable" && (
+          <p className="text-sm text-destructive">
+            Aperçu indisponible pour ce fichier — le navigateur ne décode pas son format (souvent
+            de l'AV1). Saisis le début et la fin à la main, en secondes : le serveur vérifie les
+            bornes contre la durée réelle du fichier et refusera une saisie hors de la vidéo.
+          </p>
         )}
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -116,7 +139,11 @@ export function TrimDialog({ name, onClose, onStarted }: Props) {
                 value={start}
                 onChange={(e) => setStart(e.target.value)}
               />
-              <Button variant="secondary" onClick={() => takeHere(setStart)}>
+              <Button
+                variant="secondary"
+                disabled={preview !== "ok"}
+                onClick={() => takeHere(setStart)}
+              >
                 <Crosshair /> Prendre ici
               </Button>
             </div>
@@ -132,7 +159,11 @@ export function TrimDialog({ name, onClose, onStarted }: Props) {
                 value={end}
                 onChange={(e) => setEnd(e.target.value)}
               />
-              <Button variant="secondary" onClick={() => takeHere(setEnd)}>
+              <Button
+                variant="secondary"
+                disabled={preview !== "ok"}
+                onClick={() => takeHere(setEnd)}
+              >
                 <Crosshair /> Prendre ici
               </Button>
             </div>
@@ -146,8 +177,9 @@ export function TrimDialog({ name, onClose, onStarted }: Props) {
 
         <p className="text-sm text-muted-foreground">
           Le fichier du catalogue sera réécrit. Cette opération est irréversible ; le clip devra
-          être réimporté depuis son lien YouTube pour revenir en arrière. Le rognage prend environ
-          deux minutes : laisse-le tourner, le journal s'affiche dans le catalogue.
+          être réimporté (ou ré-uploadé) pour revenir en arrière. Le rognage prend environ deux
+          minutes : laisse-le tourner, son journal s'affiche dans le Catalogue et le suivi continue
+          si tu changes d'onglet.
         </p>
 
         <DialogFooter>

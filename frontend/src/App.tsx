@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Toaster } from "@/components/ui/sonner"
 import { ConfirmHost } from "@/components/confirm"
-import { Catalogue } from "@/features/catalogue/Catalogue"
+import { Catalogue, TrimJobsPanel, type TrimJobs } from "@/features/catalogue/Catalogue"
 import { ClipperTab } from "@/features/clipper/ClipperTab"
 import { NichesTab } from "@/features/niches/NichesTab"
 import { PresetsTab } from "@/features/presets/PresetsTab"
@@ -100,6 +100,32 @@ function tabFromHash(): TabKey {
 
 function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
   const [tab, setTab] = useState<TabKey>(tabFromHash)
+  // Les rognages en cours vivent ici, et pas dans <Catalogue/> : c'est Shell la
+  // vraie frontière de démontage (l'onglet non affiché n'est pas rendu), et un
+  // rognage dure environ deux minutes — largement de quoi aller voir une niche
+  // entre-temps.
+  const [trimJobs, setTrimJobs] = useState<TrimJobs>({})
+
+  const onTrimStarted = useCallback(
+    (name: string, jobId: string) => setTrimJobs((jobs) => ({ ...jobs, [name]: jobId })),
+    []
+  )
+
+  const onTrimDone = useCallback(
+    (name: string, status: "done" | "failed") => {
+      refresh()
+      // Un job terminé n'a plus de journal à suivre : le laisser en place le
+      // rejouerait en entier au prochain remontage (motif d'`analyzeJobs`).
+      setTrimJobs((jobs) => {
+        const next = { ...jobs }
+        delete next[name]
+        return next
+      })
+      if (status === "done") toast.success(`« ${name} » rogné`)
+      else toast.error(`le rognage de « ${name} » a échoué — voir le journal`)
+    },
+    [refresh]
+  )
 
   const logout = async () => {
     await api.logout()
@@ -162,9 +188,21 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
         <div className="mx-auto max-w-4xl">
           {tab === "niches" && <NichesTab state={state} refresh={refresh} />}
           {tab === "presets" && <PresetsTab state={state} refresh={refresh} />}
-          {tab === "catalogue" && <Catalogue state={state} refresh={refresh} />}
+          {tab === "catalogue" && (
+            <Catalogue
+              state={state}
+              refresh={refresh}
+              trimJobs={trimJobs}
+              onTrimStarted={onTrimStarted}
+            />
+          )}
           {tab === "clipper" && <ClipperTab state={state} refresh={refresh} />}
           {tab === "reglages" && <SettingsTab state={state} refresh={refresh} />}
+          <TrimJobsPanel
+            jobs={trimJobs}
+            visible={tab === "catalogue"}
+            onDone={onTrimDone}
+          />
         </div>
       </main>
     </div>
