@@ -1,4 +1,5 @@
 import io
+import sys
 
 import pytest
 
@@ -492,7 +493,12 @@ def test_rognage_lance_un_job_sur_des_bornes_valides(client, tmp_path, monkeypat
     # Un nom par clip : un nom global interdirait de rogner deux clips
     # differents en parallele.
     assert nom == "trim-a.mp4"
-    assert "trim_clip.py" in " ".join(argv)
+    # Argv complet, pas juste "trim_clip.py in ...": c'est le seul test qui
+    # garantit que ce sont bien les bornes VALIDEES (issues de coerce_bounds)
+    # qui partent au sous-processus, pas les bornes brutes du client, et que
+    # la racine transmise est la bonne.
+    assert argv == [sys.executable, "trim_clip.py", "a.mp4",
+                    "3.000", "20.000", str(tmp_path)]
 
 
 def test_rognage_d_un_clip_inconnu(client, monkeypatch):
@@ -509,16 +515,43 @@ def test_rognage_refuse_une_image(client, tmp_path, monkeypatch):
     monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
     (tmp_path / "clips").mkdir(exist_ok=True)
     (tmp_path / "clips" / "a.jpg").write_bytes(b"faux")
-    assert client.post("/api/clips/a.jpg/trim",
-                       json={"start": 0, "end": 10}).status_code == 400
+    # probe_duration monkeypatche : sans ca, une implementation qui autorise
+    # a tort les images (CLIP_EXTS au lieu de VIDEO_EXTS) passerait quand meme
+    # la garde d'extension puis echouerait sur le VRAI ffprobe (contenu
+    # b"faux") -> 400 aussi, et le test ne distinguerait plus les deux
+    # implementations.
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+    r = client.post("/api/clips/a.jpg/trim", json={"start": 0, "end": 10})
+    assert r.status_code == 400
+    # Le message prouve que le 400 vient bien de la garde d'extension
+    # (VIDEO_EXTS), pas d'un echec de probe_duration qui aurait pu passer
+    # inapercu avec le seul code de retour.
+    assert "format non rognable" in r.get_json()["error"]
 
 
 def test_rognage_anti_traversal(client, tmp_path, monkeypatch):
     """Un nom trafique ne doit pas atteindre un fichier hors de clips/."""
     import webui
-    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
-    dehors = tmp_path.parent / "dehors.mp4"
+    appels = []
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: appels.append((name, argv)) or "job1")
+    # probe_duration monkeypatche pour la meme raison que dans les autres
+    # tests : sans ca, une garde absente serait quand meme rattrapee par un
+    # echec du VRAI ffprobe sur b"secret" (RuntimeError -> 400), ce qui
+    # masquerait l'absence de la garde anti-traversal derriere un 400 pour
+    # une toute autre raison.
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+    # A la racine de l'instance (soeur de clips/), pas un niveau au-dessus :
+    # "..%2Fdehors.mp4" depuis clips/ ne remonte que d'un cran. Le placer plus
+    # haut (tmp_path.parent) faisait rater la cible meme dans une
+    # implementation sans aucune garde, rendant le test inerte.
+    dehors = tmp_path / "dehors.mp4"
     dehors.write_bytes(b"secret")
     r = client.post("/api/clips/..%2Fdehors.mp4/trim", json={"start": 0, "end": 10})
     assert r.status_code in (400, 404)
     assert dehors.is_file()
+    # start_job est mocke : rien n'empeche ici la "destruction" reelle sinon
+    # la garde elle-meme. C'est donc son absence d'appel, pas le seul code de
+    # retour, qui prouve que la requete a ete arretee AVANT le point de
+    # non-retour (le lancement du job qui reecrirait le fichier).
+    assert appels == []

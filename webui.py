@@ -564,15 +564,23 @@ def create_app(root: Path | None = None):
             return jsonify({"error": "clip introuvable"}), 404
 
         body = request.json or {}
+        # Un JSON valide mais non-objet (liste, nombre…) ferait planter le
+        # .get() plus bas avec une AttributeError : à signaler explicitement,
+        # plutôt que de la laisser remonter jusqu'à un except attrape-tout.
+        if not isinstance(body, dict):
+            return jsonify({"error": "corps JSON invalide"}), 400
         try:
             # La durée est lue côté serveur : on ne valide pas des bornes
             # contre une durée fournie par le client.
             start, end = trimmod.coerce_bounds(
                 body.get("start"), body.get("end"), trimmod.probe_duration(target))
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
+            # ValueError vient de coerce_bounds (bornes hors durée…),
+            # RuntimeError de probe_duration (échec ffprobe) — dans les deux
+            # cas str(exc) porte le message utile (probe_duration y inclut le
+            # stderr d'ffprobe, seul indice exploitable sur un fichier
+            # corrompu) : ne pas le remplacer par un message générique.
             return jsonify({"error": str(exc)}), 400
-        except Exception:
-            return jsonify({"error": "durée du clip illisible"}), 400
 
         try:
             # Un nom de job par clip : un nom global interdirait de rogner deux
