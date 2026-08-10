@@ -90,12 +90,19 @@ export function Catalogue({ state, refresh, trimJobs, onTrimStarted }: Props) {
 // Seul son affichage est réservé à l'onglet Catalogue (motif de ClipperTab).
 export function TrimJobsPanel({
   jobs,
+  lost,
   visible,
   onDone,
+  onLost,
 }: {
   jobs: TrimJobs
+  // Rognages dont le SUIVI est perdu (serveur injoignable). Ils restent dans
+  // `jobs` : leur ligne doit rester verrouillée, puisque leur ffmpeg tourne
+  // très probablement encore.
+  lost: Record<string, true>
   visible: boolean
   onDone: (name: string, status: "done" | "failed") => void
+  onLost: (name: string) => void
 }) {
   const names = Object.keys(jobs)
   if (names.length === 0) return null
@@ -103,8 +110,21 @@ export function TrimJobsPanel({
     <div className={visible ? "pt-4 space-y-3" : "hidden"}>
       {names.map((name) => (
         <div key={name}>
-          <p className="text-sm text-muted-foreground">Rognage de « {name} » en cours…</p>
-          <JobLog jobId={jobs[name]} onDone={(status) => onDone(name, status)} />
+          {lost[name] ? (
+            <p className="text-sm text-destructive">
+              Rognage de « {name} » : suivi perdu, le serveur ne répond plus. Le rognage
+              continue probablement — ne le relance pas, il repartirait d'un fichier
+              peut-être déjà rogné. Recharge la page une fois le serveur revenu pour
+              connaître son issue.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">Rognage de « {name} » en cours…</p>
+          )}
+          <JobLog
+            jobId={jobs[name]}
+            onDone={(status) => onDone(name, status)}
+            onLost={() => onLost(name)}
+          />
         </div>
       ))}
     </div>

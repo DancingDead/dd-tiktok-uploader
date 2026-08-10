@@ -44,8 +44,11 @@ type Props = SectionConfig & {
 }
 
 // Le serveur ne rogne que les vidéos (une image n'a pas de durée) : inutile de
-// proposer l'action sur les .jpg du catalogue de clips.
-const TRIMMABLE = [".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"]
+// proposer l'action sur les .jpg du catalogue de clips. Le .webm en est exclu
+// lui aussi : le rognage réencode en libx264, que le muxeur WebM refuse — le
+// bouton était donc proposé sur un format où il échouait à tous les coups. Doit
+// rester aligné sur TRIMMABLE_EXTS côté serveur, qui est le vrai garde-fou.
+const TRIMMABLE = [".mp4", ".mov", ".m4v", ".mkv", ".avi"]
 const isTrimmable = (name: string) =>
   TRIMMABLE.some((ext) => name.toLowerCase().endsWith(ext))
 
