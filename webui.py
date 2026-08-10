@@ -574,12 +574,18 @@ def create_app(root: Path | None = None):
             # contre une durée fournie par le client.
             start, end = trimmod.coerce_bounds(
                 body.get("start"), body.get("end"), trimmod.probe_duration(target))
-        except (ValueError, RuntimeError) as exc:
+        except (ValueError, RuntimeError, OSError) as exc:
             # ValueError vient de coerce_bounds (bornes hors durée…),
-            # RuntimeError de probe_duration (échec ffprobe) — dans les deux
-            # cas str(exc) porte le message utile (probe_duration y inclut le
-            # stderr d'ffprobe, seul indice exploitable sur un fichier
-            # corrompu) : ne pas le remplacer par un message générique.
+            # RuntimeError de probe_duration (échec ffprobe qui tourne mais
+            # répond une erreur) — dans les deux cas str(exc) porte le
+            # message utile (probe_duration y inclut le stderr d'ffprobe,
+            # seul indice exploitable sur un fichier corrompu) : ne pas le
+            # remplacer par un message générique. OSError couvre en plus
+            # l'absence du binaire ffprobe lui-même (FileNotFoundError levée
+            # par subprocess.run, pas par ffprobe) — condition
+            # d'environnement, pas une entrée client, mais trim_clip.main()
+            # l'attrape déjà pour la même raison : sans elle, une machine
+            # sans ffprobe rendrait un 500 au lieu d'un message lisible.
             return jsonify({"error": str(exc)}), 400
 
         try:

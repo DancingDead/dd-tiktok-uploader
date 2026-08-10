@@ -493,10 +493,12 @@ def test_rognage_lance_un_job_sur_des_bornes_valides(client, tmp_path, monkeypat
     # Un nom par clip : un nom global interdirait de rogner deux clips
     # differents en parallele.
     assert nom == "trim-a.mp4"
-    # Argv complet, pas juste "trim_clip.py in ...": c'est le seul test qui
-    # garantit que ce sont bien les bornes VALIDEES (issues de coerce_bounds)
-    # qui partent au sous-processus, pas les bornes brutes du client, et que
-    # la racine transmise est la bonne.
+    # Argv complet, pas juste "trim_clip.py in ...": prouve le formatage
+    # exact des bornes (".3f") et la racine transmise. Sur ce jeu de valeurs
+    # entieres, le formatage de 3 et de 3.0 coincident ("3.000") : ce n'est
+    # PAS ce test qui distingue bornes brutes et bornes coercees — c'est
+    # test_rognage_refuse_les_bornes_invalides, qui prouve que coerce_bounds
+    # est bien sur le chemin (bornes hors duree -> 400).
     assert argv == [sys.executable, "trim_clip.py", "a.mp4",
                     "3.000", "20.000", str(tmp_path)]
 
@@ -555,3 +557,19 @@ def test_rognage_anti_traversal(client, tmp_path, monkeypatch):
     # retour, qui prouve que la requete a ete arretee AVANT le point de
     # non-retour (le lancement du job qui reecrirait le fichier).
     assert appels == []
+
+
+def test_ffprobe_absent_rend_400_et_pas_500(client, tmp_path, monkeypatch):
+    """Le contrat de l'endpoint est « 400, jamais 500 ». Une machine sans
+    ffprobe doit donner un message, pas un traceback."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+
+    def absent(path):
+        raise FileNotFoundError("ffprobe introuvable")
+    monkeypatch.setattr("trim_clip.probe_duration", absent)
+
+    assert client.post("/api/clips/a.mp4/trim",
+                       json={"start": 0, "end": 10}).status_code == 400
