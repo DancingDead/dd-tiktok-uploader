@@ -544,6 +544,49 @@ def create_app(root: Path | None = None):
             return jsonify({"error": str(exc)}), 409
         return jsonify({"job_id": job_id})
 
+    @app.post("/api/clips/<path:name>/trim")
+    def trim_clip_ep(name):
+        """Rogne le début et la fin d'un clip du catalogue. DESTRUCTIF : le
+        fichier est réécrit. Lancé en tâche de fond, un réencodage AV1 durant
+        plusieurs minutes."""
+        import trim_clip as trimmod
+
+        safe = Path(name).name  # neutralise toute traversée de chemin
+        # VIDEO_EXTS et non CLIP_EXTS : ce dernier contient aussi les images,
+        # et rogner un .jpg n'a pas de sens (monté en flash court, sans durée).
+        if Path(safe).suffix.lower() not in VIDEO_EXTS:
+            return jsonify({"error": f"format non rognable : {safe}"}), 400
+        base = paths["clips"].resolve()
+        target = (base / safe).resolve()
+        if target.parent != base:
+            return jsonify({"error": "chemin invalide"}), 400
+        if not target.is_file():
+            return jsonify({"error": "clip introuvable"}), 404
+
+        body = request.json or {}
+        try:
+            # La durée est lue côté serveur : on ne valide pas des bornes
+            # contre une durée fournie par le client.
+            start, end = trimmod.coerce_bounds(
+                body.get("start"), body.get("end"), trimmod.probe_duration(target))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception:
+            return jsonify({"error": "durée du clip illisible"}), 400
+
+        try:
+            # Un nom de job par clip : un nom global interdirait de rogner deux
+            # clips différents en parallèle. Le 409 protège du double-clic sur
+            # le MÊME clip, qui ferait travailler deux ffmpeg sur le même
+            # fichier temporaire.
+            job_id = start_job(f"trim-{safe}",
+                               [sys.executable, "trim_clip.py", safe,
+                                f"{start:.3f}", f"{end:.3f}",
+                                str(paths["clips"].parent)])
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify({"job_id": job_id})
+
     @app.post("/api/settings")
     def save_settings():
         overrides = {k: v for k, v in request.json.items() if k in EDITABLE_SETTINGS}

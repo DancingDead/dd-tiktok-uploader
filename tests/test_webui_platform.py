@@ -460,3 +460,65 @@ def test_preset_with_blackout_round_trips(client):
     saved = next(p for p in presets if p["name"] == "Strobe montée")
     assert saved["overrides"]["effects"]["blackout"] is True
     assert saved["overrides"]["blackout_beats"] == pytest.approx(0.5)
+
+
+def test_rognage_refuse_les_bornes_invalides(client, tmp_path, monkeypatch):
+    """400 et pas 500 : le contrat du projet est « coercion serveur »."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    for bornes in ({"start": 20, "end": 3}, {"start": -5, "end": 10},
+                   {"start": 0, "end": 45}, {"start": "<script>", "end": 10},
+                   {"start": 10, "end": 10.2}):
+        r = client.post("/api/clips/a.mp4/trim", json=bornes)
+        assert r.status_code == 400, bornes
+
+
+def test_rognage_lance_un_job_sur_des_bornes_valides(client, tmp_path, monkeypatch):
+    import webui
+    lances = []
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: lances.append((name, argv)) or "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    r = client.post("/api/clips/a.mp4/trim", json={"start": 3, "end": 20})
+    assert r.status_code == 200 and r.get_json()["job_id"] == "job1"
+    nom, argv = lances[0]
+    # Un nom par clip : un nom global interdirait de rogner deux clips
+    # differents en parallele.
+    assert nom == "trim-a.mp4"
+    assert "trim_clip.py" in " ".join(argv)
+
+
+def test_rognage_d_un_clip_inconnu(client, monkeypatch):
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    assert client.post("/api/clips/absent.mp4/trim",
+                       json={"start": 0, "end": 10}).status_code == 404
+
+
+def test_rognage_refuse_une_image(client, tmp_path, monkeypatch):
+    """Rogner un .jpg n'a pas de sens : une image est montee en flash court,
+    sans notion de duree."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.jpg").write_bytes(b"faux")
+    assert client.post("/api/clips/a.jpg/trim",
+                       json={"start": 0, "end": 10}).status_code == 400
+
+
+def test_rognage_anti_traversal(client, tmp_path, monkeypatch):
+    """Un nom trafique ne doit pas atteindre un fichier hors de clips/."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    dehors = tmp_path.parent / "dehors.mp4"
+    dehors.write_bytes(b"secret")
+    r = client.post("/api/clips/..%2Fdehors.mp4/trim", json={"start": 0, "end": 10})
+    assert r.status_code in (400, 404)
+    assert dehors.is_file()
