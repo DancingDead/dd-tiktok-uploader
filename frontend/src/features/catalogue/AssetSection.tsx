@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react"
 import { toast } from "sonner"
-import { Download, Plus, Trash2, Upload } from "lucide-react"
+import { Download, Plus, Scissors, Trash2, Upload } from "lucide-react"
 
 import type { Asset } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -32,7 +32,25 @@ type Props = SectionConfig & {
   assets: Asset[]
   linksText: string
   refresh: () => Promise<void>
+  // Absent pour les sons : les morceaux du label n'ont pas d'intro à retirer.
+  onTrim?: (name: string) => void
+  // Assets dont un rognage est en cours : leurs actions sont neutralisées. Rien
+  // n'interverrouille rognage et suppression côté serveur — supprimer pendant
+  // un rognage laisserait le remplacement final recréer le fichier effacé.
+  // Une liste et non un seul nom : deux rognages peuvent tourner en parallèle
+  // (le serveur nomme ses jobs par clip), et le second ne doit pas déverrouiller
+  // la ligne du premier.
+  busyNames?: string[]
 }
+
+// Le serveur ne rogne que les vidéos (une image n'a pas de durée) : inutile de
+// proposer l'action sur les .jpg du catalogue de clips. Le .webm en est exclu
+// lui aussi : le rognage réencode en libx264, que le muxeur WebM refuse — le
+// bouton était donc proposé sur un format où il échouait à tous les coups. Doit
+// rester aligné sur TRIMMABLE_EXTS côté serveur, qui est le vrai garde-fou.
+const TRIMMABLE = [".mp4", ".mov", ".m4v", ".mkv", ".avi"]
+const isTrimmable = (name: string) =>
+  TRIMMABLE.some((ext) => name.toLowerCase().endsWith(ext))
 
 const parseLinks = (text: string) =>
   text
@@ -52,6 +70,8 @@ export function AssetSection({
   onSaveLinks,
   onDownload,
   refresh,
+  onTrim,
+  busyNames,
 }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [newLink, setNewLink] = useState("")
@@ -184,7 +204,7 @@ export function AssetSection({
           <TableRow>
             <TableHead>Fichier</TableHead>
             <TableHead className="w-24">Taille</TableHead>
-            <TableHead className="w-12" />
+            <TableHead className="w-24" />
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -195,21 +215,39 @@ export function AssetSection({
               </TableCell>
             </TableRow>
           ) : (
-            assets.map((a) => (
-              <TableRow key={a.name}>
-                <TableCell className="font-medium">{a.name}</TableCell>
-                <TableCell className="text-muted-foreground">{a.size_mb} Mo</TableCell>
-                <TableCell>
-                  <IconButton
-                    tip="Supprimer du catalogue"
-                    className="size-8 text-muted-foreground"
-                    onClick={() => askDelete(a.name)}
-                  >
-                    <Trash2 />
-                  </IconButton>
-                </TableCell>
-              </TableRow>
-            ))
+            assets.map((a) => {
+              const busy = busyNames?.includes(a.name) ?? false
+              return (
+                <TableRow key={a.name}>
+                  <TableCell className="font-medium">{a.name}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {busy ? "rognage…" : `${a.size_mb} Mo`}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      {onTrim && isTrimmable(a.name) && (
+                        <IconButton
+                          tip="Rogner le début et la fin"
+                          className="size-8 text-muted-foreground"
+                          disabled={busy}
+                          onClick={() => onTrim(a.name)}
+                        >
+                          <Scissors />
+                        </IconButton>
+                      )}
+                      <IconButton
+                        tip="Supprimer du catalogue"
+                        className="size-8 text-muted-foreground"
+                        disabled={busy}
+                        onClick={() => askDelete(a.name)}
+                      >
+                        <Trash2 />
+                      </IconButton>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })
           )}
         </TableBody>
       </Table>

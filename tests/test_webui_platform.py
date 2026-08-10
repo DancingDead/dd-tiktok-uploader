@@ -1,4 +1,5 @@
 import io
+import sys
 
 import pytest
 
@@ -460,3 +461,208 @@ def test_preset_with_blackout_round_trips(client):
     saved = next(p for p in presets if p["name"] == "Strobe montée")
     assert saved["overrides"]["effects"]["blackout"] is True
     assert saved["overrides"]["blackout_beats"] == pytest.approx(0.5)
+
+
+def test_rognage_refuse_les_bornes_invalides(client, tmp_path, monkeypatch):
+    """400 et pas 500 : le contrat du projet est « coercion serveur »."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    for bornes in ({"start": 20, "end": 3}, {"start": -5, "end": 10},
+                   {"start": 0, "end": 45}, {"start": "<script>", "end": 10},
+                   {"start": 10, "end": 10.2}):
+        r = client.post("/api/clips/a.mp4/trim", json=bornes)
+        assert r.status_code == 400, bornes
+
+
+def test_rognage_lance_un_job_sur_des_bornes_valides(client, tmp_path, monkeypatch):
+    import webui
+    lances = []
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: lances.append((name, argv)) or "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    r = client.post("/api/clips/a.mp4/trim", json={"start": 3, "end": 20})
+    assert r.status_code == 200 and r.get_json()["job_id"] == "job1"
+    nom, argv = lances[0]
+    # Un nom par clip : un nom global interdirait de rogner deux clips
+    # differents en parallele.
+    assert nom == "trim-a.mp4"
+    # Argv complet, pas juste "trim_clip.py in ...": prouve le formatage
+    # exact des bornes (".3f") et la racine transmise. Sur ce jeu de valeurs
+    # entieres, le formatage de 3 et de 3.0 coincident ("3.000") : ce n'est
+    # PAS ce test qui distingue bornes brutes et bornes coercees — c'est
+    # test_rognage_refuse_les_bornes_invalides, qui prouve que coerce_bounds
+    # est bien sur le chemin (bornes hors duree -> 400).
+    assert argv == [sys.executable, "trim_clip.py", "a.mp4",
+                    "3.000", "20.000", str(tmp_path)]
+
+
+def test_rognage_d_un_clip_inconnu(client, monkeypatch):
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    assert client.post("/api/clips/absent.mp4/trim",
+                       json={"start": 0, "end": 10}).status_code == 404
+
+
+def test_rognage_refuse_une_image(client, tmp_path, monkeypatch):
+    """Rogner un .jpg n'a pas de sens : une image est montee en flash court,
+    sans notion de duree."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.jpg").write_bytes(b"faux")
+    # probe_duration monkeypatche : sans ca, une implementation qui autorise
+    # a tort les images (CLIP_EXTS au lieu de VIDEO_EXTS) passerait quand meme
+    # la garde d'extension puis echouerait sur le VRAI ffprobe (contenu
+    # b"faux") -> 400 aussi, et le test ne distinguerait plus les deux
+    # implementations.
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+    r = client.post("/api/clips/a.jpg/trim", json={"start": 0, "end": 10})
+    assert r.status_code == 400
+    # Le message prouve que le 400 vient bien de la garde d'extension
+    # (VIDEO_EXTS), pas d'un echec de probe_duration qui aurait pu passer
+    # inapercu avec le seul code de retour.
+    assert "format non rognable" in r.get_json()["error"]
+
+
+def test_rognage_anti_traversal(client, tmp_path, monkeypatch):
+    """Un nom trafique ne doit pas atteindre un fichier hors de clips/."""
+    import webui
+    appels = []
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: appels.append((name, argv)) or "job1")
+    # probe_duration monkeypatche pour la meme raison que dans les autres
+    # tests : sans ca, une garde absente serait quand meme rattrapee par un
+    # echec du VRAI ffprobe sur b"secret" (RuntimeError -> 400), ce qui
+    # masquerait l'absence de la garde anti-traversal derriere un 400 pour
+    # une toute autre raison.
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+    # A la racine de l'instance (soeur de clips/), pas un niveau au-dessus :
+    # "..%2Fdehors.mp4" depuis clips/ ne remonte que d'un cran. Le placer plus
+    # haut (tmp_path.parent) faisait rater la cible meme dans une
+    # implementation sans aucune garde, rendant le test inerte.
+    dehors = tmp_path / "dehors.mp4"
+    dehors.write_bytes(b"secret")
+    r = client.post("/api/clips/..%2Fdehors.mp4/trim", json={"start": 0, "end": 10})
+    assert r.status_code in (400, 404)
+    assert dehors.is_file()
+    # start_job est mocke : rien n'empeche ici la "destruction" reelle sinon
+    # la garde elle-meme. C'est donc son absence d'appel, pas le seul code de
+    # retour, qui prouve que la requete a ete arretee AVANT le point de
+    # non-retour (le lancement du job qui reecrirait le fichier).
+    assert appels == []
+
+
+def test_ffprobe_absent_rend_400_et_pas_500(client, tmp_path, monkeypatch):
+    """Le contrat de l'endpoint est « 400, jamais 500 ». Une machine sans
+    ffprobe doit donner un message, pas un traceback."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+
+    def absent(path):
+        raise FileNotFoundError("ffprobe introuvable")
+    monkeypatch.setattr("trim_clip.probe_duration", absent)
+
+    assert client.post("/api/clips/a.mp4/trim",
+                       json={"start": 0, "end": 10}).status_code == 400
+
+
+def test_rognage_refuse_pendant_une_generation(client, tmp_path, monkeypatch):
+    """Un lot en cours a deja lu la duree du clip et calcule son EDL dessus :
+    le rogner sous ses pieds donne des segments noirs (macOS) ou fait echouer
+    le remplacement (Windows, handle tenu). Meme precedent que la suppression
+    d'une source du Clipper."""
+    import webui
+    lances = []
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: lances.append(name) or "job1")
+    monkeypatch.setattr(webui, "_jobs",
+                        {"g1": {"name": "gen-naruto", "status": "running", "log": []}})
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    r = client.post("/api/clips/a.mp4/trim", json={"start": 3, "end": 20})
+    assert r.status_code == 409
+    # Le message doit dire quoi faire : « attendre la fin du lot ».
+    assert "génération" in r.get_json()["error"]
+    # start_job est mocke : c'est son absence d'appel, pas le code de retour,
+    # qui prouve l'arret AVANT le point de non-retour.
+    assert lances == []
+
+
+def test_rognage_autorise_quand_la_generation_est_finie(client, tmp_path, monkeypatch):
+    """Contre-epreuve : une garde qui regarderait la table des jobs sans
+    regarder leur STATUT bloquerait le rognage pour toujours des la premiere
+    generation lancee."""
+    import webui
+    monkeypatch.setattr(webui, "start_job", lambda name, argv: "job1")
+    monkeypatch.setattr(webui, "_jobs",
+                        {"g1": {"name": "gen-naruto", "status": "done", "log": []}})
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    assert client.post("/api/clips/a.mp4/trim",
+                       json={"start": 3, "end": 20}).status_code == 200
+
+
+def test_rognage_refuse_un_webm(client, tmp_path, monkeypatch):
+    """Le temporaire herite du suffixe de la source et le rognage reencode en
+    libx264 : le muxeur WebM le refuse (code 234), l'action echouait toujours.
+    Autant ne pas la proposer."""
+    import webui
+    lances = []
+    monkeypatch.setattr(webui, "start_job",
+                        lambda name, argv: lances.append(name) or "job1")
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.webm").write_bytes(b"faux")
+    # Monkeypatche pour la meme raison qu'au test des images : sans ca, une
+    # implementation sans garde echouerait sur le VRAI ffprobe (contenu
+    # b"faux") -> 400 aussi, et le test ne distinguerait plus les deux.
+    monkeypatch.setattr("trim_clip.probe_duration", lambda p: 30.0)
+
+    r = client.post("/api/clips/a.webm/trim", json={"start": 0, "end": 10})
+    assert r.status_code == 400
+    assert "format non rognable" in r.get_json()["error"]
+    assert lances == []
+
+
+def test_le_webm_reste_uploadable_et_visible_au_catalogue(client, tmp_path):
+    """Le .webm sort de la liste des ROGNABLES, pas du catalogue : l'en retirer
+    globalement ferait disparaitre les clips deja importes de /api/state, donc
+    des selections de niches."""
+    upload = client.post("/api/clips", data={
+        "file": (io.BytesIO(b"faux"), "a.webm")},
+        content_type="multipart/form-data")
+    assert upload.status_code == 200
+    assert "a.webm" in [c["name"] for c in client.get("/api/state").get_json()["clips"]]
+
+
+def test_suppression_d_un_clip_verrouille_rend_409(client, tmp_path, monkeypatch):
+    """Sous Windows, supprimer un fichier qu'un ffmpeg tient ouvert leve
+    PermissionError. Le contrat du projet est « jamais 500 »."""
+    from pathlib import Path as _Path
+    (tmp_path / "clips").mkdir(exist_ok=True)
+    (tmp_path / "clips" / "a.mp4").write_bytes(b"faux")
+    nid = client.post("/api/niches", json={"name": "N"}).get_json()["id"]
+    client.patch(f"/api/niches/{nid}", json={"clips": ["clips/a.mp4"]})
+
+    def verrouille(self, missing_ok=False):
+        raise PermissionError("fichier utilise par un autre processus")
+    monkeypatch.setattr(_Path, "unlink", verrouille)
+
+    r = client.delete("/api/clips/a.mp4")
+    assert r.status_code == 409
+    monkeypatch.undo()
+    # Le fichier est toujours la : le retirer de la selection de la niche
+    # serait pire que l'echec.
+    assert client.get("/api/state").get_json()["niches"][0]["clips"] == ["clips/a.mp4"]

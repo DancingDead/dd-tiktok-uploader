@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Toaster } from "@/components/ui/sonner"
 import { ConfirmHost } from "@/components/confirm"
-import { Catalogue } from "@/features/catalogue/Catalogue"
+import { Catalogue, TrimJobsPanel, type TrimJobs } from "@/features/catalogue/Catalogue"
 import { ClipperTab } from "@/features/clipper/ClipperTab"
 import { NichesTab } from "@/features/niches/NichesTab"
 import { PresetsTab } from "@/features/presets/PresetsTab"
@@ -100,6 +100,61 @@ function tabFromHash(): TabKey {
 
 function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
   const [tab, setTab] = useState<TabKey>(tabFromHash)
+  // Les rognages en cours vivent ici, et pas dans <Catalogue/> : c'est Shell la
+  // vraie frontière de démontage (l'onglet non affiché n'est pas rendu), et un
+  // rognage dure environ deux minutes — largement de quoi aller voir une niche
+  // entre-temps.
+  const [trimJobs, setTrimJobs] = useState<TrimJobs>({})
+  // Rognages dont le suivi est perdu. Séparé de `trimJobs` : l'entrée y RESTE
+  // (la ligne du clip reste verrouillée), seul l'affichage change.
+  const [trimLost, setTrimLost] = useState<Record<string, true>>({})
+
+  const onTrimStarted = useCallback(
+    (name: string, jobId: string) => {
+      setTrimJobs((jobs) => ({ ...jobs, [name]: jobId }))
+      setTrimLost(({ [name]: _, ...reste }) => reste)
+    },
+    []
+  )
+
+  // Serveur injoignable pendant le suivi : on ne sait RIEN de l'issue du
+  // rognage, qui tourne très probablement encore (waitress recyclé, hoquet
+  // Tailscale — 7,5 s de silence suffisent à déclencher ce cas, deux minutes
+  // d'encodage non). Annoncer un échec et déverrouiller la ligne poussait à
+  // relancer le rognage : le premier ffmpeg finissait et écrivait [10, 190],
+  // le second repartait de ce fichier DÉJÀ amputé et lui reprenait 10 s de
+  // plus. On ne libère donc rien, et on le dit.
+  const onTrimLost = useCallback((name: string) => {
+    setTrimLost((perdus) => ({ ...perdus, [name]: true }))
+    toast.warning(
+      `suivi du rognage de « ${name} » perdu — le serveur ne répond plus. Ne le relance pas : ` +
+        `il tourne probablement encore. Recharge la page une fois le serveur revenu.`
+    )
+  }, [])
+
+  const onTrimDone = useCallback(
+    (name: string, status: "done" | "failed") => {
+      refresh()
+      // Un job terminé n'a plus de journal à suivre : le laisser en place le
+      // rejouerait en entier au prochain remontage (motif d'`analyzeJobs`).
+      setTrimJobs((jobs) => {
+        const next = { ...jobs }
+        delete next[name]
+        return next
+      })
+      if (status === "done") toast.success(`« ${name} » rogné`)
+      // « le clip d'origine est intact » n'est pas une politesse : c'est
+      // l'information qui décide si l'utilisateur peut relancer sans risque.
+      // Un échec réel de trim_clip.py laisse toujours le fichier d'origine en
+      // place (le remplacement n'a lieu qu'après un ffmpeg abouti ET une durée
+      // produite vérifiée).
+      else
+        toast.error(
+          `le rognage de « ${name} » a échoué — le clip d'origine est intact. Voir le journal.`
+        )
+    },
+    [refresh]
+  )
 
   const logout = async () => {
     await api.logout()
@@ -162,9 +217,23 @@ function Shell({ state, refresh }: { state: AppState; refresh: () => Promise<voi
         <div className="mx-auto max-w-4xl">
           {tab === "niches" && <NichesTab state={state} refresh={refresh} />}
           {tab === "presets" && <PresetsTab state={state} refresh={refresh} />}
-          {tab === "catalogue" && <Catalogue state={state} refresh={refresh} />}
+          {tab === "catalogue" && (
+            <Catalogue
+              state={state}
+              refresh={refresh}
+              trimJobs={trimJobs}
+              onTrimStarted={onTrimStarted}
+            />
+          )}
           {tab === "clipper" && <ClipperTab state={state} refresh={refresh} />}
           {tab === "reglages" && <SettingsTab state={state} refresh={refresh} />}
+          <TrimJobsPanel
+            jobs={trimJobs}
+            lost={trimLost}
+            visible={tab === "catalogue"}
+            onDone={onTrimDone}
+            onLost={onTrimLost}
+          />
         </div>
       </main>
     </div>

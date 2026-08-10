@@ -172,6 +172,9 @@ export const api = {
     req(`/api/tracks/${encodeURIComponent(name)}`, { method: "DELETE" }),
   deleteClip: (name: string) =>
     req(`/api/clips/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  trimClip: (name: string, start: number, end: number) =>
+    req<{ job_id: string }>(`/api/clips/${encodeURIComponent(name)}/trim`,
+                            json({ start, end })),
   saveLinks: (text: string) => req("/api/links", json({ text })),
   saveClipLinks: (text: string) => req("/api/clip-links", json({ text })),
   downloadTracks: () => req<{ job_id: string }>("/api/download", json({})),
