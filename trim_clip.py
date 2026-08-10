@@ -87,3 +87,72 @@ def ffmpeg_trim_args(source: Path, target: Path, start: float,
         "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
         str(target),
     ]
+
+
+# Le temporaire vit dans un SOUS-DOSSIER de clips/ : même volume, donc le
+# remplacement final est un simple rename atomique. Un sous-dossier plutôt
+# qu'un fichier voisin parce que `load_clips` et `/api/state` parcourent
+# `clips/` et prendraient un `xxx.trim.mp4` oublié pour un vrai clip.
+TRIM_DIR_NAME = ".trim"
+
+
+def probe_duration(path: Path) -> float:
+    """Durée du clip en secondes. I/O."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True).stdout.strip()
+    return float(out)
+
+
+def trim_clip(path: Path, start, end, log=print) -> None:
+    """Rogne le clip en place. Le fichier d'origine n'est remplacé qu'après un
+    code retour FFmpeg nul : une interruption laisse le clip intact. I/O."""
+    start, end = coerce_bounds(start, end, probe_duration(path))
+    temp_dir = path.parent / TRIM_DIR_NAME
+    temp_dir.mkdir(exist_ok=True)
+    temp = temp_dir / path.name
+    temp.unlink(missing_ok=True)   # reste d'un rognage interrompu
+
+    args = ffmpeg_trim_args(path, temp, start, end)
+    log(f"Rognage de {path.name} : {start:.2f} s → {end:.2f} s "
+        f"({end - start:.2f} s)…")
+    try:
+        # Pas de check=True : un CalledProcessError n'expose que le code retour,
+        # jamais le stderr de ffmpeg — or c'est ce message que l'utilisateur
+        # doit voir dans le journal. Même motif que beatsync._run_ffmpeg.
+        result = subprocess.run(["ffmpeg", *args], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n"
+                               f"{result.stderr}")
+        # `replace` est atomique sur le même volume : à aucun instant le clip
+        # n'est ni l'ancien ni le nouveau.
+        temp.replace(path)
+        log(f"OK — {path.name} rogné")
+    finally:
+        temp.unlink(missing_ok=True)
+        # Le dossier temporaire ne sert qu'à ce rognage ; le laisser traînerait
+        # un dossier vide dans le catalogue.
+        try:
+            temp_dir.rmdir()
+        except OSError:
+            pass   # un autre rognage tourne en parallèle : on lui laisse
+
+
+def main() -> None:
+    if len(sys.argv) < 4:
+        sys.exit("usage : python trim_clip.py <nom-du-clip> <début> <fin> [<racine>]")
+    name = Path(sys.argv[1]).name   # neutralise toute traversée de chemin
+    root = Path(sys.argv[4]) if len(sys.argv) > 4 else ROOT
+    path = root / "clips" / name
+    if not path.is_file():
+        sys.exit(f"clip introuvable : {name}")
+    try:
+        trim_clip(path, sys.argv[2], sys.argv[3],
+                  log=lambda m: print(m, flush=True))
+    except (ValueError, RuntimeError) as exc:
+        sys.exit(str(exc))
+
+
+if __name__ == "__main__":
+    main()
