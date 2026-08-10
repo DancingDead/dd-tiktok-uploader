@@ -152,7 +152,13 @@ def trim_clip(path: Path, start, end, log=print) -> None:
         # redémarrage, un clip vide ou tronqué remplacerait un original déjà
         # perdu. ext4 masque en partie ce risque par heuristique ; APFS et
         # NTFS (la prod tourne sous Windows) ne donnent pas cette garantie.
-        with open(temp, "rb") as f:
+        # "rb+" et non "rb" : sous Windows, os.fsync appelle FlushFileBuffers,
+        # qui exige un handle ouvert en écriture et échoue sinon avec
+        # ERROR_ACCESS_DENIED — silencieux sur macOS/Linux (fsync y réussit
+        # même en lecture seule), donc invisible en local et fatal en prod
+        # (la tour tourne sous Windows). Ne pas remettre "rb" : rien n'est
+        # écrit ici, mais le mode d'ouverture doit rester "rb+".
+        with open(temp, "rb+") as f:
             os.fsync(f.fileno())
         # `replace` est atomique sur le même volume : à aucun instant le clip
         # n'est ni l'ancien ni le nouveau. Cette atomicité protège des autres
