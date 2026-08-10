@@ -15,6 +15,7 @@ prend plusieurs minutes.
 """
 
 import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -98,11 +99,22 @@ TRIM_DIR_NAME = ".trim"
 
 def probe_duration(path: Path) -> float:
     """Durée du clip en secondes. I/O."""
-    out = subprocess.run(
+    # Pas de check=True : même motif que pour ffmpeg plus bas — un
+    # CalledProcessError n'expose que le code retour, jamais le stderr
+    # d'ffprobe, qui est le seul indice utile sur un fichier corrompu.
+    result = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True, check=True).stdout.strip()
-    return float(out)
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe a échoué sur {path.name} :\n{result.stderr}")
+    out = result.stdout.strip()
+    try:
+        return float(out)
+    except ValueError:
+        # Conteneur sans durée déclarée (ffprobe répond alors "N/A") : un
+        # message clair vaut mieux que la ValueError brute de float().
+        raise RuntimeError(f"durée illisible pour {path.name} : {out!r}")
 
 
 def trim_clip(path: Path, start, end, log=print) -> None:
@@ -111,8 +123,16 @@ def trim_clip(path: Path, start, end, log=print) -> None:
     start, end = coerce_bounds(start, end, probe_duration(path))
     temp_dir = path.parent / TRIM_DIR_NAME
     temp_dir.mkdir(exist_ok=True)
-    temp = temp_dir / path.name
-    temp.unlink(missing_ok=True)   # reste d'un rognage interrompu
+    # Nom unique par exécution (PID), pas juste `path.name` : deux rognages
+    # du même clip peuvent tourner en même temps (double-clic sur « Rogner »,
+    # ou relance d'un job qui semble figé alors qu'il encode toujours). Avec
+    # un nom partagé, le `unlink` préventif de l'un supprimait le fichier en
+    # cours d'écriture de l'autre — sous POSIX le ffmpeg visé continuait
+    # d'écrire sur l'inode détaché pendant qu'un second fichier était recréé
+    # au même chemin, et le premier processus à finir remplaçait le clip
+    # d'origine par le mp4 PARTIEL de l'autre. Un nom unique élimine le
+    # besoin même de cet unlink préventif, qui était le mécanisme dangereux.
+    temp = temp_dir / f"{path.stem}.{os.getpid()}{path.suffix}"
 
     args = ffmpeg_trim_args(path, temp, start, end)
     log(f"Rognage de {path.name} : {start:.2f} s → {end:.2f} s "
@@ -125,18 +145,32 @@ def trim_clip(path: Path, start, end, log=print) -> None:
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg a échoué :\n  ffmpeg {' '.join(args)}\n"
                                f"{result.stderr}")
+        # Un code retour nul ne garantit que la fin du process ffmpeg, pas que
+        # ses données ont quitté le cache du système de fichiers. Sur une
+        # coupure de courant juste après le `replace`, le renommage peut être
+        # journalisé sans que le contenu du nouveau fichier le soit : au
+        # redémarrage, un clip vide ou tronqué remplacerait un original déjà
+        # perdu. ext4 masque en partie ce risque par heuristique ; APFS et
+        # NTFS (la prod tourne sous Windows) ne donnent pas cette garantie.
+        with open(temp, "rb") as f:
+            os.fsync(f.fileno())
         # `replace` est atomique sur le même volume : à aucun instant le clip
-        # n'est ni l'ancien ni le nouveau.
+        # n'est ni l'ancien ni le nouveau. Cette atomicité protège des autres
+        # PROCESSUS, pas du cache disque — d'où le fsync juste au-dessus.
         temp.replace(path)
         log(f"OK — {path.name} rogné")
     finally:
         temp.unlink(missing_ok=True)
-        # Le dossier temporaire ne sert qu'à ce rognage ; le laisser traînerait
-        # un dossier vide dans le catalogue.
-        try:
-            temp_dir.rmdir()
-        except OSError:
-            pass   # un autre rognage tourne en parallèle : on lui laisse
+        # Pas de rmdir sur temp_dir : clips/.trim/ est partagé par tous les
+        # rognages en cours, y compris ceux de clips DIFFÉRENTS. Si celui-ci
+        # est le dernier à finir mais qu'un autre rognage vient tout juste de
+        # créer le dossier et de lancer son ffmpeg (spawn + ouverture d'un
+        # AV1 de plusieurs minutes, pas instantané), un rmdir ici supprimerait
+        # sous ses pieds le dossier où il s'apprête à écrire — échec non
+        # reproductible, sans rapport apparent avec ce rognage-ci. Un dossier
+        # `.trim` vide est de toute façon invisible de `load_clips` et
+        # `/api/state` : c'est exactement la propriété recherchée, donc le
+        # laisser traîner ne coûte rien.
 
 
 def main() -> None:
@@ -150,7 +184,11 @@ def main() -> None:
     try:
         trim_clip(path, sys.argv[2], sys.argv[3],
                   log=lambda m: print(m, flush=True))
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, OSError) as exc:
+        # OSError couvre le `replace` refusé (lecteur, indexeur ou antivirus
+        # qui tient un handle sur le clip, fréquent sous Windows) et
+        # l'absence de ffmpeg/ffprobe (FileNotFoundError) : un message plutôt
+        # qu'un traceback, même si le code retour reste non nul dans les deux cas.
         sys.exit(str(exc))
 
 
