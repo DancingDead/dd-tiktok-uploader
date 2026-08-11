@@ -104,9 +104,13 @@ def test_les_flags_bitexact_sont_presents():
 
 
 def test_la_source_et_la_cible_sont_aux_bons_endroits():
-    args = ffmpeg_trim_args(Path("clips/a.mp4"), Path("clips/.trim/a.mp4"), 1.0, 5.0)
-    assert args[args.index("-i") + 1] == "clips/a.mp4"
-    assert args[-1] == "clips/.trim/a.mp4"
+    # Chemins attendus via str(Path(...)) et non des littéraux POSIX : sous
+    # Windows le séparateur natif est « \ » et ce test échouait sur la tour de
+    # prod à chaque exécution, sans que le code soit en cause.
+    source, cible = Path("clips/a.mp4"), Path("clips/.trim/a.mp4")
+    args = ffmpeg_trim_args(source, cible, 1.0, 5.0)
+    assert args[args.index("-i") + 1] == str(source)
+    assert args[-1] == str(cible)
 
 
 # --- Promotion du temporaire : ce qui se joue autour du `replace` ---------------

@@ -193,10 +193,15 @@ def video_entry(**overrides):
 
 
 def test_image_input_is_looped_without_seek():
-    args = _segment_input_args(image_entry())
+    # Le chemin attendu passe par str(Path(...)) et non par un littéral POSIX :
+    # sous Windows le séparateur natif est « \ », et un littéral « /clips/b.png »
+    # faisait échouer ce test sur la tour de prod à chaque exécution, alors que
+    # le code produisait le bon chemin.
+    entry = image_entry()
+    args = _segment_input_args(entry)
     assert args[:2] == ["-loop", "1"]
     assert "-ss" not in args
-    assert args[-2:] == ["-i", "/clips/b.png"]
+    assert args[-2:] == ["-i", str(entry["clip_path"])]
 
 
 def test_video_input_seeks_before_the_input():
