@@ -114,7 +114,7 @@ Détail → [04 build_edl](04-build-edl.md).
 | 1369 | `_call_lmstudio(preprompt, count, seed, model)` | POST HTTP stdlib vers un serveur compatible OpenAI. `seed` transmis. LM Studio ≥ 0.4 exige `json_schema`. | réseau |
 | 1418 | `_call_llm(preprompt, count, seed, model)` | Dispatche sur le backend, tente `LLM_FALLBACK` en repli. Résout par **`globals()[nom]`** pour rester monkeypatchable. | réseau |
 | 1442 | `generate_punchlines(...)` ★ | Cache par (backend, modèle, préprompt, count, seed). **`except Exception` → `[]`** : l'usine ne bloque jamais sur le LLM. | I/O |
-| 1470 | `apply_subtitles(edl, config, seed, cache_dir)` ★ | Pose `entry["caption"]`. Quatre chemins : désactivé (rien), mode `fixe` (même texte partout, ni LLM ni cache), mode `llm_unique` (un seul appel LLM, count=1, même texte partout), mode `llm` (créneaux + génération, une punchline par créneau). | I/O |
+| 1470 | `apply_subtitles(edl, config, seed, cache_dir)` ★ | Pose `entry["caption"]`. Quatre chemins : désactivé (rien), mode `fixe` (même texte partout, ni LLM ni cache), mode `llm_unique` (un seul appel LLM, count=1, style `long`, même texte partout), mode `llm` (créneaux + génération, une punchline par créneau). | I/O |
 
 Détail → [05 punchlines](05-punchlines.md).
 
@@ -174,7 +174,7 @@ Détail → [06 rendu](06-rendu.md).
 | 1243 | `_CAPTION_FONTS` | 5 chemins | polices système, replis |
 | 1259 | `FONTS_DIR` | `assets/fonts` | |
 | 1261 | `_FONT_FILES` | 6 entrées | nom logique → fichier OFL embarqué |
-| 1330 | `_PUNCHLINE_SYSTEM` | str | consigne partagée par tous les backends |
+| 1330 | `_PUNCHLINE_SYSTEM` / `_PUNCHLINE_SYSTEM_LONG` / `_PUNCHLINE_SYSTEMS` | str, str, dict | deux consignes système : `court` (2 à 6 mots, mode défilant) et `long` (deux lignes qui s'opposent, mode `llm_unique`) ; `_PUNCHLINE_SYSTEMS` fait la correspondance, sa clé est le `style` reçu par `generate_punchlines` |
 | 1415 | `_LLM_BACKENDS` | `{anthropic, lmstudio}` | **noms** de fonctions, pas les objets |
 
 ---

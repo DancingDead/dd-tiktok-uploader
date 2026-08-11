@@ -1413,6 +1413,24 @@ _PUNCHLINE_SYSTEM = (
     "vidéo verticaux. Chaque punchline fait 2 à 6 mots, sans hashtag, sans emoji, "
     "sans ponctuation finale, et forme une progression cohérente d'une à l'autre.")
 
+# Consigne du mode « une punchline générée » (`subtitles.mode = "llm_unique"`).
+# Elle existe parce que la contrainte de 2 à 6 mots ci-dessus n'a de sens QUE
+# pour un texte qui change à chaque coupe et doit se lire en une demi-seconde.
+# L'accroche unique reste affichée du début à la fin : elle a le temps d'être
+# lue, et la brièveté n'y est plus une qualité mais une perte.
+_PUNCHLINE_SYSTEM_LONG = (
+    "Tu écris UNE accroche incrustée sur un edit vidéo vertical, affichée du "
+    "début à la fin de la vidéo — elle a donc le temps d'être lue. Écris deux "
+    "propositions qui s'OPPOSENT, une par ligne, séparées par un saut de ligne "
+    "(\\n dans le JSON). Chaque ligne fait 6 à 12 mots. La ponctuation finale "
+    "est autorisée. Pas de hashtag, pas d'emoji, pas de guillemets. L'opposition "
+    "est le cœur de l'accroche : ce qu'on croit coûteux contre ce que coûte "
+    "vraiment l'inaction.")
+
+# Styles d'accroche. La clé est ce que `generate_punchlines` reçoit et fait
+# entrer dans sa clé de cache — voir la note sur la reproductibilité là-bas.
+_PUNCHLINE_SYSTEMS = {"court": _PUNCHLINE_SYSTEM, "long": _PUNCHLINE_SYSTEM_LONG}
+
 
 def _punchline_user_prompt(preprompt: str, count: int, seed: int) -> str:
     return (f"Génère exactement {count} punchlines distinctes.\n"
@@ -1424,7 +1442,8 @@ def _llm_backend() -> str:
     return os.environ.get("LLM_BACKEND", "lmstudio").strip().lower()
 
 
-def _call_anthropic(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+def _call_anthropic(preprompt: str, count: int, seed: int, model: str,
+                    style: str = "court") -> list[str]:
     """Génère `count` punchlines via l'API Anthropic (Claude). Sortie JSON structurée."""
     import anthropic
 
@@ -1439,7 +1458,7 @@ def _call_anthropic(preprompt: str, count: int, seed: int, model: str) -> list[s
     resp = client.messages.create(
         model=model,
         max_tokens=1024,
-        system=_PUNCHLINE_SYSTEM,
+        system=_PUNCHLINE_SYSTEMS[style],
         messages=[{"role": "user", "content": _punchline_user_prompt(preprompt, count, seed)}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )
@@ -1447,7 +1466,8 @@ def _call_anthropic(preprompt: str, count: int, seed: int, model: str) -> list[s
     return [str(p) for p in json.loads(text)["punchlines"]]
 
 
-def _call_lmstudio(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+def _call_lmstudio(preprompt: str, count: int, seed: int, model: str,
+                   style: str = "court") -> list[str]:
     """Génère `count` punchlines via un serveur local compatible OpenAI (LM Studio) →
     coût nul. Endpoint et modèle configurables par LMSTUDIO_BASE_URL / LMSTUDIO_MODEL.
     `seed` est transmis au serveur pour la reproductibilité. Le `model` Claude n'est
@@ -1460,7 +1480,7 @@ def _call_lmstudio(preprompt: str, count: int, seed: int, model: str) -> list[st
     body = {
         "model": lm_model,
         "messages": [
-            {"role": "system", "content": _PUNCHLINE_SYSTEM
+            {"role": "system", "content": _PUNCHLINE_SYSTEMS[style]
              + ' Réponds UNIQUEMENT en JSON : {"punchlines": ["...", "..."]}.'},
             {"role": "user", "content": _punchline_user_prompt(preprompt, count, seed)},
         ],
@@ -1496,7 +1516,8 @@ def _call_lmstudio(preprompt: str, count: int, seed: int, model: str) -> list[st
 _LLM_BACKENDS = {"anthropic": "_call_anthropic", "lmstudio": "_call_lmstudio"}
 
 
-def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
+def _call_llm(preprompt: str, count: int, seed: int, model: str,
+              style: str = "court") -> list[str]:
     """Génère `count` punchlines via le backend choisi par LLM_BACKEND (défaut
     `lmstudio` = local, coût nul). Si le primaire échoue et que LLM_FALLBACK nomme
     un autre backend (ex. `anthropic`), il est essayé en repli. Isolé pour être
@@ -1512,7 +1533,7 @@ def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
         if fnname is None:
             continue
         try:
-            return globals()[fnname](preprompt, count, seed, model)
+            return globals()[fnname](preprompt, count, seed, model, style)
         except Exception as exc:  # on tente le repli, sinon on remonte l'erreur
             last_exc = exc
     if last_exc is not None:
@@ -1522,16 +1543,31 @@ def _call_llm(preprompt: str, count: int, seed: int, model: str) -> list[str]:
 
 def generate_punchlines(preprompt: str, count: int, seed: int,
                         cache_dir: Path | None = None,
-                        model: str = "claude-opus-4-8") -> list[str]:
-    """Punchlines pour une vidéo. Mises en cache par (modèle, préprompt, count,
-    seed) → reproductibles à seed égal. Dégrade en [] si pas de clé / échec API
-    (l'usine ne bloque jamais sur le LLM)."""
+                        model: str = "claude-opus-4-8",
+                        style: str = "court") -> list[str]:
+    """Punchlines pour une vidéo. `style` choisit la consigne système :
+    « court » (2 à 6 mots, une par créneau de coupe) ou « long » (l'accroche
+    unique du mode `llm_unique`, deux lignes qui s'opposent). Mises en cache par
+    (backend, modèle, préprompt, count, seed, style) → reproductibles à seed
+    égale. Dégrade en [] si pas de clé / échec API (l'usine ne bloque jamais sur
+    le LLM)."""
     if count <= 0 or not preprompt.strip():
         return []
     cache_path = None
     if cache_dir is not None:
+        # Le style n'entre dans la clé QUE s'il n'est pas « court ». Deux raisons,
+        # et la seconde est la vraie : (1) sans lui, une accroche courte déjà en
+        # cache serait resservie au mode long — même préprompt, même seed, et
+        # `count` vaut 1 des deux côtés dès que l'EDL tient en un créneau ;
+        # (2) l'ajouter INCONDITIONNELLEMENT changerait toutes les clés existantes
+        # et invaliderait les caches déjà sur disque, si bien qu'une même seed ne
+        # rendrait plus la même punchline qu'avant — ce qui casse l'invariant de
+        # reproductibilité du projet. Suffixer seulement les styles non-« court »
+        # donne au mode long son propre espace sans toucher à l'ancien.
+        suffixe = "" if style == "court" else f"|{style}"
         key = hashlib.md5(
-            f"{_llm_backend()}|{model}|{preprompt}|{count}|{seed}".encode()).hexdigest()
+            f"{_llm_backend()}|{model}|{preprompt}|{count}|{seed}{suffixe}".encode()
+        ).hexdigest()
         cache_path = cache_dir / f"{key}.json"
         if cache_path.is_file():
             try:
@@ -1539,7 +1575,7 @@ def generate_punchlines(preprompt: str, count: int, seed: int,
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
     try:
-        punchlines = _call_llm(preprompt, count, seed, model)[:count]
+        punchlines = _call_llm(preprompt, count, seed, model, style)[:count]
     except Exception:
         return []
     if cache_path is not None:
@@ -1571,8 +1607,11 @@ def apply_subtitles(edl: list[dict], config: dict, seed: int,
             # mode « llm » (le count entre dans la clé). La seed, elle, varie
             # d'une variante à l'autre — c'est ce qui donne N punchlines pour un
             # lot de N vidéos, sans code dédié.
+            # style « long » : cette accroche reste à l'écran du début à la fin,
+            # la contrainte de 2 à 6 mots du mode défilant n'a plus lieu d'être.
             lines = generate_punchlines(sub.get("preprompt", ""), 1, seed, cache_dir,
-                                        sub.get("model", "claude-opus-4-8"))
+                                        sub.get("model", "claude-opus-4-8"),
+                                        style="long")
             text = lines[0] if lines else ""
         for entry in edl:
             entry["caption"] = text
