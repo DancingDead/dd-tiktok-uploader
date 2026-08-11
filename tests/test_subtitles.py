@@ -326,6 +326,74 @@ def test_fixed_mode_disabled_leaves_the_edl_alone():
     assert all("caption" not in e for e in out)
 
 
+# --- Mode « une punchline générée » -----------------------------------------
+
+
+def unique_config(**subs):
+    return {**DEFAULT, "subtitles": {**DEFAULT["subtitles"], "enabled": True,
+                                     "mode": "llm_unique",
+                                     "preprompt": "motivation gym", **subs}}
+
+
+def test_unique_mode_puts_the_same_generated_caption_everywhere(monkeypatch):
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model: ["ON LACHE RIEN"])
+    edl = make_edl([0.0, 0.4, 0.8, 1.2, 1.6])
+    out = apply_subtitles(edl, unique_config(), seed=1)
+    assert [e["caption"] for e in out] == ["ON LACHE RIEN"] * 5
+
+
+def test_unique_mode_asks_the_llm_for_exactly_one_punchline(monkeypatch):
+    """Une seule punchline demandée, un seul appel — et surtout pas un appel
+    par créneau : c'est ce qui distingue ce mode du mode « llm »."""
+    calls = []
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model: (calls.append(n) or ["X"]))
+    edl = make_edl([0.0, 0.4, 1.8, 3.4, 5.0])
+    apply_subtitles(edl, unique_config(), seed=1)
+    assert calls == [1]
+
+
+def test_unique_mode_gives_a_different_punchline_per_seed(monkeypatch):
+    """La promesse du mode : un lot de N variantes donne N punchlines. Chaque
+    variante a sa seed, et la seed atteint le prompt."""
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model: [f"PUNCH {seed}"])
+    edl_a = make_edl([0.0, 0.4, 0.8])
+    edl_b = make_edl([0.0, 0.4, 0.8])
+    a = apply_subtitles(edl_a, unique_config(), seed=11)[0]["caption"]
+    b = apply_subtitles(edl_b, unique_config(), seed=22)[0]["caption"]
+    assert a != b
+
+
+def test_unique_mode_degrades_to_no_text_when_the_llm_fails(monkeypatch):
+    """L'usine ne bloque jamais sur le LLM : la vidéo sort sans texte."""
+    def boom(pp, n, seed, model):
+        raise RuntimeError("LM Studio éteint")
+
+    monkeypatch.setattr(beatsync, "_call_llm", boom)
+    edl = make_edl([0.0, 0.4, 0.8])
+    out = apply_subtitles(edl, unique_config(), seed=1)
+    assert [e["caption"] for e in out] == ["", "", ""]
+
+
+def test_unique_mode_does_not_build_caption_slots(monkeypatch):
+    """Pas de créneaux dans ce mode : le texte ne change jamais, `min_dur` n'a
+    rien à découper."""
+    monkeypatch.setattr(beatsync, "_call_llm", lambda pp, n, seed, model: ["X"])
+    monkeypatch.setattr(beatsync, "assign_caption_slots",
+                        lambda edl, min_dur: pytest.fail("créneaux calculés à tort"))
+    edl = make_edl([0.0, 0.4, 0.8])
+    out = apply_subtitles(edl, unique_config(), seed=1)
+    assert all("caption_slot" not in e for e in out)
+
+
+def test_unique_mode_disabled_leaves_the_edl_alone():
+    edl = make_edl([0.0, 0.4])
+    out = apply_subtitles(edl, unique_config(enabled=False), seed=1)
+    assert all("caption" not in e for e in out)
+
+
 def test_unknown_mode_degrades_to_llm(monkeypatch):
     """Dégradation sûre : une valeur inattendue ne fait pas planter la génération."""
     monkeypatch.setattr(beatsync, "_call_llm", lambda *a, **k: ["A", "B", "C", "D"])
