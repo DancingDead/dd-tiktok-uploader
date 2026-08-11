@@ -309,7 +309,7 @@ résolution par `globals()` rend possible. On teste : le cache est bien relu, un
 | Clé (`subtitles.*`) | Défaut | Effet |
 |---|---|---|
 | `enabled` | `False` | interrupteur |
-| `mode` | `"llm"` | `"fixe"` = texte manuel |
+| `mode` | `"llm"` | `"fixe"` = texte manuel, `"llm_unique"` = une punchline générée, stable du début à la fin |
 | `text` | `""` | le texte du mode fixe |
 | `preprompt` | `""` | consigne de style |
 | `min_dur` | `1.4` | durée min. d'un créneau |
