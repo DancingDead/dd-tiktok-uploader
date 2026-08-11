@@ -29,7 +29,9 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
   const [presetIds, setPresetIds] = useState<number[]>(niche.preset_ids)
   const [subsEnabled, setSubsEnabled] = useState(niche.subtitles?.enabled ?? false)
   const [preprompt, setPreprompt] = useState(niche.subtitles?.preprompt ?? "")
-  const [subsMode, setSubsMode] = useState<"llm" | "fixe">(niche.subtitles?.mode ?? "llm")
+  const [subsMode, setSubsMode] = useState<"llm" | "llm_unique" | "fixe">(
+    niche.subtitles?.mode ?? "llm",
+  )
   const [fixedText, setFixedText] = useState(niche.subtitles?.text ?? "")
   const [capX, setCapX] = useState(niche.subtitles?.x ?? 0.5)
   const [capY, setCapY] = useState(niche.subtitles?.y ?? 0.74)
@@ -212,23 +214,33 @@ export function NicheDetail({ niche, state, refresh, onDeleted }: Props) {
 
             {subsEnabled && (
               <>
-                {/* Les deux modes s'excluent : soit le LLM écrit et le texte
-                    change au fil de la vidéo, soit on fige une caption unique. */}
-                <div className="flex gap-4 text-sm">
-                  {(["llm", "fixe"] as const).map((m) => (
-                    <label key={m} className="flex items-center gap-2">
+                {/* Trois modes exclusifs. « Une punchline générée » est le mode
+                    qui sert à trier un lot : chaque variante porte UN texte,
+                    différent d'une variante à l'autre. */}
+                <div className="flex flex-col gap-2 text-sm">
+                  {([
+                    ["llm", "Punchlines générées", "Le texte change à chaque coupe."],
+                    ["llm_unique", "Une punchline générée",
+                     "Un seul texte généré, du début à la fin. Chaque variante du lot en a un différent."],
+                    ["fixe", "Texte fixe", "Le texte que tu écris, du début à la fin."],
+                  ] as const).map(([value, label, hint]) => (
+                    <label key={value} className="flex items-start gap-2">
                       <input
                         type="radio"
                         name="subs-mode"
-                        checked={subsMode === m}
-                        onChange={() => setSubsMode(m)}
+                        className="mt-1"
+                        checked={subsMode === value}
+                        onChange={() => setSubsMode(value)}
                       />
-                      {m === "llm" ? "Punchlines générées" : "Texte fixe"}
+                      <span>
+                        {label}
+                        <span className="block text-xs text-muted-foreground">{hint}</span>
+                      </span>
                     </label>
                   ))}
                 </div>
 
-                {subsMode === "llm" ? (
+                {subsMode !== "fixe" ? (
                   <div className="space-y-1">
                     <Label htmlFor="preprompt">Consigne de style</Label>
                     <Textarea

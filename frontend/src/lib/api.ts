@@ -7,7 +7,7 @@ export type Job = { name: string; status: "running" | "done" | "failed"; log: st
 
 export type Subtitles = {
   enabled?: boolean
-  mode?: "llm" | "fixe"
+  mode?: "llm" | "llm_unique" | "fixe"
   preprompt?: string
   text?: string
   x?: number
