@@ -114,7 +114,7 @@ Détail → [04 build_edl](04-build-edl.md).
 | 1369 | `_call_lmstudio(preprompt, count, seed, model)` | POST HTTP stdlib vers un serveur compatible OpenAI. `seed` transmis. LM Studio ≥ 0.4 exige `json_schema`. | réseau |
 | 1418 | `_call_llm(preprompt, count, seed, model)` | Dispatche sur le backend, tente `LLM_FALLBACK` en repli. Résout par **`globals()[nom]`** pour rester monkeypatchable. | réseau |
 | 1442 | `generate_punchlines(...)` ★ | Cache par (backend, modèle, préprompt, count, seed). **`except Exception` → `[]`** : l'usine ne bloque jamais sur le LLM. | I/O |
-| 1470 | `apply_subtitles(edl, config, seed, cache_dir)` ★ | Pose `entry["caption"]`. Trois chemins : désactivé (rien), mode `fixe` (même texte partout, ni LLM ni cache), mode `llm` (créneaux + génération). | I/O |
+| 1470 | `apply_subtitles(edl, config, seed, cache_dir)` ★ | Pose `entry["caption"]`. Quatre chemins : désactivé (rien), mode `fixe` (même texte partout, ni LLM ni cache), mode `llm_unique` (un seul appel LLM, count=1, même texte partout), mode `llm` (créneaux + génération, une punchline par créneau). | I/O |
 
 Détail → [05 punchlines](05-punchlines.md).
 

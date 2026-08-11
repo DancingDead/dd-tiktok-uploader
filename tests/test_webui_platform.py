@@ -387,6 +387,14 @@ def test_coerce_subtitles_rejects_unknown_mode():
         coerce_subtitles({"mode": "magique"})
 
 
+def test_coerce_subtitles_accepts_the_single_punchline_mode():
+    """Le mode « une punchline générée » doit traverser la validation, sinon la
+    niche ne peut pas être enregistrée depuis l'UI."""
+    out = coerce_subtitles({"mode": "llm_unique", "preprompt": "gym", "size": "72"})
+    assert out["mode"] == "llm_unique"
+    assert out["size"] == 72
+
+
 def test_coerce_subtitles_rejects_non_numeric():
     with pytest.raises(ValueError):
         coerce_subtitles({"size": "gros"})

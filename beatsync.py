@@ -66,7 +66,7 @@ DEFAULT_CONFIG = {
     },
     "subtitles": {                      # punchlines incrustées, générées par Claude
         "enabled": False,               # désactivé par défaut
-        "mode": "llm",                  # "llm" = punchlines générées | "fixe" = texte écrit à la main
+        "mode": "llm",                  # "llm" = punchlines générées (une par créneau) | "llm_unique" = une seule punchline générée, stable | "fixe" = texte écrit à la main
         "text": "",                     # mode fixe : caption unique, du début à la fin
         "x": 0.5,                       # ancrage horizontal, fraction de largeur (texte centré dessus)
         "y": 0.74,                      # ancrage vertical, fraction de hauteur
@@ -1551,14 +1551,29 @@ def generate_punchlines(preprompt: str, count: int, seed: int,
 def apply_subtitles(edl: list[dict], config: dict, seed: int,
                     cache_dir: Path | None = None) -> list[dict]:
     """Annote l'EDL de punchlines (clé `caption` par segment) si les sous-titres
-    sont activés. Segments d'un même créneau partagent la punchline ; texte vide
-    si la génération échoue (rendu sans sous-titres, jamais de plantage)."""
+    sont activés. Mode `llm` : segments d'un même créneau partagent la punchline
+    (une par créneau de coupe). Modes `fixe` et `llm_unique` : une caption unique
+    posée sur tout l'EDL, sans créneaux — la seule différence entre les deux est
+    la provenance du texte (écrit à la main / un seul appel LLM). Texte vide si
+    la génération échoue (rendu sans sous-titres, jamais de plantage)."""
     sub = config.get("subtitles") or {}
     if not sub.get("enabled"):
         return edl
-    if sub.get("mode") == "fixe":
-        # Caption unique écrite à la main : ni créneaux, ni LLM, ni cache.
-        text = sub.get("text", "")
+    mode = sub.get("mode")
+    if mode in ("fixe", "llm_unique"):
+        # Une caption unique, du début à la fin : ni créneaux, ni `min_dur`, le
+        # texte ne changeant jamais. Les deux modes ne diffèrent que par la
+        # PROVENANCE du texte, d'où le chemin commun.
+        if mode == "fixe":
+            text = sub.get("text", "")
+        else:
+            # count=1 : un seul appel, et une clé de cache distincte de celle du
+            # mode « llm » (le count entre dans la clé). La seed, elle, varie
+            # d'une variante à l'autre — c'est ce qui donne N punchlines pour un
+            # lot de N vidéos, sans code dédié.
+            lines = generate_punchlines(sub.get("preprompt", ""), 1, seed, cache_dir,
+                                        sub.get("model", "claude-opus-4-8"))
+            text = lines[0] if lines else ""
         for entry in edl:
             entry["caption"] = text
         return edl
