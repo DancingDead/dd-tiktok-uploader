@@ -58,7 +58,7 @@ def test_min_dur_zero_gives_one_slot_per_cut():
 def test_generate_caches_and_reuses(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: (calls.append(1) or ["A", "B", "C"][:n]))
+                        lambda pp, n, seed, model, style="court": (calls.append(1) or ["A", "B", "C"][:n]))
     cache = tmp_path / "subs"
     a = generate_punchlines("motivation gym", 3, seed=42, cache_dir=cache)
     b = generate_punchlines("motivation gym", 3, seed=42, cache_dir=cache)
@@ -69,7 +69,7 @@ def test_generate_caches_and_reuses(tmp_path, monkeypatch):
 def test_generate_seed_changes_cache_key(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: (calls.append(seed) or [f"s{seed}"] * n))
+                        lambda pp, n, seed, model, style="court": (calls.append(seed) or [f"s{seed}"] * n))
     cache = tmp_path / "subs"
     generate_punchlines("x", 2, seed=1, cache_dir=cache)
     generate_punchlines("x", 2, seed=2, cache_dir=cache)
@@ -149,7 +149,7 @@ def test_call_llm_no_fallback_reraises(monkeypatch):
 
 def test_apply_subtitles_assigns_caption_per_slot(monkeypatch):
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: [f"punch{i}" for i in range(n)])
+                        lambda pp, n, seed, model, style="court": [f"punch{i}" for i in range(n)])
     # starts 0/0.4/0.8 → créneau 0 ; 1.6 (≥1.4 après 0) → créneau 1 ; 2.4 (0.8
     # après 1.6, < 1.4) → reste créneau 1.
     edl = make_edl([0.0, 0.4, 0.8, 1.6, 2.4])
@@ -311,7 +311,7 @@ def test_fixed_mode_never_calls_the_llm(monkeypatch):
     Exception (dégradation en []), une AssertionError y serait avalée."""
     calls = []
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: (calls.append(1) or ["X"] * n))
+                        lambda pp, n, seed, model, style="court": (calls.append(1) or ["X"] * n))
     edl = make_edl([0.0, 0.4, 0.8])
     out = apply_subtitles(edl, fixed_config(text="DANCING DEAD"), seed=1)
     assert calls == []
@@ -337,7 +337,7 @@ def unique_config(**subs):
 
 def test_unique_mode_puts_the_same_generated_caption_everywhere(monkeypatch):
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: ["ON LACHE RIEN"])
+                        lambda pp, n, seed, model, style="court": ["ON LACHE RIEN"])
     edl = make_edl([0.0, 0.4, 0.8, 1.2, 1.6])
     out = apply_subtitles(edl, unique_config(), seed=1)
     assert [e["caption"] for e in out] == ["ON LACHE RIEN"] * 5
@@ -348,7 +348,7 @@ def test_unique_mode_asks_the_llm_for_exactly_one_punchline(monkeypatch):
     par créneau : c'est ce qui distingue ce mode du mode « llm »."""
     calls = []
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: (calls.append(n) or ["X"]))
+                        lambda pp, n, seed, model, style="court": (calls.append(n) or ["X"]))
     edl = make_edl([0.0, 0.4, 1.8, 3.4, 5.0])
     apply_subtitles(edl, unique_config(), seed=1)
     assert calls == [1]
@@ -360,7 +360,7 @@ def test_unique_mode_gives_a_different_punchline_per_seed(monkeypatch):
     créneaux (4, avec min_dur=1.4) pour assurer que le chemin llm produit 4
     punchlines différentes — ce mode n'en demande qu'une : discriminant."""
     monkeypatch.setattr(beatsync, "_call_llm",
-                        lambda pp, n, seed, model: [f"PUNCH {seed}-{i}" for i in range(n)])
+                        lambda pp, n, seed, model, style="court": [f"PUNCH {seed}-{i}" for i in range(n)])
     # EDL de 4.8 s sur 4 segments → 4 créneaux avec min_dur=1.4
     edl_a = make_edl([0.0, 1.6, 3.2, 4.8])
     edl_b = make_edl([0.0, 1.6, 3.2, 4.8])
@@ -391,7 +391,7 @@ def test_unique_mode_degrades_to_no_text_when_the_llm_fails(monkeypatch):
 def test_unique_mode_does_not_build_caption_slots(monkeypatch):
     """Pas de créneaux dans ce mode : le texte ne change jamais, `min_dur` n'a
     rien à découper."""
-    monkeypatch.setattr(beatsync, "_call_llm", lambda pp, n, seed, model: ["X"])
+    monkeypatch.setattr(beatsync, "_call_llm", lambda pp, n, seed, model, style="court": ["X"])
     monkeypatch.setattr(beatsync, "assign_caption_slots",
                         lambda edl, min_dur: pytest.fail("créneaux calculés à tort"))
     edl = make_edl([0.0, 0.4, 0.8])
@@ -429,3 +429,76 @@ def test_drawtext_escape_handles_quotes_and_specials():
     escaped = beatsync._drawtext_escape("c'est 100% : oui")
     for ch in ("'", "%", ":"):
         assert f"\\{ch}" in escaped
+
+
+# --- Accroche longue du mode « une punchline générée » ----------------------
+
+
+def test_long_style_uses_a_different_system_prompt():
+    """Les deux styles ne doivent pas partager la même consigne : le mode
+    défilant impose 2 à 6 mots, l'accroche unique a le temps d'être lue."""
+    court = beatsync._PUNCHLINE_SYSTEMS["court"]
+    long_ = beatsync._PUNCHLINE_SYSTEMS["long"]
+    assert court != long_
+    assert "2 à 6 mots" in court
+    # L'accroche longue est en DEUX lignes qui s'opposent : c'est sa forme, pas
+    # seulement sa longueur.
+    assert "\\n" in long_ or "ligne" in long_
+
+
+def test_unique_mode_asks_for_the_long_style(monkeypatch):
+    """Le mode « une punchline générée » doit demander l'accroche longue —
+    sinon la fonctionnalité se réduit à une punchline courte figée."""
+    vus = []
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model, style="court":
+                        (vus.append(style) or ["X"]))
+    apply_subtitles(make_edl([0.0, 0.4, 0.8]), unique_config(), seed=1)
+    assert vus == ["long"]
+
+
+def test_scrolling_mode_keeps_the_short_style(monkeypatch):
+    """Aucune régression sur les niches existantes : à la coupe, un texte long
+    serait illisible."""
+    vus = []
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model, style="court":
+                        (vus.append(style) or ["A", "B", "C", "D"]))
+    config = {**DEFAULT, "subtitles": {**DEFAULT["subtitles"], "enabled": True,
+                                       "mode": "llm", "preprompt": "test"}}
+    apply_subtitles(make_edl([0.0, 1.6, 3.2, 4.8]), config, seed=1)
+    assert vus == ["court"]
+
+
+def test_cache_does_not_mix_the_two_styles(tmp_path, monkeypatch):
+    """Même préprompt, même seed, même count=1 : sans le style dans la clé, le
+    mode long recevrait l'accroche COURTE déjà en cache."""
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model, style="court":
+                        [f"texte {style}"])
+    court = generate_punchlines("gym", 1, 7, tmp_path, style="court")
+    long_ = generate_punchlines("gym", 1, 7, tmp_path, style="long")
+    assert court == ["texte court"]
+    assert long_ == ["texte long"]
+
+
+def test_existing_short_caches_stay_valid(tmp_path, monkeypatch):
+    """Le style « court » ne doit RIEN ajouter à la clé. On écrit ici un fichier
+    de cache à l'ANCIENNE clé (celle d'avant l'ajout du style) et on vérifie
+    qu'il est encore lu : sinon tous les caches déjà sur disque seraient
+    invalidés et une même seed ne rendrait plus la même punchline qu'avant —
+    l'invariant de reproductibilité du projet. Comparer deux appels « court »
+    entre eux ne prouverait rien, les deux clés bougeant ensemble."""
+    import hashlib
+    import json
+
+    ancienne_cle = hashlib.md5(
+        f"{beatsync._llm_backend()}|m|gym|1|7".encode()).hexdigest()
+    (tmp_path / f"{ancienne_cle}.json").write_text(
+        json.dumps({"punchlines": ["DEJA EN CACHE"]}), encoding="utf-8")
+
+    def jamais(*a, **k):
+        raise AssertionError("le LLM ne doit pas être appelé : le cache existe")
+
+    monkeypatch.setattr(beatsync, "_call_llm", jamais)
+    assert generate_punchlines("gym", 1, 7, tmp_path, model="m") == ["DEJA EN CACHE"]
