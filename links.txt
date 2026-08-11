@@ -1,4 +1,7 @@
-# Un lien YouTube par ligne (vidéo ou playlist entière).
+# Un lien YouTube par ligne.
+# Un lien de morceau ne rend QUE ce morceau, même s'il traîne un &list=
+# (un mix radio ouvert depuis une recherche). Pour importer une liste
+# entière, colle son adresse /playlist?list=...
 # Les lignes commençant par # sont ignorées.
 # Puis :  uv run python fetch_tracks.py
 # Les mp3 arrivent dans tracks/

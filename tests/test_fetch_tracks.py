@@ -50,6 +50,17 @@ def test_ytdlp_args_video_mode():
     assert "--merge-output-format" not in args
 
 
+def test_ytdlp_args_refuse_les_playlists_implicites_dans_les_trois_modes():
+    """Un lien copié depuis le lecteur YouTube porte presque toujours un
+    `&list=` (un mix radio `RD…` quand on clique un morceau depuis une
+    recherche) : sans `--no-playlist`, importer UN son déverse des dizaines de
+    fichiers. La garde vaut pour les trois modes, pas seulement l'audio."""
+    for kwargs in ({"video": False},
+                   {"video": True},
+                   {"video": True, "with_audio": True}):
+        assert "--no-playlist" in ytdlp_args(Path("dest"), **kwargs), kwargs
+
+
 def test_ytdlp_args_video_avec_audio_muxe_une_piste_son():
     """Sans +ba, yt-dlp rend le meilleur flux VIDÉO SEULE et la source du
     clipper arrive muette — donc condamnée avant la transcription."""

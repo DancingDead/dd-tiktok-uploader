@@ -36,6 +36,18 @@ def ytdlp_args(dest: Path, video: bool, with_audio: bool = False) -> list[str]:
         "--restrict-filenames",  # noms de fichiers sans espaces/accents : plus simple en CLI
         "--no-overwrites",       # relancer le script ne retélécharge pas l'existant
         "--ignore-errors",       # un lien mort ne bloque pas les suivants
+        # Un lien copié depuis le lecteur YouTube traîne presque toujours un
+        # `&list=` : cliquer un morceau depuis une recherche ouvre un MIX RADIO
+        # (`list=RD…`, quasi infini). Sans cette option, importer UN son
+        # déversait des dizaines de morceaux dans tracks/ (constaté en prod :
+        # ~10 fichiers en une minute, à couper à la main).
+        #
+        # L'option ne supprime PAS l'import de playlist documenté dans
+        # links.txt : `--no-playlist` ne s'applique qu'aux URL désignant à la
+        # fois une vidéo ET une liste. Vérifié pour de vrai sur les deux cas —
+        # un `watch?v=…&list=RD…` rend 1 entrée, un `/playlist?list=…` en rend
+        # toujours 100.
+        "--no-playlist",
         "-o", str(dest / "%(title)s.%(ext)s"),
     ]
     if video and with_audio:
