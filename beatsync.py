@@ -1359,15 +1359,34 @@ def resolve_caption_font(name: str) -> str | None:
 
 
 def _drawtext_escape(text: str) -> str:
-    """Échappe le texte pour l'option drawtext de FFmpeg (argument non shell)."""
+    """Échappe le texte pour l'option drawtext de FFmpeg (argument non shell).
+
+    Le nombre d'antislashs N'EST PAS le même pour tous les caractères, et c'est
+    contre-intuitif : le filtergraph applique deux niveaux d'unescape aux
+    caractères qui terminent une OPTION (`'` et `:`), un seul à ceux qui
+    séparent des filtres (`,` `;` `[` `]`). Chaque cas est vérifié en rendant
+    une image dans `tests/test_drawtext_rendu.py` — ne pas « harmoniser » cette
+    fonction sans relancer ces tests.
+
+    L'ancienne version mettait UN antislash partout. Sur l'apostrophe, cela
+    refermait `text=` et TOUTES les options suivantes (taille, couleur,
+    position) étaient avalées dans le texte : la punchline se dessinait
+    minuscule et noire dans le coin, donc invisible. En français l'apostrophe
+    est partout — le mode punchlines était inutilisable, sans erreur ni trace.
+
+    Le `%` n'est plus échappé du tout : il déclenchait l'expansion de drawtext
+    et vidait le texte. C'est `expansion=none`, posé par `_caption_filter`, qui
+    le neutralise proprement.
+
+    Le retour à la ligne est CONSERVÉ tel quel : c'est le vrai saut de ligne qui
+    produit deux lignes à l'écran (mesuré). La séquence `\\n` que fabriquait
+    l'ancien code se dessinait comme un « n » littéral au milieu du texte."""
     out = text.replace("\\", "\\\\")
-    for ch in (":", "'", "%", ",", ";", "[", "]"):
+    for ch in ("'", ":"):
+        out = out.replace(ch, "\\\\" + ch)
+    for ch in (",", ";", "[", "]"):
         out = out.replace(ch, "\\" + ch)
-    # Un retour à la ligne réel casse le parseur de filtergraph ; drawtext
-    # interprète la séquence \n comme un saut de ligne. Fait en dernier : le
-    # doublement des antislashs ci-dessus ne doit pas s'y appliquer.
-    out = out.replace("\r\n", "\n").replace("\n", "\\n")
-    return out
+    return out.replace("\r\n", "\n")
 
 
 def _drawtext_fontfile(path: str) -> str:
@@ -1784,7 +1803,13 @@ def _caption_filter(entry: dict, config: dict) -> str | None:
     cap_y = max(0.0, min(1.0, _coerce(subs.get("y", 0.74), float, 0.74)))
     cap_size = max(8, _coerce(subs.get("size", 64), int, 64))
     return (
+        # `expansion=none` : sans lui, drawtext interprète `%` (et `%{...}`)
+        # comme une expansion et rend un texte VIDE, sans erreur — une
+        # punchline contenant « 100% » disparaissait purement et simplement.
+        # Aucune expansion n'est utilisée ici ; les expressions de `x`/`y` sont
+        # évaluées à part et ne sont pas concernées.
         f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
+        f":expansion=none"
         f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"
         f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
     )
