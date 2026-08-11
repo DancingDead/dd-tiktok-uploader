@@ -32,6 +32,18 @@ def plan_variants(tracks: list[str], count: int, base_seed: int) -> list[tuple[s
     return [(rng.choice(tracks), s) for s in seeds]
 
 
+def subtitles_record(subtitles: dict, captions: list[str]) -> dict:
+    """Bloc `subtitles` stocké avec la vidéo. Pure.
+
+    `lines: []` seul est ambigu : sous-titres coupés, ou LLM en échec ? Le cas
+    s'est produit en vrai — sur un lot de 3, une variante est sortie sans texte
+    et rien ne la distinguait dans la bibliothèque d'une vidéo volontairement
+    muette, si bien qu'on pouvait la valider sans s'en apercevoir. `attendu` dit
+    si du texte était demandé, et c'est ce qui permet à l'UI de signaler
+    l'absence au lieu de la taire."""
+    return {"lines": captions, "attendu": bool(subtitles.get("enabled"))}
+
+
 def video_stem(slug: str, track: str, seed: int, created_at: str) -> str:
     tname = re.sub(r"[^a-z0-9]+", "-", Path(track).stem.lower()).strip("-")[:40]
     return f"{created_at.replace(':', '-')}_{slug}_{tname}_s{seed}"
@@ -100,7 +112,8 @@ def main() -> None:
             # quand `enabled` est False (l'UI garde la valeur en state même
             # champ masqué) et écrivait une caption sur une vidéo qui n'en porte
             # aucune.
-            subtitles={"lines": info["captions"] or []},
+            subtitles=subtitles_record(config.get("subtitles") or {},
+                                       info["captions"] or []),
             created_at=datetime.now().isoformat(timespec="seconds"))
         produced += 1
     # Compte réel (≠ tentées) : un échec par variante était silencieux, la sortie

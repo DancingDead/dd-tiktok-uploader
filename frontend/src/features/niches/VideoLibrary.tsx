@@ -97,6 +97,11 @@ export function VideoLibrary({
     >
       {[...videos].reverse().map((v) => {
         const preview = linesPreview(v.subtitles?.lines)
+        // Du texte etait demande mais la generation n'en a produit aucun : le
+        // LLM a echoue ou rendu vide. Sans ce reperage, la vignette est
+        // identique a celle d'une video volontairement muette et on la valide
+        // sans s'en apercevoir — constate sur un lot de 3.
+        const sansPunchline = v.subtitles?.attendu === true && !preview
         const busy = busyId === v.id
         return (
           <div key={v.id} className="flex flex-col gap-2 rounded-lg border bg-card p-2">
@@ -125,6 +130,12 @@ export function VideoLibrary({
 
             {preview && (
               <p className="line-clamp-2 text-xs text-muted-foreground">{preview}</p>
+            )}
+
+            {sansPunchline && (
+              <p className="text-xs text-destructive">
+                sans punchline — le texte n'a pas ete genere
+              </p>
             )}
 
             {/* Deux tiers : l'action-récompense (Valider) et le téléchargement en

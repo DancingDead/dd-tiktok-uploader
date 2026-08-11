@@ -72,3 +72,19 @@ def test_disabled_fixed_subtitles_do_not_leak_into_video_captions(tmp_path, monk
     conn.close()
     assert len(videos) == 1
     assert videos[0]["subtitles"]["lines"] == []
+
+
+def test_video_records_whether_a_punchline_was_expected(tmp_path, monkeypatch):
+    """`lines: []` est ambigu : sous-titres coupés, ou LLM en échec ? Vu en prod
+    — une variante sur trois est sortie SANS texte, indiscernable dans la
+    bibliothèque d'une vidéo volontairement muette. On enregistre donc si du
+    texte était attendu, pour que l'UI puisse le signaler."""
+    import generate_niche
+    assert generate_niche.subtitles_record({"enabled": True}, []) == {
+        "lines": [], "attendu": True}
+    assert generate_niche.subtitles_record({"enabled": True}, ["A"]) == {
+        "lines": ["A"], "attendu": True}
+    # Sous-titres coupés : rien n'est attendu, donc rien à signaler.
+    assert generate_niche.subtitles_record({"enabled": False}, []) == {
+        "lines": [], "attendu": False}
+    assert generate_niche.subtitles_record({}, []) == {"lines": [], "attendu": False}

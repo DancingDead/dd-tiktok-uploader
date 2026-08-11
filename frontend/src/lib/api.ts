@@ -14,6 +14,8 @@ export type Subtitles = {
   y?: number
   size?: number
   lines?: string[]
+  /** true si du texte etait demande a la generation : distingue « LLM en echec » de « sous-titres coupes ». */
+  attendu?: boolean
 }
 
 export type Video = {

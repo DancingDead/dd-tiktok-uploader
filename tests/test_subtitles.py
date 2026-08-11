@@ -344,14 +344,17 @@ def test_unique_mode_puts_the_same_generated_caption_everywhere(monkeypatch):
 
 
 def test_unique_mode_asks_the_llm_for_exactly_one_punchline(monkeypatch):
-    """Une seule punchline demandée, un seul appel — et surtout pas un appel
-    par créneau : c'est ce qui distingue ce mode du mode « llm »."""
+    """UN SEUL appel — et surtout pas un appel par créneau : c'est ce qui
+    distingue ce mode du mode « llm ». L'appel demande 2 éléments, qui sont les
+    deux LIGNES de l'unique accroche et non deux punchlines (voir
+    `test_long_style_asks_the_model_for_two_array_items`) ; l'EDL ci-dessous
+    compte 4 créneaux, donc le mode « llm » aurait demandé 4."""
     calls = []
     monkeypatch.setattr(beatsync, "_call_llm",
                         lambda pp, n, seed, model, style="court": (calls.append(n) or ["X"]))
     edl = make_edl([0.0, 0.4, 1.8, 3.4, 5.0])
     apply_subtitles(edl, unique_config(), seed=1)
-    assert calls == [1]
+    assert calls == [2]
 
 
 def test_unique_mode_gives_a_different_punchline_per_seed(monkeypatch):
@@ -502,3 +505,46 @@ def test_existing_short_caches_stay_valid(tmp_path, monkeypatch):
 
     monkeypatch.setattr(beatsync, "_call_llm", jamais)
     assert generate_punchlines("gym", 1, 7, tmp_path, model="m") == ["DEJA EN CACHE"]
+
+
+# --- Accroche longue : deux elements de tableau plutot qu'un \n echappe -------
+
+
+def test_long_style_asks_the_model_for_two_array_items(monkeypatch):
+    """Un modele local de 7B n'arrive pas a placer un saut de ligne ECHAPPE dans
+    une chaine JSON (mesure sur la tour : 1 fois sur 4). Emettre deux elements
+    de tableau est la forme naturelle du schema, qu'il produit sans peine. On
+    demande donc 2 items et on recolle."""
+    vus = []
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model, style="court":
+                        (vus.append(n) or ["Ligne une", "Ligne deux"]))
+    out = generate_punchlines("gym", 1, 7, None, style="long")
+    assert vus == [2]
+    assert out == ["Ligne une\nLigne deux"]
+
+
+def test_long_style_survives_a_model_that_returns_one_item(monkeypatch):
+    """Le modele peut n'en rendre qu'un : on garde ce qu'on a plutot que de
+    rendre une accroche vide — mieux vaut une ligne que rien."""
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model, style="court": ["Une seule ligne"])
+    assert generate_punchlines("gym", 1, 7, None, style="long") == ["Une seule ligne"]
+
+
+def test_long_style_ignores_blank_items(monkeypatch):
+    """Un element vide produirait une accroche commencant par un saut de ligne,
+    donc un bloc de texte decale a l'ecran."""
+    monkeypatch.setattr(beatsync, "_call_llm",
+                        lambda pp, n, seed, model, style="court": ["", "Ligne deux"])
+    assert generate_punchlines("gym", 1, 7, None, style="long") == ["Ligne deux"]
+
+
+def test_long_user_prompt_asks_for_two_lines_not_two_punchlines():
+    """« 2 punchlines distinctes » ferait rendre deux accroches sans rapport ;
+    on veut les deux LIGNES d'une seule."""
+    court = beatsync._punchline_user_prompt("gym", 4, 1, "court")
+    long_ = beatsync._punchline_user_prompt("gym", 2, 1, "long")
+    assert "4 punchlines distinctes" in court
+    assert "distinctes" not in long_
+    assert "ligne" in long_.lower()

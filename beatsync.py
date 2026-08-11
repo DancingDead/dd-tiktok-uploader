@@ -1420,21 +1420,30 @@ _PUNCHLINE_SYSTEM = (
 # lue, et la brièveté n'y est plus une qualité mais une perte.
 _PUNCHLINE_SYSTEM_LONG = (
     "Tu écris UNE accroche incrustée sur un edit vidéo vertical, affichée du "
-    "début à la fin de la vidéo — elle a donc le temps d'être lue. Écris deux "
-    "propositions qui s'OPPOSENT, une par ligne, séparées par un saut de ligne "
-    "(\\n dans le JSON). Chaque ligne fait 6 à 12 mots. La ponctuation finale "
-    "est autorisée. Pas de hashtag, pas d'emoji, pas de guillemets. L'opposition "
-    "est le cœur de l'accroche : ce qu'on croit coûteux contre ce que coûte "
-    "vraiment l'inaction.")
+    "début à la fin de la vidéo — elle a donc le temps d'être lue. Elle tient en "
+    "DEUX propositions qui s'OPPOSENT. Rends-les comme les DEUX éléments du "
+    "tableau `punchlines` : le premier élément est la première ligne, le second "
+    "élément est la seconde. N'écris jamais de saut de ligne à l'intérieur d'un "
+    "élément. Chaque ligne fait 6 à 12 mots. La ponctuation finale est "
+    "autorisée. Pas de hashtag, pas d'emoji, pas de guillemets.")
 
 # Styles d'accroche. La clé est ce que `generate_punchlines` reçoit et fait
 # entrer dans sa clé de cache — voir la note sur la reproductibilité là-bas.
 _PUNCHLINE_SYSTEMS = {"court": _PUNCHLINE_SYSTEM, "long": _PUNCHLINE_SYSTEM_LONG}
 
 
-def _punchline_user_prompt(preprompt: str, count: int, seed: int) -> str:
-    return (f"Génère exactement {count} punchlines distinctes.\n"
-            f"Style / consigne : {preprompt}\nVariation n°{seed}.")
+def _punchline_user_prompt(preprompt: str, count: int, seed: int,
+                           style: str = "court") -> str:
+    """Consigne utilisateur. Le style « long » ne demande PAS des punchlines
+    distinctes mais les deux LIGNES d'une seule accroche : « 2 punchlines
+    distinctes » ferait rendre deux accroches sans rapport, recollées en un
+    texte incohérent."""
+    if style == "long":
+        demande = ("Génère UNE accroche en deux lignes : le tableau `punchlines` "
+                   "doit contenir exactement 2 éléments, la ligne 1 puis la ligne 2.")
+    else:
+        demande = f"Génère exactement {count} punchlines distinctes."
+    return f"{demande}\nStyle / consigne : {preprompt}\nVariation n°{seed}."
 
 
 def _llm_backend() -> str:
@@ -1459,7 +1468,7 @@ def _call_anthropic(preprompt: str, count: int, seed: int, model: str,
         model=model,
         max_tokens=1024,
         system=_PUNCHLINE_SYSTEMS[style],
-        messages=[{"role": "user", "content": _punchline_user_prompt(preprompt, count, seed)}],
+        messages=[{"role": "user", "content": _punchline_user_prompt(preprompt, count, seed, style)}],
         output_config={"format": {"type": "json_schema", "schema": schema}},
     )
     text = next(b.text for b in resp.content if b.type == "text")
@@ -1482,7 +1491,7 @@ def _call_lmstudio(preprompt: str, count: int, seed: int, model: str,
         "messages": [
             {"role": "system", "content": _PUNCHLINE_SYSTEMS[style]
              + ' Réponds UNIQUEMENT en JSON : {"punchlines": ["...", "..."]}.'},
-            {"role": "user", "content": _punchline_user_prompt(preprompt, count, seed)},
+            {"role": "user", "content": _punchline_user_prompt(preprompt, count, seed, style)},
         ],
         "temperature": 0.8,
         "seed": seed,
@@ -1575,7 +1584,19 @@ def generate_punchlines(preprompt: str, count: int, seed: int,
             except (json.JSONDecodeError, OSError, KeyError):
                 pass
     try:
-        punchlines = _call_llm(preprompt, count, seed, model, style)[:count]
+        # Style « long » : on demande DEUX éléments de tableau — la ligne 1 et la
+        # ligne 2 — et on les recolle. Demander un saut de ligne échappé À
+        # L'INTÉRIEUR d'une chaîne JSON est ce qui faisait décrocher le modèle
+        # local (mesuré sur la tour : deux lignes obtenues 1 fois sur 4, contre
+        # 4 sur 4 en tableau). Un élément vide est écarté : il donnerait une
+        # accroche commençant par un saut de ligne, donc un bloc décalé à
+        # l'écran. Le modèle qui n'en rend qu'un garde sa ligne unique — mieux
+        # vaut une ligne que rien.
+        if style == "long":
+            lignes = [l.strip() for l in _call_llm(preprompt, 2, seed, model, style)]
+            punchlines = ["\n".join(l for l in lignes[:2] if l)]
+        else:
+            punchlines = _call_llm(preprompt, count, seed, model, style)[:count]
     except Exception:
         return []
     if cache_path is not None:
