@@ -423,15 +423,31 @@ def test_unknown_mode_degrades_to_llm(monkeypatch):
 
 
 def test_drawtext_escape_handles_newlines():
-    """Un retour à la ligne réel casserait le parseur de filtergraph ; drawtext
-    attend la séquence à deux caractères."""
-    assert beatsync._drawtext_escape("HAUT\nBAS") == "HAUT\\nBAS"
+    """Le VRAI saut de ligne est conservé : c'est lui qui produit deux lignes à
+    l'écran. L'ancienne version le remplaçait par la séquence `\\n`, dessinée
+    comme un « n » littéral au milieu du texte.
+
+    ATTENTION : ce test et le suivant portent sur la CHAÎNE échappée, et c'est
+    exactement ce qui a laissé passer le bug — ils comparaient la sortie à une
+    constante tout aussi fausse. Ce qui fait autorité est
+    `tests/test_drawtext_rendu.py`, qui rend une image et regarde le pixel. Ne
+    jamais modifier les valeurs ci-dessous sans refaire le rendu."""
+    assert beatsync._drawtext_escape("HAUT\nBAS") == "HAUT\nBAS"
+    assert beatsync._drawtext_escape("HAUT\r\nBAS") == "HAUT\nBAS"
 
 
-def test_drawtext_escape_handles_quotes_and_specials():
-    escaped = beatsync._drawtext_escape("c'est 100% : oui")
-    for ch in ("'", "%", ":"):
-        assert f"\\{ch}" in escaped
+def test_drawtext_escape_uses_the_right_number_of_backslashes():
+    """Le compte d'antislashs DIFFÈRE selon le caractère : deux niveaux
+    d'unescape pour ceux qui terminent une option (`\'` et `:`), un seul pour
+    ceux qui séparent des filtres (`,` `;` `[` `]`). Mesuré, pas déduit — voir
+    `tests/test_drawtext_rendu.py`."""
+    assert beatsync._drawtext_escape("c'est") == "c\\\\'est"
+    assert beatsync._drawtext_escape("a:b") == "a\\\\:b"
+    assert beatsync._drawtext_escape("a,b") == "a\\,b"
+    assert beatsync._drawtext_escape("a;b") == "a\\;b"
+    # Le `%` n'est PLUS échappé : il vidait le texte. C'est `expansion=none`
+    # posé par `_caption_filter` qui le neutralise.
+    assert beatsync._drawtext_escape("100%") == "100%"
 
 
 # --- Accroche longue du mode « une punchline générée » ----------------------
