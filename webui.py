@@ -154,7 +154,7 @@ def coerce_overrides(overrides: dict) -> dict:
     return coerced
 
 
-ALLOWED_SUBTITLE_MODES = {"llm", "fixe"}
+ALLOWED_SUBTITLE_MODES = {"llm", "llm_unique", "fixe"}
 SUBTITLE_RANGES = {"x": (0.0, 1.0), "y": (0.0, 1.0), "size": (8, 200)}
 
 
