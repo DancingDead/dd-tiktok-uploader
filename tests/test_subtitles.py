@@ -438,10 +438,11 @@ def test_drawtext_escape_handles_newlines():
 
 def test_drawtext_escape_uses_the_right_number_of_backslashes():
     """Le compte d'antislashs DIFFÈRE selon le caractère : deux niveaux
-    d'unescape pour ceux qui terminent une option (`\'` et `:`), un seul pour
-    ceux qui séparent des filtres (`,` `;` `[` `]`). Mesuré, pas déduit — voir
-    `tests/test_drawtext_rendu.py`."""
-    assert beatsync._drawtext_escape("c'est") == "c\\\\'est"
+    d'unescape. Les nombres sont MESURÉS, pas déduits : TROIS antislashs pour
+    l'apostrophe, DEUX pour le deux-points, UN pour les séparateurs de filtres.
+    Avec deux sur l'apostrophe, les options redeviennent saines mais le GLYPHE
+    disparaît — voir `tests/test_drawtext_rendu.py`, qui seul peut le voir."""
+    assert beatsync._drawtext_escape("c'est") == "c\\\\\\'est"
     assert beatsync._drawtext_escape("a:b") == "a\\\\:b"
     assert beatsync._drawtext_escape("a,b") == "a\\,b"
     assert beatsync._drawtext_escape("a;b") == "a\\;b"

@@ -61,9 +61,52 @@ def centre(lignes):
     return len(lignes) > 0 and 0.35 * H < lignes[0] < 0.60 * H
 
 
+def largeur(caption, tmp_path, taille=90):
+    """Largeur en pixels du texte rendu. Sert à prouver qu'un caractère est bien
+    DESSINÉ : un glyphe manquant ne se voit pas autrement, le texte restant
+    parfaitement centré et lisible."""
+    entry = {"timeline_start": 0, "duration": 1.0, "effects": [], "layout": "crop",
+             "focus_x": 0.5, "speed": 1.0, "caption": caption}
+    config = dict(beatsync.DEFAULT_CONFIG,
+                  subtitles={**beatsync.DEFAULT_CONFIG["subtitles"],
+                             "enabled": True, "size": taille, "y": 0.5})
+    out = tmp_path / "l.png"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=gray:s=1400x400:d=1", "-vf",
+                        beatsync._caption_filter(entry, config),
+                        "-frames:v", "1", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    img = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
+    cols = np.where(img.std(axis=0) > 5)[0]
+    return 0 if len(cols) == 0 else cols[-1] - cols[0]
+
+
 def test_apostrophe_ne_casse_pas_les_options(tmp_path):
     """Le bug d'origine. Avec un seul antislash, le texte partait à y≈0."""
     assert centre(rendu("C'est maintenant", tmp_path))
+
+
+def test_apostrophe_est_reellement_dessinee(tmp_path):
+    """Second piège, plus sournois que le premier : à deux antislashs les
+    options redevenaient saines et le texte bien centré, mais l'apostrophe
+    n'était plus dessinée — « world's » sortait « worlds ». Le test qui ne
+    regardait que la position était vert. On compare donc les largeurs."""
+    avec = largeur("world's", tmp_path)
+    sans = largeur("worlds", tmp_path)
+    assert avec > sans + 8, f"apostrophe absente du rendu ({avec} vs {sans})"
+
+
+def test_apostrophe_ne_dessine_pas_un_antislash_en_plus(tmp_path):
+    """L'excès inverse : un antislash de trop et c'est « world\\'s » qui
+    s'affiche. Le glyphe surnuméraire est plus large que l'apostrophe seule."""
+    juste = largeur("world's", tmp_path)
+    sans = largeur("worlds", tmp_path)
+    assert juste - sans < 30, f"un caractere de trop est dessine ({juste - sans} px)"
+
+
+def test_deux_points_et_virgule_sont_dessines(tmp_path):
+    assert largeur("a:b", tmp_path) > largeur("ab", tmp_path) + 5
+    assert largeur("a,b", tmp_path) > largeur("ab", tmp_path) + 5
 
 
 def test_deux_points_ne_cassent_pas_les_options(tmp_path):

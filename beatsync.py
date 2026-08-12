@@ -1382,8 +1382,13 @@ def _drawtext_escape(text: str) -> str:
     produit deux lignes à l'écran (mesuré). La séquence `\\n` que fabriquait
     l'ancien code se dessinait comme un « n » littéral au milieu du texte."""
     out = text.replace("\\", "\\\\")
-    for ch in ("'", ":"):
-        out = out.replace(ch, "\\\\" + ch)
+    # TROIS antislashs pour l'apostrophe, DEUX pour le deux-points, UN pour les
+    # séparateurs de filtres. Ces nombres sont MESURÉS (largeur du texte rendu),
+    # pas déduits : avec deux antislashs l'apostrophe ne casse plus les options
+    # mais son GLYPHE disparaît — « world's » se dessine « worlds », ce qui est
+    # invisible en relecture rapide et faux à l'écran.
+    out = out.replace("'", "\\\\\\'")
+    out = out.replace(":", "\\\\:")
     for ch in (",", ";", "[", "]"):
         out = out.replace(ch, "\\" + ch)
     return out.replace("\r\n", "\n")
