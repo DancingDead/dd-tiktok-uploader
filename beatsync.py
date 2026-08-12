@@ -1519,6 +1519,15 @@ def _call_lmstudio(preprompt: str, count: int, seed: int, model: str,
         ],
         "temperature": 0.8,
         "seed": seed,
+        # Coupe le raisonnement interne des modèles qui en font. Mesuré sur
+        # Gemma 4 12B : 1597 jetons de réflexion pour une accroche de 45
+        # jetons, soit 53 s par appel — au-delà du timeout, donc des punchlines
+        # vides en série sans que rien ne le signale. À « none » : 3,7 s et
+        # zéro jeton de raisonnement, pour une qualité au moins égale. Une
+        # punchline n'a rien à raisonner, elle a à être écrite. Inoffensif sur
+        # les modèles non raisonnants (Qwen 2.5 l'accepte et va un peu plus
+        # vite) ; `low` NE marche PAS, il raisonne autant que le défaut.
+        "reasoning_effort": "none",
         # LM Studio >= 0.4 exige json_schema (l'ancien json_object renvoie 400).
         "response_format": {
             "type": "json_schema",
@@ -1538,7 +1547,10 @@ def _call_lmstudio(preprompt: str, count: int, seed: int, model: str,
     req = urllib.request.Request(
         base + "/chat/completions", data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    # 180 s et non 60 : un 12B sans raisonnement répond en 4 s, mais le premier
+    # appel après un chargement de modèle est bien plus long, et un timeout ici
+    # ne se voit pas — il rend une punchline vide, silencieusement.
+    with urllib.request.urlopen(req, timeout=180) as resp:
         data = json.loads(resp.read())
     text = data["choices"][0]["message"]["content"]
     return [str(p) for p in json.loads(text)["punchlines"]]
