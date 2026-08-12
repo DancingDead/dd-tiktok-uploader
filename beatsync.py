@@ -1836,6 +1836,37 @@ def kenburns_filter(entry: dict, config: dict) -> str:
             f":d=1:s={width}x{height}:fps={fps}")
 
 
+_DRAWTEXT_ALIGN_SUPPORTED: bool | None = None
+
+
+def drawtext_supports_align() -> bool:
+    """Le filtre `drawtext` de la ffmpeg installée accepte-t-il `text_align` ? I/O.
+
+    Question de VERSION, comme `clipper.crop_supports_eval`. Sans cette option,
+    un texte multiligne est centré EN BLOC sur son ancrage mais ses lignes
+    restent alignées à gauche — invisible sur deux lignes de longueur voisine,
+    criant dès que le repli automatique en produit quatre d'inégales longueurs.
+    Avec une ffmpeg trop ancienne, passer l'option ne dégrade pas : elle fait
+    échouer TOUT le rendu (« Error opening output files »). On sonde donc, plutôt
+    que de supposer que la tour de production a la même ffmpeg que la machine de
+    développement — trois défauts Windows-only de ce projet sont nés de cette
+    supposition. Mesuré présent sur ffmpeg 8.0.1 (macOS) et 8.1.2 (tour).
+
+    Sonde en échec (ffmpeg absent, sortie inattendue) = option absente : on
+    retombe sur l'alignement à gauche, moins beau mais qui rend."""
+    global _DRAWTEXT_ALIGN_SUPPORTED
+    if _DRAWTEXT_ALIGN_SUPPORTED is None:
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-h", "filter=drawtext"],
+                                 capture_output=True, text=True, timeout=30)
+            _DRAWTEXT_ALIGN_SUPPORTED = any(
+                line.split()[:1] == ["text_align"]
+                for line in (out.stdout + out.stderr).splitlines())
+        except Exception:
+            _DRAWTEXT_ALIGN_SUPPORTED = False
+    return _DRAWTEXT_ALIGN_SUPPORTED
+
+
 def _caption_filter(entry: dict, config: dict) -> str | None:
     """Fragment `drawtext` d'un segment, ou None sans punchline ni police.
     Extrait pour être partagé par les segments ordinaires et les écrans noirs,
@@ -1875,6 +1906,9 @@ def _caption_filter(entry: dict, config: dict) -> str | None:
         # évaluées à part et ne sont pas concernées.
         f"drawtext=fontfile={_drawtext_fontfile(font)}:text={_drawtext_escape(cap)}"
         f":expansion=none"
+        # `text_align=C` centre les lignes ENTRE ELLES ; sans lui, drawtext les
+        # aligne à gauche à l'intérieur du bloc, lui-même centré sur l'ancrage.
+        + (":text_align=C" if drawtext_supports_align() else "") +
         f":fontsize={cap_size}:fontcolor=white:borderw=5:bordercolor=black@0.9"
         f":x=w*{cap_x:.4f}-text_w/2:y=h*{cap_y:.4f}-text_h/2"
     )
