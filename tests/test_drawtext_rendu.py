@@ -183,3 +183,28 @@ def test_la_punchline_qui_debordait_tient_maintenant_dans_le_cadre(tmp_path):
     assert len(cols) > 0, "aucun texte rendu"
     # Rien ne doit toucher les bords : un texte rogne colle a la colonne 0 ou 1079.
     assert cols[0] > 2 and cols[-1] < 1077, f"texte rogne (colonnes {cols[0]}-{cols[-1]})"
+
+
+def test_le_cas_reel_police_classique_taille_36(tmp_path):
+    """Le vrai incident de production, et la raison d'etre du ratio PAR POLICE.
+
+    La niche etait a la taille 36 — anodine — mais son preset imposait la police
+    `classique` (Montserrat ExtraBold), 32 % plus large qu'Anton : 57 caracteres
+    x 0,551 x 36 = 1131 px pour 1080 disponibles. Un ratio unique cale sur Anton
+    aurait conclu a 856 px et laisse passer le rognage."""
+    cap = ("Your cold coffee sits while your dreams remain untouched.\n"
+           "That dusty laptop holds the life you refuse to build.")
+    entry = {"timeline_start": 0, "duration": 1.0, "effects": [], "layout": "crop",
+             "focus_x": 0.5, "speed": 1.0, "caption": cap}
+    config = dict(beatsync.DEFAULT_CONFIG, width=1080, height=1920,
+                  subtitles={**beatsync.DEFAULT_CONFIG["subtitles"], "enabled": True,
+                             "font": "classique", "size": 36, "y": 0.5})
+    out = tmp_path / "classique.png"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=gray:s=1080x1920:d=1", "-vf",
+                        beatsync._caption_filter(entry, config),
+                        "-frames:v", "1", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    img = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
+    cols = np.where(img.std(axis=0) > 5)[0]
+    assert cols[0] > 2 and cols[-1] < 1077, f"texte rogne (colonnes {cols[0]}-{cols[-1]})"
