@@ -101,6 +101,7 @@ def test_call_lmstudio_parses_openai_response(monkeypatch):
     def fake_urlopen(req, timeout=None):
         captured["url"] = req.full_url
         captured["body"] = json.loads(req.data)
+        captured["timeout"] = timeout
         payload = {"choices": [{"message": {"content":
                    json.dumps({"punchlines": ["monte le son", "encore plus fort"]})}}]}
         return io.BytesIO(json.dumps(payload).encode())
@@ -114,6 +115,14 @@ def test_call_lmstudio_parses_openai_response(monkeypatch):
     assert captured["url"] == "http://127.0.0.1:1234/v1/chat/completions"
     assert captured["body"]["model"] == "qwen2.5-7b"
     assert captured["body"]["seed"] == 7  # seed transmis pour reproductibilité
+    # `reasoning_effort: none` : Gemma 4 12B est un modele a raisonnement et
+    # produisait ~1600 jetons de reflexion pour une punchline de 45 jetons, soit
+    # 53 s par appel et des timeouts en cascade. Sans raisonnement : 3,7 s.
+    # Verifie inoffensif sur les modeles non raisonnants (Qwen 2.5 l'accepte et
+    # va meme un peu plus vite).
+    assert captured["body"]["reasoning_effort"] == "none"
+    # Le timeout doit laisser de la marge a un 12B : 60 s etait trop juste.
+    assert captured["timeout"] >= 120
 
 
 def test_call_llm_defaults_to_lmstudio(monkeypatch):
