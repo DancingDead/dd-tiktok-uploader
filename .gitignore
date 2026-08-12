@@ -33,3 +33,11 @@ frontend/dist/
 # Fichier de travail perso (liens de clips à importer) — jamais suivi,
 # contrairement à links.txt qui l'est depuis le début du projet.
 clip_links.txt
+
+# Captures d'écran déposées à la racine (partage de bugs, revues visuelles).
+# Deux d'entre elles se sont retrouvées commitées par accident : 1,8 puis 2,9 Mo,
+# avec apostrophe typographique et accents dans le nom — et GitHub refuse le push
+# avec un « HTTP 400 » qui ne dit pas pourquoi. La règle vaut mieux que la
+# vigilance.
+Capture*.png
+Screenshot*.png

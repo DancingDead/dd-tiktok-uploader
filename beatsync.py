@@ -1349,6 +1349,46 @@ _FONT_FILES = {  # nom logique -> fichier embarqué (licences OFL)
 }
 
 
+# Largeur moyenne d'un caractère, en fraction de la taille de police. MESURÉ
+# police par police en rendant une phrase de 57 caractères (le ratio est stable
+# d'une taille à l'autre : 0,417 à 36 comme à 80 pour Anton). Sert au repli
+# automatique des lignes — sans lui, une accroche longue sort du cadre à gauche
+# ET à droite, puisque le texte est centré sur son point d'ancrage.
+_FONT_WIDTH_RATIO = {
+    "impact": 0.417, "classique": 0.551, "sobre": 0.515,
+    "condensee": 0.348, "douce": 0.460, "elegante": 0.401,
+}
+# Police inconnue : on prend la plus LARGE mesurée, pour replier trop tôt
+# plutôt que trop tard — un texte replié reste lisible, un texte rogné non.
+_FONT_WIDTH_RATIO_DEFAUT = max(_FONT_WIDTH_RATIO.values())
+# Marge laissée libre de chaque côté : 4 %, soit 92 % de largeur utile.
+CAPTION_MARGIN = 0.92
+
+
+def wrap_caption(text: str, max_chars: int) -> str:
+    """Replie chaque ligne à `max_chars` caractères, aux espaces. Pure.
+
+    Les sauts de ligne VOULUS sont préservés : l'accroche du mode `llm_unique`
+    est déjà en deux propositions qui s'opposent, les fusionner détruirait
+    l'effet. On ne coupe jamais un mot — un mot plus long que la limite est posé
+    seul sur sa ligne, quitte à dépasser : mieux vaut un mot rogné qu'un mot
+    coupé en deux."""
+    if max_chars < 1:
+        return text
+    sorties = []
+    for ligne in text.split("\n"):
+        courante = ""
+        for mot in ligne.split():
+            candidate = f"{courante} {mot}" if courante else mot
+            if len(candidate) <= max_chars or not courante:
+                courante = candidate
+            else:
+                sorties.append(courante)
+                courante = mot
+        sorties.append(courante)
+    return "\n".join(sorties)
+
+
 def resolve_caption_font(name: str) -> str | None:
     """Chemin de la police d'un nom logique ; nom inconnu = impact ;
     fichier absent = repli sur les polices système (_caption_font)."""
@@ -1819,6 +1859,14 @@ def _caption_filter(entry: dict, config: dict) -> str | None:
     cap_x = max(0.0, min(1.0, _coerce(subs.get("x", 0.5), float, 0.5)))
     cap_y = max(0.0, min(1.0, _coerce(subs.get("y", 0.74), float, 0.74)))
     cap_size = max(8, _coerce(subs.get("size", 64), int, 64))
+    # Repli automatique : une accroche de 6 à 12 mots par ligne dépasse 1080 px
+    # dès la taille 46 en Anton. Le texte étant centré sur son ancrage, le
+    # débordement rogne les DEUX côtés — la première et la dernière lettre
+    # disparaissent, ce qui se lit comme une faute et non comme un cadrage.
+    ratio = _FONT_WIDTH_RATIO.get(subs.get("font", "impact"), _FONT_WIDTH_RATIO_DEFAUT)
+    largeur = _coerce(config.get("width", 1080), int, 1080)
+    max_chars = int(largeur * CAPTION_MARGIN / (ratio * cap_size))
+    cap = wrap_caption(cap, max_chars)
     return (
         # `expansion=none` : sans lui, drawtext interprète `%` (et `%{...}`)
         # comme une expansion et rend un texte VIDE, sans erreur — une

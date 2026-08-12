@@ -130,3 +130,56 @@ def test_saut_de_ligne_rend_bien_deux_lignes(tmp_path):
     assert centre(lignes)
     blocs = 1 + int((np.diff(lignes) > 10).sum())
     assert blocs == 2, f"{blocs} bloc(s) de texte au lieu de 2"
+
+
+# --- Retour a la ligne automatique -------------------------------------------
+
+
+def test_wrap_caption_coupe_aux_espaces():
+    from beatsync import wrap_caption
+    assert wrap_caption("un deux trois quatre", 10) == "un deux\ntrois\nquatre"
+
+
+def test_wrap_caption_preserve_les_sauts_voulus():
+    """L'accroche du mode `llm_unique` est deja en deux lignes : le repli ne doit
+    pas les fusionner, seulement replier celles qui debordent."""
+    from beatsync import wrap_caption
+    assert wrap_caption("ligne une\nligne deux", 40) == "ligne une\nligne deux"
+    assert wrap_caption("aaa bbb\nccc ddd", 4) == "aaa\nbbb\nccc\nddd"
+
+
+def test_wrap_caption_laisse_un_mot_trop_long_seul():
+    """Mieux vaut un mot rogne qu'un mot coupe en deux : on ne casse jamais un
+    mot, on le pose seul sur sa ligne."""
+    from beatsync import wrap_caption
+    assert wrap_caption("court anticonstitutionnellement court", 8) == (
+        "court\nanticonstitutionnellement\ncourt")
+
+
+def test_wrap_caption_texte_vide():
+    from beatsync import wrap_caption
+    assert wrap_caption("", 10) == ""
+
+
+def test_la_punchline_qui_debordait_tient_maintenant_dans_le_cadre(tmp_path):
+    """Cas reel : cette accroche produite par Gemma sortait du cadre a gauche ET
+    a droite (le « Y » de Your et le « T » de That etaient rognes), parce que le
+    texte est centre sur son point d'ancrage et qu'aucun repli n'existait."""
+    cap = ("Your cold coffee sits while your dreams remain untouched.\n"
+           "That dusty laptop holds the life you refuse to build.")
+    entry = {"timeline_start": 0, "duration": 1.0, "effects": [], "layout": "crop",
+             "focus_x": 0.5, "speed": 1.0, "caption": cap}
+    config = dict(beatsync.DEFAULT_CONFIG, width=1080, height=1920,
+                  subtitles={**beatsync.DEFAULT_CONFIG["subtitles"],
+                             "enabled": True, "size": 64, "y": 0.5})
+    out = tmp_path / "large.png"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=gray:s=1080x1920:d=1", "-vf",
+                        beatsync._caption_filter(entry, config),
+                        "-frames:v", "1", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    img = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
+    cols = np.where(img.std(axis=0) > 5)[0]
+    assert len(cols) > 0, "aucun texte rendu"
+    # Rien ne doit toucher les bords : un texte rogne colle a la colonne 0 ou 1079.
+    assert cols[0] > 2 and cols[-1] < 1077, f"texte rogne (colonnes {cols[0]}-{cols[-1]})"
