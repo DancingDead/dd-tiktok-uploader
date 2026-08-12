@@ -208,3 +208,31 @@ def test_le_cas_reel_police_classique_taille_36(tmp_path):
     img = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
     cols = np.where(img.std(axis=0) > 5)[0]
     assert cols[0] > 2 and cols[-1] < 1077, f"texte rogne (colonnes {cols[0]}-{cols[-1]})"
+
+
+def test_les_lignes_sont_centrees_entre_elles(tmp_path):
+    """Le BLOC etait centre sur son ancrage, mais les lignes a l'interieur
+    restaient alignees a gauche — le defaut de drawtext sur un texte multiligne.
+    Invisible sur une ou deux lignes de longueur voisine, criant des que le repli
+    en produit quatre d'inegales longueurs."""
+    cap = "une ligne vraiment tres longue ici\ncourte"
+    entry = {"timeline_start": 0, "duration": 1.0, "effects": [], "layout": "crop",
+             "focus_x": 0.5, "speed": 1.0, "caption": cap}
+    config = dict(beatsync.DEFAULT_CONFIG, width=1200, height=400,
+                  subtitles={**beatsync.DEFAULT_CONFIG["subtitles"], "enabled": True,
+                             "size": 60, "y": 0.5})
+    out = tmp_path / "align.png"
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=gray:s=1200x400:d=1", "-vf",
+                        beatsync._caption_filter(entry, config),
+                        "-frames:v", "1", str(out)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    img = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
+    lignes = np.where(img.std(axis=1) > 5)[0]
+    coupe = (lignes[0] + lignes[-1]) // 2
+    haut = np.where(img[lignes[0]:coupe].std(axis=0) > 5)[0]
+    bas = np.where(img[coupe:lignes[-1]].std(axis=0) > 5)[0]
+    centre_haut = (haut[0] + haut[-1]) / 2
+    centre_bas = (bas[0] + bas[-1]) / 2
+    assert abs(centre_haut - centre_bas) < 20, (
+        f"lignes non centrees entre elles : {centre_haut:.0f} vs {centre_bas:.0f}")
