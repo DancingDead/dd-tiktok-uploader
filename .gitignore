@@ -34,6 +34,10 @@ frontend/dist/
 # contrairement à links.txt qui l'est depuis le début du projet.
 clip_links.txt
 
+# Journal de démarrage de la tour (écrit par deploy/start-usine.bat, propre à
+# la machine de prod — il n'a de sens que là où il est produit).
+deploy/logs/
+
 # Captures d'écran déposées à la racine (partage de bugs, revues visuelles).
 # Deux d'entre elles se sont retrouvées commitées par accident : 1,8 puis 2,9 Mo,
 # avec apostrophe typographique et accents dans le nom — et GitHub refuse le push
